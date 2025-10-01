@@ -278,8 +278,37 @@ export class GenericConnectionPool implements IDatabaseConnectionPool {
       this.connections.push(connection);
       return connection;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`创建连接失败: ${errorMessage}`);
+      // 增强错误处理，保留原始错误的详细信息
+      let errorMessage = '未知错误';
+      let detailedErrorInfo = '';
+      
+      // 尝试从不同角度提取错误信息
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        
+        // 如果错误对象有额外的属性，也将它们包含进来
+        const errorObj = error as any;
+        if (errorObj.code) detailedErrorInfo += `[${errorObj.code}] `;
+        if (errorObj.detail) detailedErrorInfo += `详情: ${errorObj.detail} `;
+        if (errorObj.hint) detailedErrorInfo += `提示: ${errorObj.hint} `;
+        if (errorObj.address && errorObj.port) {
+          detailedErrorInfo += `地址: ${errorObj.address}:${errorObj.port} `;
+        }
+      } else if (typeof error === 'object' && error !== null) {
+        const errorObj = error as any;
+        errorMessage = errorObj.message || String(error);
+        detailedErrorInfo = JSON.stringify(errorObj);
+      } else {
+        errorMessage = String(error);
+      }
+      
+      // 记录完整的错误对象以便调试
+      console.error(`创建连接失败 - 数据库类型: ${this.config.type}, 主机: ${this.config.host}:${this.config.port}`);
+      console.error('连接错误详情:', error);
+      
+      // 抛出包含详细信息的新错误
+      const fullErrorMessage = `创建连接失败: ${errorMessage} ${detailedErrorInfo.trim()}`;
+      throw new Error(fullErrorMessage);
     }
   }
 
@@ -531,7 +560,9 @@ export class DatabaseService extends EventEmitter {
 
   // 生成连接池ID
   private generatePoolId(config: DatabaseConnection): string {
-    return `${config.type}_${config.host}_${config.port}_${config.database}`;
+    // 为PostgreSQL提供默认数据库名'postgres'，避免生成包含undefined的ID
+    const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+    return `${config.type}_${config.host}_${config.port}_${databaseName}`;
   }
 
   // 获取支持的数据库类型
@@ -668,6 +699,19 @@ class MySQLConnection extends BaseDatabaseConnection {
     }
   }
 
+  async listDatabases(): Promise<string[]> {
+    try {
+      const [result] = await this.connection.execute('SHOW DATABASES');
+      // 过滤掉系统数据库
+      return result
+        .map((row: any) => Object.values(row)[0] as string)
+        .filter((dbName: string) => !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(dbName));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`获取数据库列表失败: ${errorMessage}`);
+    }
+  }
+
   // 重写事务执行方法，使用MySQL的事务支持
   async executeTransaction(queries: Array<{query: string, params?: any[]}>): Promise<boolean> {
     try {
@@ -707,8 +751,50 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
       return true;
     } catch (error) {
       this.isConnecting = false;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`PostgreSQL连接失败: ${errorMessage}`);
+      // 增强错误处理，提取更多的错误信息
+      let errorMessage = '未知错误';
+      let detailedErrorInfo = '';
+      
+      // 尝试从不同角度提取错误信息
+      if (typeof error === 'object' && error !== null) {
+        const errorObj = error as any;
+        
+        // 首先获取基本的错误消息
+        if (error instanceof Error) {
+          errorMessage = error.message;
+        } else {
+          errorMessage = errorObj.message || String(error);
+        }
+        
+        // 然后尝试提取所有可能的错误属性
+        if (errorObj.code) detailedErrorInfo += `[${errorObj.code}] `;
+        if (errorObj.address && errorObj.port) {
+          detailedErrorInfo += `连接到 ${errorObj.address}:${errorObj.port} 失败 `;
+        }
+        if (errorObj.errno) detailedErrorInfo += `错误号: ${errorObj.errno} `;
+        if (errorObj.syscall) detailedErrorInfo += `系统调用: ${errorObj.syscall} `;
+        if (errorObj.hostname) detailedErrorInfo += `主机名: ${errorObj.hostname} `;
+        if (errorObj.detail) detailedErrorInfo += `详情: ${errorObj.detail} `;
+        if (errorObj.hint) detailedErrorInfo += `提示: ${errorObj.hint} `;
+        
+        // 尝试获取原始错误信息
+        if (errorObj.originalError) {
+          const originalError = errorObj.originalError as any;
+          detailedErrorInfo += `原始错误: ${originalError.message || String(originalError)} `;
+          if (originalError.code) detailedErrorInfo += `[原始错误代码: ${originalError.code}] `;
+        }
+      } else {
+        errorMessage = String(error);
+      }
+      
+      // 记录完整的错误对象以便调试
+      console.error('PostgreSQL连接错误详情:', JSON.stringify(error));
+      
+      // 构建包含详细信息的完整错误消息
+      const fullErrorMessage = detailedErrorInfo ? `${errorMessage} ${detailedErrorInfo.trim()}` : errorMessage;
+      
+      // 抛出包含详细信息的错误
+      throw new Error(`PostgreSQL连接失败: ${fullErrorMessage}`);
     }
   }
 
@@ -810,7 +896,7 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`MySQL连接失败: ${errorMessage}`);
+      throw new Error(`PostgreSQL获取表结构失败: ${errorMessage}`);
     }
   }
 
@@ -824,7 +910,7 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
       return result.rows.map((row: any) => row.table_name);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`获取表结构失败: ${errorMessage}`);
+      throw new Error(`获取表列表失败: ${errorMessage}`);
     }
   }
 

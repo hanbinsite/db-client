@@ -247,7 +247,7 @@ class DBClientApp {
   private async handleListDatabases(connectionId: string): Promise<any> {
     try {
       const databases = await this.databaseService.listDatabases(connectionId);
-      return { success: true, databases };
+      return { success: true, data: databases };
     } catch (error) {
       return { success: false, message: (error as Error).message };
     }
@@ -255,8 +255,9 @@ class DBClientApp {
 
   private async handleTestConnection(config: any): Promise<any> {
     let poolId: string | undefined;
-    // 无论如何，都先生成poolId以便在finally中使用
-    const generatedPoolId = `${config.type}_${config.host}_${config.port}_${config.database}`;
+    // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
+    const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+    const generatedPoolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
     
     try {
       // 记录连接参数（不记录密码）以帮助诊断
@@ -275,14 +276,20 @@ class DBClientApp {
       poolId = await this.databaseService.createConnectionPool(config, {
         maxConnections: 2, // 增加一个连接以避免单点问题
         minConnections: 1,
-        acquireTimeout: 60000, // 再次增加到60秒以适应较慢的连接
+        acquireTimeout: 60000, // 增加到60秒以适应较慢的连接
         idleTimeout: 30000,
         testOnBorrow: true
       });
 
       console.log('连接池创建成功，准备执行测试查询...');
-      // 执行简单查询测试连接
-      const result = await this.databaseService.executeQuery(poolId, 'SELECT 1 as test_value');
+      // 根据数据库类型选择适合的测试查询语句
+      let testQuery = 'SELECT 1 as test_value';
+      if (config.type === 'postgresql' && !config.database) {
+        // PostgreSQL在没有指定数据库时使用'postgres'作为默认数据库
+        config.database = 'postgres';
+      }
+
+      const result = await this.databaseService.executeQuery(poolId, testQuery);
 
       console.log('连接测试成功，查询结果:', result);
       return { 
@@ -300,7 +307,11 @@ class DBClientApp {
       // 提供更详细的错误信息和建议
       let detailedMessage = errorMessage;
       if (errorMessage.includes('获取连接超时')) {
-        detailedMessage = '连接数据库超时：请检查网络连接、防火墙设置、数据库服务器状态以及连接配置是否正确。\n\n可能的解决方案：\n1. 确认MySQL服务器正在运行并监听指定端口\n2. 检查防火墙设置是否允许连接\n3. 验证主机名、端口、用户名、密码和数据库名是否正确\n4. 确认MySQL用户有足够的权限\n5. 检查网络连接稳定性';
+        if (config.type === 'postgresql') {
+          detailedMessage = '连接PostgreSQL数据库超时：请检查网络连接、防火墙设置、数据库服务器状态以及连接配置是否正确。\n\n可能的解决方案：\n1. 确认PostgreSQL服务器正在运行并监听指定端口（默认5432）\n2. 检查防火墙设置是否允许连接\n3. 验证主机名、端口、用户名、密码和数据库名是否正确\n4. 确认PostgreSQL用户有足够的权限\n5. 检查网络连接稳定性';
+        } else {
+          detailedMessage = '连接数据库超时：请检查网络连接、防火墙设置、数据库服务器状态以及连接配置是否正确。\n\n可能的解决方案：\n1. 确认MySQL服务器正在运行并监听指定端口\n2. 检查防火墙设置是否允许连接\n3. 验证主机名、端口、用户名、密码和数据库名是否正确\n4. 确认MySQL用户有足够的权限\n5. 检查网络连接稳定性';
+        }
       } else if (errorMessage.includes('连接池已存在')) {
         detailedMessage = '连接池已存在：正在清理残留连接，请稍后重试。';
       }
@@ -325,8 +336,9 @@ class DBClientApp {
 
   private async handleCloseTestConnection(config: any): Promise<any> {
     try {
-      // 生成与DatabaseService中相同格式的poolId
-      const poolId = `${config.type}_${config.host}_${config.port}_${config.database}`;
+      // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
+      const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+      const poolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
       
       // 检查连接池是否存在并断开
       await this.databaseService.disconnect(poolId);

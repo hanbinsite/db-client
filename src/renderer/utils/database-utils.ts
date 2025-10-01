@@ -17,6 +17,16 @@ export interface DatabaseItem {
   views?: string[];
   procedures?: string[];
   functions?: string[];
+  schemas?: DatabaseSchema[];
+}
+
+// 数据库模式接口
+export interface DatabaseSchema {
+  name: string;
+  tables?: string[];
+  views?: string[];
+  procedures?: string[];
+  functions?: string[];
 }
 
 /**
@@ -26,26 +36,63 @@ export interface DatabaseItem {
  */
 export const getDatabaseList = async (connection: DatabaseConnection): Promise<DatabaseItem[]> => {
   try {
+    console.log('===== 开始获取数据库列表 =====');
+    console.log('连接信息:', { type: connection.type, host: connection.host, port: connection.port, database: connection.database, id: connection.id });
+    
+    // 首先检查连接状态
+    if (!connection.isConnected) {
+      console.warn('连接未建立，无法获取真实数据库列表');
+      throw new Error('连接未建立');
+    }
+    
+    // 检查是否有electronAPI可用
+    if (!window.electronAPI || !connection.id) {
+      console.warn('electronAPI不可用或连接ID为空，无法获取真实数据库列表');
+      throw new Error('electronAPI不可用');
+    }
+    
+    console.log(`尝试从真实${connection.type}数据库获取数据库列表，连接ID: ${connection.id}`);
+    
+    let result: DatabaseItem[] = [];
+    
     switch (connection.type) {
       case DbType.MYSQL:
-        return getMysqlDatabases(connection);
+        console.log('调用getMysqlDatabases获取MySQL数据库列表');
+        result = await getMysqlDatabases(connection);
+        break;
       case DbType.POSTGRESQL:
-        return getPostgreSqlDatabases(connection);
+        console.log('调用getPostgreSqlDatabases获取PostgreSQL数据库列表');
+        result = await getPostgreSqlDatabases(connection);
+        break;
       case DbType.ORACLE:
-        return getOracleDatabases(connection);
+        console.log('调用getOracleDatabases获取Oracle数据库列表');
+        result = await getOracleDatabases(connection);
+        break;
       case DbType.GAUSSDB:
-        return getGaussDBDatabases(connection);
+        console.log('调用getGaussDBDatabases获取GaussDB数据库列表');
+        result = await getGaussDBDatabases(connection);
+        break;
       case DbType.REDIS:
-        return getRedisDatabases(connection);
+        console.log('调用getRedisDatabases获取Redis数据库列表');
+        result = await getRedisDatabases(connection);
+        break;
       case DbType.SQLITE:
-        return getSqliteDatabases(connection);
+        console.log('调用getSqliteDatabases获取SQLite数据库列表');
+        result = await getSqliteDatabases(connection);
+        break;
       default:
         console.warn(`不支持的数据库类型: ${connection.type}`);
-        return getDefaultDatabases();
+        throw new Error(`不支持的数据库类型: ${connection.type}`);
     }
+    
+    console.log('成功获取数据库列表，返回结果数量:', result.length);
+    console.log('返回的数据库列表:', result);
+    console.log('===== 获取数据库列表完成 =====');
+    
+    return result;
   } catch (error) {
     console.error('获取数据库列表失败:', error);
-    return getDefaultDatabases();
+    throw error; // 抛出错误，让调用方决定是否使用默认数据
   }
 };
 

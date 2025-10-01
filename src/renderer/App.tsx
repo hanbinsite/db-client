@@ -122,22 +122,17 @@ const AppContent: React.FC = () => {
   };
 
   const handleConnectionSelect = async (connection: DatabaseConnection) => {
-    setActiveConnection(connection);
+    // 先设置基本连接信息，但保持isConnected为false
+    setActiveConnection({ ...connection, isConnected: false });
     
     // 尝试连接到数据库并设置连接状态
     try {
       if (window.electronAPI && connection.id) {
-        // 检查连接是否已存在，避免重复测试
-        if (connection.isConnected) {
-          console.log('连接已存在且已连接，直接使用');
-          return;
-        }
-        
         // 测试连接
         const testResult = await window.electronAPI.testConnection(connection);
         
         if (testResult && testResult.success) {
-          // 更新连接的状态
+          // 更新连接的状态为已连接
           const updatedConnection = { ...connection, isConnected: true };
           setActiveConnection(updatedConnection);
           
@@ -145,32 +140,44 @@ const AppContent: React.FC = () => {
           setConnections(prev => 
             prev.map(conn => conn.id === connection.id ? updatedConnection : conn)
           );
+          
+          console.log('数据库连接成功，现在将尝试获取真实数据');
+          
+          // 等待DatabasePanel加载数据后，自动选择第一个数据库并创建标签页
+          setTimeout(() => {
+            handleDatabaseSelect(activeDatabase || 'information_schema');
+          }, 1000);
         } else {
           console.warn('连接测试失败:', testResult?.message);
           
-          // 即使连接失败，也设置为已连接以显示模拟数据
-          const updatedConnection = { ...connection, isConnected: true };
-          setActiveConnection(updatedConnection);
+          // 连接失败时，保持未连接状态
+          setActiveConnection({ ...connection, isConnected: false });
+          
+          // 更新连接列表中的状态
+          setConnections(prev => 
+            prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
+          );
+          
+          message.error('连接测试失败: ' + (testResult?.message || '未知错误'));
         }
       } else {
-        // 开发环境或无法使用electronAPI时，直接设置为已连接以显示模拟数据
-        const updatedConnection = { ...connection, isConnected: true };
-        setActiveConnection(updatedConnection);
+        // 开发环境或无法使用electronAPI时，设置为未连接状态
+        setActiveConnection({ ...connection, isConnected: false });
+        console.log('无法使用electronAPI，设置为未连接状态');
       }
     } catch (error) {
       console.error('连接数据库时出错:', error);
       
-      // 即使出错，也设置为已连接以显示模拟数据
-      const updatedConnection = { ...connection, isConnected: true };
-      setActiveConnection(updatedConnection);
+      // 出错时，设置为未连接状态
+      setActiveConnection({ ...connection, isConnected: false });
+      
+      // 更新连接列表中的状态
+      setConnections(prev => 
+        prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
+      );
+      
+      message.error('连接数据库时发生错误');
     }
-    
-    // 等待DatabasePanel加载数据后，自动选择第一个数据库并创建标签页
-    setTimeout(async () => {
-      // 这里我们假设第一个数据库名称（在模拟数据中通常是information_schema）
-      const defaultDbName = 'information_schema';
-      handleDatabaseSelect(defaultDbName);
-    }, 1000);
   };
 
   const handleConnectionEdit = async (connection: DatabaseConnection) => {

@@ -1,0 +1,165 @@
+/* 全局样式重置 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  background-color: #f5f5f5;
+}
+
+#root {
+  height: 100vh;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* 通用工具类 */
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flex {
+  display: flex;
+}
+
+.flex-column {
+  flex-direction: column;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+/* 连接状态指示器 */
+.connection-status {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.connection-status.connected {
+  background-color: #52c41a;
+}
+
+.connection-status.disconnected {
+  background-color: #ff4d4f;
+}
+
+.connection-status.connecting {
+  background-color: #faad14;
+}
+
+/* 数据库类型图标 */
+.db-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  color: white;
+}
+
+.db-icon.mysql {
+  background-color: #4479a1;
+}
+
+.db-icon.oracle {
+  background-color: #c74634;
+}
+
+.db-icon.postgresql {
+  background-color: #336791;
+}
+
+.db-icon.gaussdb {
+  background-color: #00a0e9;
+}
+
+.db-icon.redis {
+  background-color: #a41e11;
+}
+
+.db-icon.sqlite {
+  background-color: #003b57;
+}
+
+/* 表格样式 */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 8px 12px;
+  border: 1px solid #e8e8e8;
+  text-align: left;
+}
+
+.data-table th {
+  background-color: #fafafa;
+  font-weight: 600;
+}
+
+.data-table tr:hover {
+  background-color: #f5f5f5;
+}
+
+/* 代码编辑器样式 */
+.sql-editor {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .ant-layout-sider {
+    position: absolute !important;
+    z-index: 1000;
+  }
+  
+  .main-content {
+    margin-left: 0 !important;
+  }
+}

@@ -12,7 +12,7 @@ app.whenReady().then(() => {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'src/main/preload.js')
+      preload: path.join(__dirname, 'dist/preload.js')
     },
     title: '数据库客户端演示'
   });
@@ -49,10 +49,10 @@ app.on('activate', () => {
         width: 1200,
         height: 800,
         webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          preload: path.join(__dirname, 'src/main/preload.js')
-        }
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, 'dist/preload.js')
+          }
       });
 
       if (process.env.NODE_ENV === 'development') {

@@ -207,7 +207,10 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
         
         if (testResult.success) {
           message.success('连接已刷新');
-          // 这里应该更新连接状态，实际应用中需要通过父组件更新
+          // 更新连接状态为已连接
+          const updatedConnection = { ...connection, isConnected: true };
+          // 调用onConnectionSelect重新选择连接，这会触发数据库列表的刷新
+          onConnectionSelect(updatedConnection);
         } else {
           message.error(`刷新失败: ${testResult.error}`);
         }

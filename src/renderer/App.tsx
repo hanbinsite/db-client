@@ -63,11 +63,9 @@ const AppContent: React.FC = () => {
         try {
           const result = await window.electronAPI.getAllConnections();
           if (result.success) {
+            // 只加载连接列表，但不自动设置活动连接
             setConnections(result.connections);
-            // 如果有连接，设置第一个为活动连接
-            if (result.connections.length > 0) {
-              setActiveConnection(result.connections[0]);
-            }
+            // 初始化时不自动选择任何连接，保持activeConnection为null
           } else {
             console.error('加载连接列表失败:', result.message);
             message.error('加载连接列表失败');
@@ -122,18 +120,44 @@ const AppContent: React.FC = () => {
   };
 
   const handleConnectionSelect = async (connection: DatabaseConnection) => {
+    // 从连接列表中获取完整的连接对象（包含connectionId）
+    const fullConnection = connections.find(conn => conn.id === connection.id);
+    
+    // 如果连接已经处于连接状态，仍然需要确保重新加载数据库列表
+    if (connection.isConnected && fullConnection) {
+      // 创建一个新的连接对象引用，确保状态更新能被检测到
+      const updatedConnection = {
+        ...fullConnection,
+        lastAccessed: Date.now() // 添加时间戳确保对象引用变化
+      };
+      setActiveConnection(updatedConnection);
+      console.log('连接已存在，更新连接信息以触发数据库列表重新加载');
+      
+      // 更新连接列表中的状态
+      setConnections(prev => 
+        prev.map(conn => conn.id === connection.id ? updatedConnection : conn)
+      );
+      
+      // 让DatabasePanel组件的自动选择逻辑工作，不手动选择数据库
+      return;
+    }
+    
     // 先设置基本连接信息，但保持isConnected为false
     setActiveConnection({ ...connection, isConnected: false });
     
-    // 尝试连接到数据库并设置连接状态
+    // 用户第一次点击连接时，尝试连接到数据库并设置连接状态
     try {
       if (window.electronAPI && connection.id) {
-        // 测试连接
-        const testResult = await window.electronAPI.testConnection(connection);
+        // 使用connectDatabase创建持久连接，而不是testConnection
+        const connectResult = await window.electronAPI.connectDatabase(connection);
         
-        if (testResult && testResult.success) {
-          // 更新连接的状态为已连接
-          const updatedConnection = { ...connection, isConnected: true };
+        if (connectResult && connectResult.success) {
+          // 更新连接的状态为已连接，并保存返回的connectionId
+          const updatedConnection = { 
+            ...connection, 
+            isConnected: true, 
+            connectionId: connectResult.connectionId // 保存真实的连接池ID
+          };
           setActiveConnection(updatedConnection);
           
           // 更新连接列表中的状态
@@ -141,14 +165,10 @@ const AppContent: React.FC = () => {
             prev.map(conn => conn.id === connection.id ? updatedConnection : conn)
           );
           
-          console.log('数据库连接成功，现在将尝试获取真实数据');
-          
-          // 等待DatabasePanel加载数据后，自动选择第一个数据库并创建标签页
-          setTimeout(() => {
-            handleDatabaseSelect(activeDatabase || 'information_schema');
-          }, 1000);
+          console.log('数据库连接成功并保持持久连接，现在将尝试获取真实数据');
+          // 让DatabasePanel组件的自动选择逻辑工作，不手动选择数据库
         } else {
-          console.warn('连接测试失败:', testResult?.message);
+          console.warn('连接数据库失败:', connectResult?.message);
           
           // 连接失败时，保持未连接状态
           setActiveConnection({ ...connection, isConnected: false });
@@ -158,7 +178,7 @@ const AppContent: React.FC = () => {
             prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
           );
           
-          message.error('连接测试失败: ' + (testResult?.message || '未知错误'));
+          message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
         }
       } else {
         // 开发环境或无法使用electronAPI时，设置为未连接状态
@@ -589,6 +609,10 @@ const AppContent: React.FC = () => {
               activeDatabase={activeDatabase}
               activeTable={activeTable}
               darkMode={darkMode}
+              onDataLoaded={() => {
+                console.log('数据库结构已加载完成，准备自动选择第一个数据库');
+                // 无需额外操作，DatabasePanel内部已经处理了自动选择第一个数据库
+              }}
               key={activeConnection ? `database-panel-${activeConnection.id}-${activeConnection.isConnected ? 'connected' : 'disconnected'}` : 'database-panel-empty'}
             />
           </Sider>

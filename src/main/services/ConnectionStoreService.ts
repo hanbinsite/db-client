@@ -80,39 +80,6 @@ export class ConnectionStoreService {
    */
   private getDefaultConnections(): DatabaseConnection[] {
     return [
-      {
-        id: '1',
-        name: '本地MySQL',
-        type: 'mysql',
-        host: 'localhost',
-        port: 3306,
-        username: 'root',
-        password: 'password',
-        isConnected: false,
-        lastConnectTime: new Date()
-      },
-      {
-        id: '2',
-        name: '测试PostgreSQL',
-        type: 'postgresql',
-        host: '192.168.1.100',
-        port: 5432,
-        username: 'postgres',
-        password: 'postgres',
-        isConnected: false,
-        lastConnectTime: new Date()
-      },
-      {
-        id: '3',
-        name: 'Oracle数据库',
-        type: 'oracle',
-        host: 'db.example.com',
-        port: 1521,
-        username: 'admin',
-        password: 'admin123',
-        isConnected: false,
-        lastConnectTime: new Date()
-      }
     ];
   }
 

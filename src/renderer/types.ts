@@ -15,6 +15,7 @@ export interface DatabaseConnection {
   timeout?: number;
   isConnected: boolean;
   lastConnectTime?: Date;
+  connectionId?: string; // 真实的连接池ID
 }
 
 // Electron API 类型定义

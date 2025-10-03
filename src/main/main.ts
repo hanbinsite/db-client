@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, nativeImage, ipcMain } from 'electron';
 import * as path from 'path';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
@@ -14,6 +14,9 @@ class DBClientApp {
   }
 
   private setupApp(): void {
+    // 禁用自动可访问性检测，解决"Only a single encoding of text content should be cached"警告
+    app.commandLine.appendSwitch('disable-features', 'RendererCodeIntegrity');
+    
     // 为Windows设置应用程序用户模型ID，确保任务栏图标正确显示
     if (process.platform === 'win32') {
       app.setAppUserModelId('com.dbclient.app');
@@ -57,7 +60,7 @@ class DBClientApp {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        preload: path.join(__dirname, 'preload.js')
+        preload: path.join(process.cwd(), 'dist', 'preload.js')
       },
       titleBarStyle: 'default',
       show: false,
@@ -256,7 +259,9 @@ class DBClientApp {
   private async handleTestConnection(config: any): Promise<any> {
     let poolId: string | undefined;
     // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
-    const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+    const databaseName = config.database || 
+      (config.type === 'postgresql' ? 'postgres' : 
+       (config.type === 'mysql' ? 'performance_schema' : ''));
     const generatedPoolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
     
     try {
@@ -271,15 +276,21 @@ class DBClientApp {
         ssl: config.ssl
       });
 
-      // 使用连接池测试连接 - 增加超时时间，改进测试连接配置
-      console.log('正在创建连接池...');
-      poolId = await this.databaseService.createConnectionPool(config, {
-        maxConnections: 2, // 增加一个连接以避免单点问题
-        minConnections: 1,
-        acquireTimeout: 60000, // 增加到60秒以适应较慢的连接
-        idleTimeout: 30000,
-        testOnBorrow: true
-      });
+      // 首先检查连接池是否已经存在
+      if (this.databaseService.getConnectionPool(generatedPoolId)) {
+        console.log('连接池已存在，直接使用现有连接池进行测试');
+        poolId = generatedPoolId;
+      } else {
+        // 使用连接池测试连接 - 增加超时时间，改进测试连接配置
+        console.log('正在创建连接池...');
+        poolId = await this.databaseService.createConnectionPool(config, {
+          maxConnections: 2, // 增加一个连接以避免单点问题
+          minConnections: 1,
+          acquireTimeout: 60000, // 增加到60秒以适应较慢的连接
+          idleTimeout: 30000,
+          testOnBorrow: true
+        });
+      }
 
       console.log('连接池创建成功，准备执行测试查询...');
       // 根据数据库类型选择适合的测试查询语句

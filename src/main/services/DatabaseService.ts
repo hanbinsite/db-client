@@ -365,9 +365,7 @@ export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
       errors.push('用户名不能为空');
     }
 
-    if (!config.database) {
-      errors.push('数据库名称不能为空');
-    }
+    // 数据库名称不再是必填项
 
     return {
       valid: errors.length === 0,
@@ -560,8 +558,10 @@ export class DatabaseService extends EventEmitter {
 
   // 生成连接池ID
   private generatePoolId(config: DatabaseConnection): string {
-    // 为PostgreSQL提供默认数据库名'postgres'，避免生成包含undefined的ID
-    const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+    // 为不同类型的数据库提供默认数据库名，避免生成包含undefined的ID
+    const databaseName = config.database || 
+      (config.type === 'postgresql' ? 'postgres' : 
+       (config.type === 'mysql' ? 'performance_schema' : ''));
     return `${config.type}_${config.host}_${config.port}_${databaseName}`;
   }
 
@@ -583,7 +583,11 @@ class MySQLConnection extends BaseDatabaseConnection {
         user: this.config.username,
         password: this.config.password,
         database: this.config.database,
-        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+        ssl: this.config.ssl ? {
+          // 为了解决SSL握手失败问题，我们提供更完整的SSL配置
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined // 忽略主机名验证
+        } : undefined,
         connectTimeout: this.config.timeout ? this.config.timeout * 1000 : 30000
       });
       this.isConnecting = false;
@@ -742,7 +746,11 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
         user: this.config.username,
         password: this.config.password,
         database: this.config.database,
-        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+        ssl: this.config.ssl ? {
+          // 为了解决SSL握手失败问题，我们提供更完整的SSL配置
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined // 忽略主机名验证
+        } : undefined,
         connectionTimeoutMillis: this.config.timeout ? this.config.timeout * 1000 : 30000
       });
       

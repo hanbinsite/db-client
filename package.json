@@ -5,6 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "start": "chcp 65001 && electron .",
+    "start:verbose": "chcp 65001 && electron --enable-logging .",
     "demo": "electron start-demo.js",
     "dev": "webpack serve --config webpack.renderer.config.js --mode development",
     "build-main": "webpack --config webpack.main.config.js --mode production",

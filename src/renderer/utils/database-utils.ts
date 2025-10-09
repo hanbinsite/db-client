@@ -1,5 +1,28 @@
 import { DatabaseConnection } from '../types';
 
+// 全局变量类型声明
+declare global {
+  // 用于控制MySQL连接警告消息的全局变量
+  var mysqlConnectionIdWarningSent: boolean;
+  var mysqlConnectionStatusWarningSent: boolean;
+  
+  // 用于控制PostgreSQL连接警告消息的全局变量
+  var postgresConnectionIdWarningSent: boolean;
+  var postgresConnectionStatusWarningSent: boolean;
+  
+  // 用于控制Oracle连接警告消息的全局变量
+  var oracleConnectionIdWarningSent: boolean;
+  var oracleConnectionStatusWarningSent: boolean;
+  
+  // 用于控制GaussDB连接警告消息的全局变量
+  var gaussdbConnectionIdWarningSent: boolean;
+  var gaussdbConnectionStatusWarningSent: boolean;
+  
+  // 用于控制其他数据库连接警告消息的全局变量
+  var dbConnectionIdWarningSent: boolean;
+  var dbConnectionStatusWarningSent: boolean;
+}
+
 // 数据库类型枚举
 export enum DbType {
   MYSQL = 'mysql',
@@ -42,9 +65,6 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
   const MAX_RETRIES = 5;
   const RETRY_INTERVAL_MS = 500;
   
-  // 缓存键 - 用于临时缓存查询结果
-  const cacheKey = `${connection.id}_${connection.type}_databases`;
-  
   // 存储最后一次失败的错误信息
   let lastError: any = null;
   
@@ -53,41 +73,39 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
     console.log('连接信息:', { type: connection.type, host: connection.host, port: connection.port, id: connection.id });
     
     // 检查基本条件
-  if (!window.electronAPI) {
-    console.error('DATABASE UTILS - 错误: electronAPI不可用，无法获取真实数据库列表');
-    // 开发测试时使用模拟数据
-    return getDefaultDatabases();
-  }
-  
-  // 优化处理：即使connection.connectionId为空，也尝试使用备用方法
-  if (!connection.connectionId) {
-    console.warn('DATABASE UTILS - 警告: connection.connectionId为空，尝试使用备用方法获取数据库列表');
-    console.log('连接对象详情:', { id: connection.id, name: connection.name, type: connection.type, host: connection.host });
-    
-    // 直接使用特定数据库类型的备用方法
-    const fallbackResult = await getDatabasesWithFallbackMethod(connection);
-    
-    // 如果备用方法成功获取到数据库列表，返回它
-    if (fallbackResult && fallbackResult.length > 0) {
-      console.log(`备用方法成功获取数据库列表，数量: ${fallbackResult.length}`);
-      return fallbackResult;
+    if (!window.electronAPI) {
+      console.error('DATABASE UTILS - 错误: electronAPI不可用，无法获取真实数据库列表');
+      // 不使用默认数据库，必须从数据库中获得正确的数据库列表
+      return [];
     }
     
-    // 如果备用方法也失败，但有配置数据库，使用配置的数据库
-    if (connection.database) {
-      console.log('备用方法失败，但连接配置中有数据库名称，使用配置的数据库:', connection.database);
-      return [{ name: connection.database }];
+    // 1. 首先检查该链接是否创建了数据库连接，如果未创建，则进行创建
+    if (!connection.isConnected || !connection.connectionId) {
+      console.log('DATABASE UTILS - 连接未创建或已断开，尝试重新连接');
+      
+      try {
+        // 尝试重新连接数据库
+        const connectResult = await window.electronAPI.connectDatabase(connection);
+        
+        if (connectResult && connectResult.success) {
+          console.log('DATABASE UTILS - 数据库重新连接成功');
+          // 更新连接信息
+          connection.isConnected = true;
+          connection.connectionId = connectResult.connectionId;
+        } else {
+          console.error('DATABASE UTILS - 数据库重新连接失败:', connectResult?.message);
+          // 连接失败，返回空数组
+          return [];
+        }
+      } catch (error) {
+        console.error('DATABASE UTILS - 重新连接数据库时发生异常:', error);
+        // 连接异常，返回空数组
+        return [];
+      }
     }
     
-    // 所有方法都失败时，返回模拟数据
-    console.warn('所有备用方法都失败，返回模拟数据库列表');
-    return getDefaultDatabases();
-  }
-  
-  if (!connection.isConnected) {
-    console.warn('DATABASE UTILS - 警告: 连接未标记为已连接，但尝试获取真实数据库列表');
-    console.log('连接对象详情:', { connectionId: connection.connectionId, id: connection.id, name: connection.name });
-  }
+    // 2. 现在连接已建立，获取链接信息，尝试获取数据库列表
+    console.log('DATABASE UTILS - 连接已建立，准备获取数据库列表');
     
     // 主获取逻辑 - 带重试机制
     let result: DatabaseItem[] = [];
@@ -113,8 +131,33 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
           if (result && result.length > 0) {
             console.log(`备用方法成功获取数据库列表，数量: ${result.length}`);
             success = true;
-          } else if (retries < MAX_RETRIES) {
-            console.warn(`获取数据库列表失败，准备重试...`);
+          } else if (retries < MAX_RETRIES - 1) {
+            // 3. 如果所有获取方法都失败，检查连接是否失效，如果失效则重新连接
+            if (retries % 2 === 1) { // 每2次尝试后检查连接状态
+              console.warn(`获取数据库列表失败，检查连接状态...`);
+              
+              try {
+                // 检查连接是否仍然有效
+                const testResult = await window.electronAPI.testConnection(connection);
+                
+                if (!testResult || !testResult.success) {
+                  console.warn('DATABASE UTILS - 连接已失效，尝试重新连接');
+                  const reconnectResult = await window.electronAPI.connectDatabase(connection);
+                  
+                  if (reconnectResult && reconnectResult.success) {
+                    console.log('DATABASE UTILS - 数据库重新连接成功');
+                    connection.isConnected = true;
+                    connection.connectionId = reconnectResult.connectionId;
+                  } else {
+                    console.error('DATABASE UTILS - 数据库重新连接失败:', reconnectResult?.message);
+                  }
+                }
+              } catch (error) {
+                console.error('DATABASE UTILS - 检查或重新连接数据库时发生异常:', error);
+              }
+            }
+            
+            console.warn(`准备重试获取数据库列表...`);
             retries++;
             await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL_MS));
           } else {
@@ -126,6 +169,24 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
         lastError = error;
         console.error(`获取数据库列表过程中发生错误 (第${retries + 1}次尝试):`, error);
         
+        // 如果捕获到连接相关的错误，尝试重新连接
+        if (error instanceof Error && error.message && (error.message.includes('connection') || error.message.includes('connect'))) {
+          try {
+            console.warn('DATABASE UTILS - 检测到连接错误，尝试重新连接');
+            const reconnectResult = await window.electronAPI.connectDatabase(connection);
+            
+            if (reconnectResult && reconnectResult.success) {
+              console.log('DATABASE UTILS - 数据库重新连接成功');
+              connection.isConnected = true;
+              connection.connectionId = reconnectResult.connectionId;
+            } else {
+              console.error('DATABASE UTILS - 数据库重新连接失败:', reconnectResult?.message);
+            }
+          } catch (reconnectError) {
+            console.error('DATABASE UTILS - 重新连接数据库时发生异常:', reconnectError);
+          }
+        }
+        
         if (retries < MAX_RETRIES) {
           console.warn(`准备重试获取数据库列表...`);
           retries++;
@@ -134,19 +195,6 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
           console.error(`达到最大重试次数(${MAX_RETRIES})，获取数据库列表失败。最后错误:`, error);
         }
       }
-    }
-    
-    // 3. 最后兜底：如果所有方法都失败且有配置数据库，使用配置的数据库
-    if ((!result || result.length === 0) && connection.database) {
-      console.log('DATABASE UTILS - 获取到的数据库列表为空，但连接配置中有数据库名称，使用配置的数据库:', connection.database);
-      result = [{ name: connection.database }];
-    } else if (!result || result.length === 0) {
-      // 记录明确的失败信息
-      const errorMessage = lastError ? 
-        `DATABASE UTILS - 警告: 获取数据库列表失败，最大重试次数(${MAX_RETRIES})已达。错误原因: ${lastError.message || String(lastError)}` : 
-        `DATABASE UTILS - 警告: 获取数据库列表为空`;
-      
-      console.warn(errorMessage);
     }
     
     // 去重和排序处理
@@ -160,11 +208,7 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
     return result;
   } catch (error) {
     console.error('DATABASE UTILS - 获取数据库列表时发生异常:', error);
-    // 发生异常时的兜底处理
-    if (connection.database) {
-      console.log('DATABASE UTILS - 发生异常，但连接配置中有数据库名称，使用配置的数据库:', connection.database);
-      return [{ name: connection.database }];
-    }
+    // 发生异常时，返回空数组
     return [];
   }
 };
@@ -277,46 +321,33 @@ export async function getMysqlDatabases(connection: DatabaseConnection): Promise
   // 检查基本条件
   if (!window.electronAPI) {
     console.error('MySQL数据库 - electronAPI不可用，无法获取数据库列表');
-    // 如果有配置的数据库名，返回它
-    if (connection.database) {
-      return [{ name: connection.database, tables: [], views: [], procedures: [], functions: [], schemas: [] }];
-    }
+    // 不使用配置中的数据库名称作为备用选项，必须从数据库中获得正确的数据库列表
     return [];
   }
 
-  // 使用连接池ID，如果不存在则尝试创建一个新的连接池
-  let poolId: string | undefined = connection.connectionId;
+  // 使用连接池ID，如果不存在则尝试创建一个新的连接池或使用替代方案
+  let poolId: string = connection.connectionId || connection.id;
   
-  // 连接状态检查改为警告，而不是阻止操作
+  // 优化连接状态处理，减少重复警告
   if (!connection.connectionId) {
-    console.warn('MySQL数据库 - connection.connectionId为空，尝试创建新的连接池');
-    
-    try {
-      // 尝试通过connectDatabase创建新的连接池
-      const connectResult = await window.electronAPI.connectDatabase(connection);
-      if (connectResult && connectResult.success && connectResult.connectionId) {
-        poolId = connectResult.connectionId;
-        console.log('成功创建新的连接池，ID:', poolId);
-      } else {
-        // 如果创建失败，回退到原始连接ID
-        poolId = connection.id;
-        console.warn('创建连接池失败，回退到使用connection.id作为替代');
-      }
-    } catch (error) {
-      poolId = connection.id;
-      console.warn('创建连接池时发生错误，回退到使用connection.id作为替代:', error);
+    // 只在首次出现此情况时输出详细警告
+    if (!globalThis.mysqlConnectionIdWarningSent) {
+      console.warn('MySQL数据库 - connection.connectionId为空，使用connection.id作为替代连接标识符');
+      console.log('连接信息:', { id: connection.id, name: connection.name, type: connection.type });
+      globalThis.mysqlConnectionIdWarningSent = true;
     }
   }
   
+  // 简洁的连接状态提示
   if (!connection.isConnected) {
-    console.warn('MySQL数据库 - 连接未标记为已连接，但尝试获取数据库列表');
+    if (!globalThis.mysqlConnectionStatusWarningSent) {
+      console.warn('MySQL数据库 - 连接未标记为已连接，但会尝试获取数据库列表');
+      globalThis.mysqlConnectionStatusWarningSent = true;
+    }
   }
 
-  // 确保poolId不是undefined
-  if (!poolId) {
-    poolId = connection.id;
-    console.warn('最终回退到使用connection.id作为poolId:', poolId);
-  }
+  // 确保poolId始终有值
+  poolId = poolId || connection.id;
 
   try {
 
@@ -392,37 +423,13 @@ export async function getMysqlDatabases(connection: DatabaseConnection): Promise
           
           console.error(`备用方案获取MySQL数据库列表也失败，原因: ${sqlFailureReason}`);
           
-          // 尝试使用连接配置中的数据库名称作为备用选项
-          if (connection.database) {
-            console.log(`备用方案全部失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-            return [{ 
-              name: connection.database,
-              tables: [],
-              views: [],
-              procedures: [],
-              functions: [],
-              schemas: []
-            }];
-          }
-          
+          // 不使用配置中的数据库名称作为备用选项，只返回真实数据
           return [];
         }
       } catch (sqlError) {
         console.error('执行SHOW DATABASES SQL查询时发生异常:', sqlError);
         
-        // 异常情况下也尝试使用连接配置中的数据库名称
-        if (connection.database) {
-          console.log(`SQL查询异常，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-          return [{ 
-            name: connection.database,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: []
-          }];
-        }
-        
+        // 不使用配置中的数据库名称作为备用选项，只返回真实数据
         return [];
       }
     }
@@ -448,35 +455,9 @@ export async function getMysqlDatabases(connection: DatabaseConnection): Promise
         return databaseItems;
       } else {
         console.error('异常情况下备用方案也失败:', sqlResult);
-        
-        // 尝试使用连接配置中的数据库名称
-        if (connection.database) {
-          console.log(`异常情况下所有备用方案都失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-          return [{ 
-            name: connection.database,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: []
-          }];
-        }
       }
     } catch (sqlError) {
       console.error('备用方案执行也失败:', sqlError);
-      
-      // 尝试使用连接配置中的数据库名称
-      if (connection.database) {
-        console.log(`所有方法都失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-        return [{ 
-          name: connection.database,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: []
-        }];
-      }
     }
     
     return [];
@@ -502,71 +483,88 @@ const getPostgreSqlDatabases = async (connection: DatabaseConnection): Promise<D
     database: connection.database
   });
 
-  // 使用真实的连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
+  // 确保连接池ID始终有效
+  let poolId = connection.connectionId || connection.id;
+  let isConnectionReestablished = false;
+  
+  // 如果连接池ID无效，尝试创建新的连接
+  if (!poolId && window.electronAPI && connection.isConnected) {
+    console.warn('PostgreSQL连接池ID无效，尝试重新建立连接...');
+    try {
+      const connectResult = await window.electronAPI.connectDatabase(connection);
+      if (connectResult && connectResult.success && connectResult.connectionId) {
+        poolId = connectResult.connectionId;
+        connection.connectionId = poolId; // 更新连接对象的connectionId
+        isConnectionReestablished = true;
+        console.log('成功创建新的连接池，ID:', poolId);
+      }
+    } catch (connectError) {
+      console.error('重新建立连接失败:', connectError);
+    }
+  }
 
   try {
     // 检查连接ID是否有效
     if (!poolId) {
-      console.error('PostgreSQL数据库连接ID不存在，无法获取数据库列表');
-      // 尝试使用连接配置中的数据库名称作为备用选项
-      if (connection.database) {
-        console.log(`连接ID无效，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-        return [{ 
-          name: connection.database,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: []
-        }];
-      }
+      console.error('PostgreSQL数据库连接池ID不存在，无法获取数据库列表');
+      // 不使用配置中的数据库名称作为备用选项，必须从数据库中获得正确的数据库列表
       return [];
     }
 
-    console.log('执行PostgreSQL listDatabases调用，连接池ID:', poolId);
-    // PostgreSQL获取数据库列表的特定方法
-    const dbListResult = await window.electronAPI.listDatabases(poolId);
-    
-    console.log('PostgreSQL listDatabases返回结果:', JSON.stringify(dbListResult, null, 2));
-    
-    if (dbListResult && dbListResult.success && Array.isArray(dbListResult.data)) {
-      const databases = dbListResult.data.map((dbName: string) => ({
-        name: dbName,
-        // 预填充空数组，避免后续访问undefined
-        tables: [],
-        views: [],
-        procedures: [],
-        functions: [],
-        schemas: []
-      }));
-      console.log('返回的PostgreSQL数据库列表:', databases);
-      console.log('===== 获取PostgreSQL数据库列表完成 =====');
-      return databases;
-    } else {
-      // 详细记录失败原因
-      let failureReason = '未知原因';
-      if (!dbListResult) {
-        failureReason = 'window.electronAPI.listDatabases返回null/undefined';
-      } else if (!dbListResult.success) {
-        failureReason = `返回success=false，error: ${dbListResult.error || '无错误信息'}`;
-      } else if (!Array.isArray(dbListResult.data)) {
-        failureReason = `data不是数组，类型: ${typeof dbListResult.data}`;
-      } else if (dbListResult.data.length === 0) {
-        failureReason = '返回空数组';
-      }
-      
-      console.error(`PostgreSQL listDatabases方法失败，原因: ${failureReason}，尝试使用SQL查询作为备用方案`);
-      
-      // 使用SQL查询作为备用方案
+    // 定义一个安全执行API调用的辅助函数
+    const safeApiCall = async (apiCall: () => Promise<any>): Promise<any> => {
       try {
-        // PostgreSQL获取数据库列表的SQL语句
-        const sqlResult = await window.electronAPI.executeQuery(poolId, 
-          "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+        return await apiCall();
+      } catch (error) {
+        console.error('API调用异常:', error);
+        // 检查错误是否包含"连接池不存在"信息
+        if (error && (typeof error === 'string' && error.includes('连接池不存在') || 
+                      (error as any)?.message?.includes('连接池不存在'))) {
+          console.warn('检测到连接池不存在，尝试重新建立连接...');
+          if (!isConnectionReestablished && window.electronAPI && connection.isConnected) {
+            try {
+              const reconnectResult = await window.electronAPI.connectDatabase(connection);
+              if (reconnectResult && reconnectResult.success && reconnectResult.connectionId) {
+                poolId = reconnectResult.connectionId;
+                connection.connectionId = poolId; // 更新连接对象的connectionId
+                isConnectionReestablished = true;
+                console.log('成功重新建立连接，新的连接池ID:', poolId);
+                // 重新尝试API调用
+                return await apiCall();
+              }
+            } catch (reconnectError) {
+              console.error('重新建立连接失败:', reconnectError);
+            }
+          }
+        }
+        throw error; // 重新抛出其他类型的错误
+      }
+    };
+
+    // 定义重试次数和间隔
+    const MAX_RETRIES = 3;
+    const RETRY_INTERVAL_MS = 1000;
+    
+    // 尝试使用SQL查询获取数据库列表（优先使用这种方法）
+    for (let retry = 0; retry < MAX_RETRIES; retry++) {
+      try {
+        console.log(`执行PostgreSQL SQL查询获取数据库列表 (尝试 ${retry + 1}/${MAX_RETRIES})，连接池ID:`, poolId);
+        
+        // 优化的PostgreSQL获取数据库列表的SQL语句
+        // 添加了权限检查和过滤系统数据库
+        const sqlResult = await safeApiCall(() => 
+          window.electronAPI.executeQuery(poolId, 
+            `SELECT datname 
+             FROM pg_database 
+             WHERE datistemplate = false 
+               AND datname NOT IN ('template0', 'template1')
+             ORDER BY datname`
+          )
+        );
         
         console.log('PostgreSQL SQL查询结果:', JSON.stringify(sqlResult, null, 2));
         
-        if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data)) {
+        if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data) && sqlResult.data.length > 0) {
           // 将SQL查询结果转换为DatabaseItem对象数组
           const databaseItems = sqlResult.data.map((row: any) => ({
             name: row.datname,
@@ -578,112 +576,54 @@ const getPostgreSqlDatabases = async (connection: DatabaseConnection): Promise<D
             schemas: []
           }));
           
-          console.log('备用方案返回的PostgreSQL数据库项数量:', databaseItems.length);
+          console.log('成功获取PostgreSQL数据库列表，数量:', databaseItems.length);
           console.log('===== 获取PostgreSQL数据库列表完成 =====');
           return databaseItems;
-        } else {
-          // 详细记录备用方案失败原因
-          let sqlFailureReason = '未知原因';
-          if (!sqlResult) {
-            sqlFailureReason = 'window.electronAPI.executeQuery返回null/undefined';
-          } else if (!sqlResult.success) {
-            sqlFailureReason = `返回success=false，error: ${sqlResult.error || '无错误信息'}`;
-          } else if (!Array.isArray(sqlResult.data)) {
-            sqlFailureReason = `data不是数组，类型: ${typeof sqlResult.data}`;
-          } else if (sqlResult.data.length === 0) {
-            sqlFailureReason = '返回空数组';
-          }
-          
-          console.error(`备用方案获取PostgreSQL数据库列表也失败，原因: ${sqlFailureReason}`);
-          
-          // 尝试使用连接配置中的数据库名称作为备用选项
-          if (connection.database) {
-            console.log(`备用方案全部失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-            return [{ 
-              name: connection.database,
-              tables: [],
-              views: [],
-              procedures: [],
-              functions: [],
-              schemas: []
-            }];
-          }
-          
-          return [];
+        } else if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data) && sqlResult.data.length === 0) {
+          console.warn('PostgreSQL数据库列表为空，可能是权限不足或没有数据库');
+          break; // 空结果不需要重试
         }
       } catch (sqlError) {
-        console.error('执行PostgreSQL SQL查询时发生异常:', sqlError);
+        console.warn(`PostgreSQL SQL查询失败 (尝试 ${retry + 1}/${MAX_RETRIES}):`, sqlError);
         
-        // 异常情况下也尝试使用连接配置中的数据库名称
-        if (connection.database) {
-          console.log(`SQL查询异常，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-          return [{ 
-            name: connection.database,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: []
-          }];
+        // 如果不是最后一次尝试，等待一段时间后重试
+        if (retry < MAX_RETRIES - 1) {
+          console.log(`等待${RETRY_INTERVAL_MS}ms后重试...`);
+          await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL_MS));
         }
-        
-        return [];
       }
     }
-  } catch (error) {
-    console.error('调用electronAPI获取PostgreSQL数据库列表异常:', error);
     
+    // 如果SQL查询失败，尝试使用listDatabases方法
+    console.log('SQL查询方法失败，尝试使用window.electronAPI.listDatabases方法');
     try {
-      // 异常情况下也尝试备用方案
-      console.log('发生异常，尝试使用SQL查询作为备用方案');
-      const sqlResult = await window.electronAPI.executeQuery(poolId, 
-        "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+      const dbListResult = await safeApiCall(() => 
+        window.electronAPI.listDatabases(poolId)
+      );
       
-      if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data)) {
-        const databaseItems = sqlResult.data.map((row: any) => ({
-          name: row.datname,
+      console.log('PostgreSQL listDatabases返回结果:', JSON.stringify(dbListResult, null, 2));
+      
+      if (dbListResult && dbListResult.success && Array.isArray(dbListResult.data) && dbListResult.data.length > 0) {
+        const databases = dbListResult.data.map((dbName: string) => ({
+          name: dbName,
           tables: [],
           views: [],
           procedures: [],
           functions: [],
           schemas: []
         }));
-        
-        console.log('异常情况下备用方案返回的PostgreSQL数据库项数量:', databaseItems.length);
-        return databaseItems;
-      } else {
-        console.error('异常情况下备用方案也失败:', sqlResult);
-        
-        // 尝试使用连接配置中的数据库名称
-        if (connection.database) {
-          console.log(`异常情况下所有备用方案都失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-          return [{ 
-            name: connection.database,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: []
-          }];
-        }
+        console.log('window.electronAPI.listDatabases方法成功获取数据库列表:', databases);
+        console.log('===== 获取PostgreSQL数据库列表完成 =====');
+        return databases;
       }
-    } catch (sqlError) {
-      console.error('备用方案执行也失败:', sqlError);
-      
-      // 尝试使用连接配置中的数据库名称
-      if (connection.database) {
-        console.log(`所有方法都失败，但连接配置中有数据库名称(${connection.database})，返回该数据库`);
-        return [{ 
-          name: connection.database,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: []
-        }];
-      }
+    } catch (listDbError) {
+      console.error('window.electronAPI.listDatabases方法失败:', listDbError);
     }
     
+    console.warn('PostgreSQL: 无法获取数据库列表，所有方法都失败且无配置数据库名称');
+    return [];
+  } catch (error) {
+    console.error('获取PostgreSQL数据库列表时发生未处理的异常:', error);
     return [];
   }
 };
@@ -781,55 +721,23 @@ const getSqliteDatabases = async (connection: DatabaseConnection): Promise<Datab
       }));
     } else {
       console.error('获取SQLite数据库列表失败', result);
-      // 对于SQLite，如果无法获取真实数据，至少返回配置中指定的数据库
-      return [{ name: connection.database || 'main' }];
+      // 不使用配置中的数据库名称作为备用选项，必须从数据库中获得正确的数据库列表
+      return [];
     }
   } catch (error) {
     console.error('调用electronAPI获取SQLite数据库列表失败', error);
-    // 对于SQLite，如果无法获取真实数据，至少返回配置中指定的数据库
-    return [{ name: connection.database || 'main' }];
+    // 不使用配置中的数据库名称作为备用选项，必须从数据库中获得正确的数据库列表
+    return [];
   }
 };
 
 /**
- * 获取默认数据库列表（当无法获取真实数据时使用）
- * @returns DatabaseItem[]
+ * 获取默认数据库列表（仅用于开发测试，生产环境返回空数组）
+ * @returns DatabaseItem[] 空数组
  */
 export const getDefaultDatabases = (): DatabaseItem[] => {
-  console.log('===== 调用getDefaultDatabases获取默认数据库列表 =====');
-  const defaultDbs = [
-    {
-      name: 'products', 
-      tables: ['product_info', 'categories', 'brands', 'suppliers'],
-      views: ['product_stock_view'],
-      procedures: ['update_product_price'],
-      functions: ['calculate_discount']
-    },
-    {
-      name: 'orders', 
-      tables: ['order_header', 'order_items', 'shipping_addresses', 'payment_details'],
-      views: ['order_summary'],
-      procedures: ['process_new_order'],
-      functions: ['calculate_tax']
-    },
-    {
-      name: 'users', 
-      tables: ['user_profiles', 'contact_info', 'user_roles', 'permissions'],
-      views: ['active_users'],
-      procedures: ['create_new_user'],
-      functions: ['check_user_status']
-    },
-    {
-      name: 'inventory', 
-      tables: ['stock_levels', 'warehouses', 'transactions', 'locations'],
-      views: ['low_stock_items'],
-      procedures: ['update_inventory'],
-      functions: ['reorder_point_calculator']
-    }
-  ];
-  console.log('返回默认数据库列表:', defaultDbs);
-  console.log('===== 获取默认数据库列表完成 =====');
-  return defaultDbs;
+  // 移除默认模拟数据，仅返回空数组
+  return [];
 };
 
 /**
@@ -837,36 +745,36 @@ export const getDefaultDatabases = (): DatabaseItem[] => {
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
  * @param schema 可选的模式名称（主要用于PostgreSQL等支持模式的数据库）
- * @returns Promise<string[]>
+ * @returns Promise<string[]> 真实数据表列表，失败时返回空数组
  */
 export const getTableList = async (connection: DatabaseConnection, databaseName: string, schema?: string): Promise<string[]> => {
-  // 检查基本条件
-  if (!window.electronAPI) {
-    return [];
-  }
-  
-  // 使用连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
-  // 连接状态检查改为警告，而不是阻止操作
-  if (!connection.connectionId) {
-    console.warn(`${connection.type}数据库 - connection.connectionId为空，尝试使用connection.id作为替代`);
-  }
-  
-  if (!connection.isConnected) {
-    console.warn(`${connection.type}数据库 - 连接未标记为已连接，但尝试获取表列表`);
-  }
-
   try {
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取表列表失败: 无效的连接或数据库名称`);
+      return [];
+    }
+    
+    // 使用连接池ID，如果不存在则回退到原始连接ID
+    const poolId = connection.connectionId || connection.id;
+    
+    if (!poolId) {
+      console.warn(`获取表列表失败: 连接池ID不存在`);
+      return [];
+    }
+
     let result: any;
     
     switch (connection.type) {
       case DbType.MYSQL:
-        // MySQL: 先切换数据库，然后获取表列表
-        await window.electronAPI.executeQuery(poolId, `USE \`${databaseName}\``);
-        result = await window.electronAPI.executeQuery(poolId, "SHOW TABLES");
+        // MySQL: 使用information_schema查询特定数据库的表列表，避免切换数据库
+        result = await window.electronAPI.executeQuery(
+          poolId, 
+          "SELECT table_name FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?", 
+          [databaseName]
+        );
         if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => Object.values(row)[0]);
+          return result.data.map((row: any) => row.table_name);
         }
         break;
         
@@ -924,7 +832,7 @@ export const getTableList = async (connection: DatabaseConnection, databaseName:
         break;
     }
     
-    console.warn(`获取${connection.type}数据库表列表失败`);
+    console.warn(`获取${connection.type}数据库表列表失败: 无效的结果`);
     return [];
   } catch (error) {
     console.error(`获取数据库表列表异常:`, error);
@@ -937,97 +845,102 @@ export const getTableList = async (connection: DatabaseConnection, databaseName:
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
  * @param schema 可选的模式名称（主要用于PostgreSQL等支持模式的数据库）
- * @returns Promise<string[]>
+ * @returns Promise<string[]> 真实视图列表，失败时返回空数组
  */
 export const getViewList = async (connection: DatabaseConnection, databaseName: string, schema?: string): Promise<string[]> => {
-  // 检查基本条件
-  if (!window.electronAPI) {
-    return [];
-  }
-  
-  // 使用连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
-  // 连接状态检查改为警告，而不是阻止操作
-  if (!connection.connectionId) {
-    console.warn(`${connection.type}数据库 - connection.connectionId为空，尝试使用connection.id作为替代`);
-  }
-  
-  if (!connection.isConnected) {
-    console.warn(`${connection.type}数据库 - 连接未标记为已连接，但尝试获取视图列表`);
-  }
-  
   try {
-    let result: any;
-    
-    switch (connection.type) {
-      case DbType.MYSQL:
-        // MySQL: 先切换数据库，然后获取视图列表
-        await window.electronAPI.executeQuery(poolId, `USE \`${databaseName}\``);
-        result = await window.electronAPI.executeQuery(poolId, "SHOW FULL TABLES WHERE table_type LIKE 'VIEW' ");
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => Object.values(row)[0]);
-        }
-        break;
-        
-      case DbType.POSTGRESQL:
-        // PostgreSQL: 使用information_schema获取视图列表
-        const schemaName = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT table_name FROM information_schema.views WHERE table_schema = ?", 
-          [schemaName]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.table_name);
-        }
-        break;
-        
-      case DbType.ORACLE:
-        // Oracle: 获取用户下的视图
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT view_name FROM all_views WHERE owner = ?", 
-          [databaseName.toUpperCase()]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.VIEW_NAME);
-        }
-        break;
-        
-      case DbType.GAUSSDB:
-        // GaussDB与PostgreSQL兼容
-        const gaussSchema = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT table_name FROM information_schema.views WHERE table_schema = ?", 
-          [gaussSchema]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.table_name);
-        }
-        break;
-        
-      case DbType.REDIS:
-        // Redis没有视图的概念，返回空数组
-        return [];
-        
-      case DbType.SQLITE:
-        // SQLite: 查询所有视图
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT name FROM sqlite_master WHERE type='view'"
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.name);
-        }
-        break;
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取视图列表失败: 无效的连接或数据库名称`);
+      return [];
     }
     
-    console.warn(`获取${connection.type}数据库视图列表失败`);
-    return [];
+    // 使用连接池ID，如果不存在则回退到原始连接ID
+    const poolId = connection.connectionId || connection.id;
+    
+    if (!poolId) {
+      console.warn(`获取视图列表失败: 连接池ID不存在`);
+      return [];
+    }
+    
+    try {
+      let result: any;
+      
+      switch (connection.type) {
+        case DbType.MYSQL:
+          // MySQL: 使用information_schema查询特定数据库的视图列表，避免切换数据库
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT table_name FROM information_schema.views WHERE table_schema = ?", 
+            [databaseName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.table_name);
+          }
+          break;
+          
+        case DbType.POSTGRESQL:
+          // PostgreSQL: 使用information_schema获取视图列表
+          const schemaName = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT table_name FROM information_schema.views WHERE table_schema = ?", 
+            [schemaName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.table_name);
+          }
+          break;
+          
+        case DbType.ORACLE:
+          // Oracle: 获取用户下的视图
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT view_name FROM all_views WHERE owner = ?", 
+            [databaseName.toUpperCase()]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.VIEW_NAME);
+          }
+          break;
+          
+        case DbType.GAUSSDB:
+          // GaussDB与PostgreSQL兼容
+          const gaussSchema = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT table_name FROM information_schema.views WHERE table_schema = ?", 
+            [gaussSchema]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.table_name);
+          }
+          break;
+          
+        case DbType.REDIS:
+          // Redis没有视图的概念，返回空数组
+          return [];
+          
+        case DbType.SQLITE:
+          // SQLite: 查询所有视图
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT name FROM sqlite_master WHERE type='view'"
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.name);
+          }
+          break;
+      }
+      
+      console.warn(`获取${connection.type}数据库视图列表失败: 无效的结果`);
+      return [];
+    } catch (error) {
+      console.error(`获取数据库视图列表异常:`, error);
+      return [];
+    }
   } catch (error) {
-    console.error(`获取数据库视图列表异常:`, error);
+    console.error(`获取视图列表时发生异常:`, error);
     return [];
   }
 };
@@ -1037,96 +950,102 @@ export const getViewList = async (connection: DatabaseConnection, databaseName: 
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
  * @param schema 可选的模式名称（主要用于PostgreSQL等支持模式的数据库）
- * @returns Promise<string[]>
+ * @returns Promise<string[]> 真实存储过程列表，失败时返回空数组
  */
 export const getProcedureList = async (connection: DatabaseConnection, databaseName: string, schema?: string): Promise<string[]> => {
-  // 检查基本条件
-  if (!window.electronAPI) {
-    return [];
-  }
-  
-  // 使用连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
-  // 连接状态检查改为警告，而不是阻止操作
-  if (!connection.connectionId) {
-    console.warn(`${connection.type}数据库 - connection.connectionId为空，尝试使用connection.id作为替代`);
-  }
-  
-  if (!connection.isConnected) {
-    console.warn(`${connection.type}数据库 - 连接未标记为已连接，但尝试获取存储过程列表`);
-  }
-  
   try {
-    let result: any;
-    
-    switch (connection.type) {
-      case DbType.MYSQL:
-        // MySQL: 先切换数据库，然后获取存储过程列表
-        result = await window.electronAPI.executeQuery(poolId, "SHOW PROCEDURE STATUS WHERE db = ?", [databaseName]);
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.Name);
-        }
-        break;
-        
-      case DbType.POSTGRESQL:
-        // PostgreSQL: 使用information_schema获取存储过程列表
-        const schemaName = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'PROCEDURE'", 
-          [schemaName]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.routine_name);
-        }
-        break;
-        
-      case DbType.ORACLE:
-        // Oracle: 获取用户下的存储过程
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT object_name FROM all_objects WHERE owner = ? AND object_type = 'PROCEDURE'", 
-          [databaseName.toUpperCase()]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.OBJECT_NAME);
-        }
-        break;
-        
-      case DbType.GAUSSDB:
-        // GaussDB与PostgreSQL兼容
-        const gaussSchema = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'PROCEDURE'", 
-          [gaussSchema]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.routine_name);
-        }
-        break;
-        
-      case DbType.REDIS:
-        // Redis没有存储过程的概念，返回空数组
-        return [];
-        
-      case DbType.SQLITE:
-        // SQLite: 查询所有存储过程
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT name FROM sqlite_master WHERE type='trigger'"
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.name);
-        }
-        break;
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取存储过程列表失败: 无效的连接或数据库名称`);
+      return [];
     }
     
-    console.warn(`获取${connection.type}数据库存储过程列表失败`);
-    return [];
+    // 使用连接池ID，如果不存在则回退到原始连接ID
+    const poolId = connection.connectionId || connection.id;
+    
+    if (!poolId) {
+      console.warn(`获取存储过程列表失败: 连接池ID不存在`);
+      return [];
+    }
+    
+    try {
+      let result: any;
+      
+      switch (connection.type) {
+        case DbType.MYSQL:
+          // MySQL: 使用information_schema查询特定数据库的存储过程列表
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE routine_schema = ? AND routine_type = 'PROCEDURE'", 
+            [databaseName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.POSTGRESQL:
+          // PostgreSQL: 使用information_schema获取存储过程列表
+          const schemaName = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'PROCEDURE'", 
+            [schemaName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.ORACLE:
+          // Oracle: 获取用户下的存储过程
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT object_name FROM all_objects WHERE owner = ? AND object_type = 'PROCEDURE'", 
+            [databaseName.toUpperCase()]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.OBJECT_NAME);
+          }
+          break;
+          
+        case DbType.GAUSSDB:
+          // GaussDB与PostgreSQL兼容
+          const gaussSchema = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'PROCEDURE'", 
+            [gaussSchema]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.REDIS:
+          // Redis没有存储过程的概念，返回空数组
+          return [];
+          
+        case DbType.SQLITE:
+          // SQLite: 查询所有存储过程
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.name);
+          }
+          break;
+      }
+      
+      console.warn(`获取${connection.type}数据库存储过程列表失败: 无效的结果`);
+      return [];
+    } catch (error) {
+      console.error(`获取数据库存储过程列表异常:`, error);
+      return [];
+    }
   } catch (error) {
-    console.error(`获取数据库存储过程列表异常:`, error);
+    console.error(`获取存储过程列表时发生异常:`, error);
     return [];
   }
 };
@@ -1136,96 +1055,96 @@ export const getProcedureList = async (connection: DatabaseConnection, databaseN
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
  * @param schema 可选的模式名称（主要用于PostgreSQL等支持模式的数据库）
- * @returns Promise<string[]>
+ * @returns Promise<string[]> 真实函数列表，失败时返回空数组
  */
 export const getFunctionList = async (connection: DatabaseConnection, databaseName: string, schema?: string): Promise<string[]> => {
-  // 检查基本条件
-  if (!window.electronAPI) {
-    return [];
-  }
-  
-  // 使用连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
-  // 连接状态检查改为警告，而不是阻止操作
-  if (!connection.connectionId) {
-    console.warn(`${connection.type}数据库 - connection.connectionId为空，尝试使用connection.id作为替代`);
-  }
-  
-  if (!connection.isConnected) {
-    console.warn(`${connection.type}数据库 - 连接未标记为已连接，但尝试获取函数列表`);
-  }
-  
   try {
-    let result: any;
-    
-    switch (connection.type) {
-      case DbType.MYSQL:
-        // MySQL: 先切换数据库，然后获取函数列表
-        result = await window.electronAPI.executeQuery(poolId, "SHOW FUNCTION STATUS WHERE db = ?", [databaseName]);
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.Name);
-        }
-        break;
-        
-      case DbType.POSTGRESQL:
-        // PostgreSQL: 使用information_schema获取函数列表
-        const schemaName = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'FUNCTION'", 
-          [schemaName]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.routine_name);
-        }
-        break;
-        
-      case DbType.ORACLE:
-        // Oracle: 获取用户下的函数
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT object_name FROM all_objects WHERE owner = ? AND object_type = 'FUNCTION'", 
-          [databaseName.toUpperCase()]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.OBJECT_NAME);
-        }
-        break;
-        
-      case DbType.GAUSSDB:
-        // GaussDB与PostgreSQL兼容
-        const gaussSchema = schema || 'public';
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'FUNCTION'", 
-          [gaussSchema]
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.routine_name);
-        }
-        break;
-        
-      case DbType.REDIS:
-        // Redis没有函数的概念，返回空数组
-        return [];
-        
-      case DbType.SQLITE:
-        // SQLite: 查询所有函数
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT name FROM sqlite_master WHERE type='view'"
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.name);
-        }
-        break;
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取函数列表失败: 无效的连接或数据库名称`);
+      return [];
     }
     
-    console.warn(`获取${connection.type}数据库函数列表失败`);
-    return [];
+    // 使用连接池ID，如果不存在则回退到原始连接ID
+    const poolId = connection.connectionId || connection.id;
+    
+    if (!poolId) {
+      console.warn(`获取函数列表失败: 连接池ID不存在`);
+      return [];
+    }
+    
+    try {
+      let result: any;
+      
+      switch (connection.type) {
+        case DbType.MYSQL:
+          // MySQL: 使用information_schema查询特定数据库的函数列表
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE routine_schema = ? AND routine_type = 'FUNCTION'", 
+            [databaseName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.POSTGRESQL:
+          // PostgreSQL: 使用information_schema获取函数列表
+          const schemaName = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'FUNCTION'", 
+            [schemaName]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.ORACLE:
+          // Oracle: 获取用户下的函数
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT object_name FROM all_objects WHERE owner = ? AND object_type = 'FUNCTION'", 
+            [databaseName.toUpperCase()]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.OBJECT_NAME);
+          }
+          break;
+          
+        case DbType.GAUSSDB:
+          // GaussDB与PostgreSQL兼容
+          const gaussSchema = schema || 'public';
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT routine_name FROM information_schema.routines WHERE specific_schema = ? AND routine_type = 'FUNCTION'", 
+            [gaussSchema]
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.routine_name);
+          }
+          break;
+          
+        case DbType.REDIS:
+          // Redis没有函数的概念，返回空数组
+          return [];
+          
+        case DbType.SQLITE:
+          // SQLite: 查询所有函数相关对象（SQLite没有真正的函数概念，这里返回空数组）
+          return [];
+          break;
+      }
+      
+      console.warn(`获取${connection.type}数据库函数列表失败: 无效的结果`);
+      return [];
+    } catch (error) {
+      console.error(`获取数据库函数列表异常:`, error);
+      return [];
+    }
   } catch (error) {
-    console.error(`获取数据库函数列表异常:`, error);
+    console.error(`获取函数列表时发生异常:`, error);
     return [];
   }
 };
@@ -1234,42 +1153,54 @@ export const getFunctionList = async (connection: DatabaseConnection, databaseNa
  * 获取数据库下的模式列表
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
- * @returns Promise<string[]>
+ * @returns Promise<string[]> 真实模式列表，失败时返回空数组
  */
 export const getSchemaList = async (connection: DatabaseConnection, databaseName: string): Promise<string[]> => {
-  // 使用真实的连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
-  if (!window.electronAPI || !poolId || !connection.isConnected) {
-    return [];
-  }
-
   try {
-    let result: any;
-    
-    switch (connection.type) {
-      case DbType.POSTGRESQL:
-      case DbType.GAUSSDB:
-        // PostgreSQL/GaussDB: 切换到指定数据库，然后获取模式列表
-        await window.electronAPI.executeQuery(poolId, `\c ${databaseName}`);
-        result = await window.electronAPI.executeQuery(
-          poolId, 
-          "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
-        );
-        if (result && result.success && Array.isArray(result.data)) {
-          return result.data.map((row: any) => row.schema_name);
-        }
-        break;
-        
-      default:
-        // 其他数据库类型不支持或不需要模式
-        return [];
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取模式列表失败: 无效的连接或数据库名称`);
+      return [];
     }
     
-    console.warn(`获取${connection.type}数据库模式列表失败`);
-    return [];
+    // 使用真实的连接池ID，如果不存在则回退到原始连接ID
+    const poolId = connection.connectionId || connection.id;
+    
+    if (!poolId) {
+      console.warn(`获取模式列表失败: 连接池ID不存在`);
+      return [];
+    }
+
+    try {
+      let result: any;
+      
+      switch (connection.type) {
+        case DbType.POSTGRESQL:
+        case DbType.GAUSSDB:
+          // PostgreSQL/GaussDB: 切换到指定数据库，然后获取模式列表
+          await window.electronAPI.executeQuery(poolId, `\c ${databaseName}`);
+          result = await window.electronAPI.executeQuery(
+            poolId, 
+            "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
+          );
+          if (result && result.success && Array.isArray(result.data)) {
+            return result.data.map((row: any) => row.schema_name);
+          }
+          break;
+          
+        default:
+          // 其他数据库类型不支持或不需要模式
+          return [];
+      }
+      
+      console.warn(`获取${connection.type}数据库模式列表失败: 无效的结果`);
+      return [];
+    } catch (error) {
+      console.error(`获取数据库模式列表异常:`, error);
+      return [];
+    }
   } catch (error) {
-    console.error(`获取数据库模式列表异常:`, error);
+    console.error(`获取模式列表时发生异常:`, error);
     return [];
   }
 };
@@ -1286,10 +1217,18 @@ export const getAllDatabaseObjects = async (
   databaseName: string, 
   schema?: string
 ): Promise<{tables: string[], views: string[], procedures: string[], functions: string[]}> => {
-  // 使用真实的连接池ID，如果不存在则回退到原始连接ID
-  const poolId = connection.connectionId || connection.id;
-  
   try {
+    // 检查基本条件
+    if (!window.electronAPI || !connection.isConnected || !databaseName) {
+      console.warn(`获取数据库所有对象失败: 无效的连接或数据库名称`);
+      return {
+        tables: [],
+        views: [],
+        procedures: [],
+        functions: []
+      };
+    }
+    
     // 并行获取所有对象列表
     const [tables, views, procedures, functions] = await Promise.all([
       getTableList(connection, databaseName, schema),

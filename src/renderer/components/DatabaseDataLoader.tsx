@@ -36,19 +36,6 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
   const [loading, setLoading] = useState(false);
   const lastRefreshTrigger = useRef(0); // 新增：跟踪上一次的刷新触发器值
 
-  // 模拟查询列表
-  const mockQueries = [
-    "最近查询 1",
-    "最近查询 2",
-    "最近查询 3"
-  ];
-
-  // 模拟备份列表
-  const mockBackups = [
-    "备份 2023-09-30",
-    "备份 2023-09-25",
-    "备份 2023-09-20"
-  ];
 
   // 数据库对象类型图标映射
   const objectTypeIcons: Record<string, React.ReactNode> = {
@@ -131,35 +118,28 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
       }
 
       // 确保使用真实的数据库列表，不回退到模拟数据
-      // 只有在真实数据不存在时，才使用连接配置中指定的数据库作为默认值
+      // 不使用配置中的数据库名称作为备用选项，必须从数据库中获得正确的数据库列表
       let displayDatabases = databases;
       if (!displayDatabases || displayDatabases.length === 0) {
-        console.warn('DATABASE DATA LOADER - 未获取到真实数据库列表，使用连接配置中的数据库');
-        // 使用连接配置中指定的数据库
-        if (connection.database) {
-          displayDatabases = [{ name: connection.database }];
-          console.log('DATABASE DATA LOADER - 使用连接配置中的数据库:', connection.database);
-        } else {
-          // 对于SQLite，如果未指定数据库名称，使用'main'
-          if (connection.type === 'sqlite') {
-            displayDatabases = [{ name: 'main' }];
-            console.log('DATABASE DATA LOADER - SQLite默认数据库名称: main');
-          } else {
-            displayDatabases = [];
-            console.warn('DATABASE DATA LOADER - 无法确定默认数据库名称');
-          }
-        }
+        console.warn('DATABASE DATA LOADER - 未获取到真实数据库列表，必须从数据库中获得正确的数据库列表');
+        displayDatabases = [];
       }
       console.log('DATABASE DATA LOADER - 最终显示的数据库列表:', displayDatabases, '是否为真实数据:', hasRealData);
 
       // 对于每个数据库，尝试获取表、视图等信息
       const dataPromises = displayDatabases.map(async (dbInfo: any) => {
         const dbName = typeof dbInfo === 'string' ? dbInfo : dbInfo.name;
-        let tables = [];
-        let views = [];
-        let procedures = [];
-        let functions = [];
+        let tables: string[] = [];
+        let views: string[] = [];
+        let procedures: string[] = [];
+        let functions: string[] = [];
         let schemas: any[] = [];
+        let totalTables = 0;
+        let totalViews = 0;
+        let totalProcedures = 0;
+        let totalFunctions = 0;
+        
+        console.log(`DATABASE DATA LOADER - 开始获取数据库 ${dbName} 的对象信息`);
         
         // 尝试从真实数据库获取信息
         if (window.electronAPI && connection.id && connection.isConnected) {
@@ -170,18 +150,39 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
               const schemaList = await getSchemaList(connection, dbName);
               
               if (schemaList && schemaList.length > 0) {
+                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 有 ${schemaList.length} 个模式`);
                 // 为每个schema获取表、视图等信息
                 const schemaPromises = schemaList.map(async (schemaName: string) => {
-                  // 使用新的getAllDatabaseObjects方法获取当前schema的所有对象
-                  const schemaObjects = await getAllDatabaseObjects(connection, dbName, schemaName);
-                  
-                  return {
-                    name: schemaName,
-                    tables: schemaObjects.tables,
-                    views: schemaObjects.views,
-                    procedures: schemaObjects.procedures,
-                    functions: schemaObjects.functions
-                  };
+                  try {
+                    // 使用新的getAllDatabaseObjects方法获取当前schema的所有对象
+                    const schemaObjects = await getAllDatabaseObjects(connection, dbName, schemaName);
+                    
+                    // 累加统计总数
+                    totalTables += schemaObjects.tables.length;
+                    totalViews += schemaObjects.views.length;
+                    totalProcedures += schemaObjects.procedures.length;
+                    totalFunctions += schemaObjects.functions.length;
+                    
+                    console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的对象数量: 表 ${schemaObjects.tables.length}, 视图 ${schemaObjects.views.length}, 存储过程 ${schemaObjects.procedures.length}, 函数 ${schemaObjects.functions.length}`);
+                    console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的表列表: ${JSON.stringify(schemaObjects.tables)}`);
+                    
+                    return {
+                      name: schemaName,
+                      tables: schemaObjects.tables,
+                      views: schemaObjects.views,
+                      procedures: schemaObjects.procedures,
+                      functions: schemaObjects.functions
+                    };
+                  } catch (schemaError) {
+                    console.warn(`DATABASE DATA LOADER - 获取模式 ${schemaName} 的对象信息失败`, schemaError);
+                    return {
+                      name: schemaName,
+                      tables: [],
+                      views: [],
+                      procedures: [],
+                      functions: []
+                    };
+                  }
                 });
                 
                 schemas = await Promise.all(schemaPromises);
@@ -193,6 +194,14 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
               views = dbObjects.views;
               procedures = dbObjects.procedures;
               functions = dbObjects.functions;
+              
+              totalTables = tables.length;
+              totalViews = views.length;
+              totalProcedures = procedures.length;
+              totalFunctions = functions.length;
+              
+              console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的对象数量: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
+              console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的表列表: ${JSON.stringify(tables)}`);
             }
           } catch (error) {
             console.warn(`DATABASE DATA LOADER - 获取数据库${dbName}的对象信息失败`, error);
@@ -203,16 +212,36 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
               procedures = dbInfo.procedures || [];
               functions = dbInfo.functions || [];
               schemas = dbInfo.schemas || [];
+              
+              totalTables = tables.length;
+              totalViews = views.length;
+              totalProcedures = procedures.length;
+              totalFunctions = functions.length;
+            } else {
+              // 如果没有连接信息，显示空列表
+              tables = [];
+              totalTables = tables.length;
             }
           }
         } else if (typeof dbInfo === 'object') {
-          // 如果使用的是模拟数据对象
+          // 只使用dbInfo中的实际数据
           tables = dbInfo.tables || [];
           views = dbInfo.views || [];
           procedures = dbInfo.procedures || [];
           functions = dbInfo.functions || [];
           schemas = dbInfo.schemas || [];
+          
+          totalTables = tables.length;
+          totalViews = views.length;
+          totalProcedures = procedures.length;
+          totalFunctions = functions.length;
+        } else {
+          // 没有连接信息，显示空列表
+          tables = [];
+          totalTables = tables.length;
         }
+        
+        console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 最终统计: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
         
         // 构建树节点
         const dbNode: TreeNode = {
@@ -292,6 +321,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
             // 对于非PostgreSQL数据库，保持原有结构
             dbNode.children = [
               // 第二层固定展示表、视图、函数、查询、备份等分类
+              // 确保表列表正确填充
               tables.length > 0 ? {
                 key: `tables-${dbName}`,
                 title: `表 (${tables.length})`,
@@ -349,26 +379,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                 title: `函数 (0)`,
                 children: []
               },
-              {
-                key: `queries-${dbName}`,
-                title: `查询 (${mockQueries.length})`,
-                children: mockQueries.map((query, index) => ({
-                  key: `query-${dbName}-${index}`,
-                  title: query,
-                  isLeaf: true,
-                  type: 'query' as const
-                }))
-              },
-              {
-                key: `backups-${dbName}`,
-                title: `备份 (${mockBackups.length})`,
-                children: mockBackups.map((backup, index) => ({
-                  key: `backup-${dbName}-${index}`,
-                  title: backup,
-                  isLeaf: true,
-                  type: 'backup' as const
-                }))
-              }
+
             ].filter(Boolean) as TreeNode[];
           }
           
@@ -385,73 +396,10 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           expandedKeys = [data[0].key];
         } else {
           console.warn('DATABASE DATA LOADER - 未生成任何树节点数据');
-          // 不再使用默认数据库结构，而是创建一个基于连接配置的数据库节点
-          if (connection && connection.database) {
-            const dbNode: TreeNode = {
-              key: `db-${connection.database}`,
-              title: connection.database,
-              type: 'database' as const,
-              children: [
-                {
-                  key: `tables-${connection.database}`,
-                  title: `表 (0)`,
-                  children: []
-                },
-                {
-                  key: `views-${connection.database}`,
-                  title: `视图 (0)`,
-                  children: []
-                },
-                {
-                  key: `procedures-${connection.database}`,
-                  title: `存储过程 (0)`,
-                  children: []
-                },
-                {
-                  key: `functions-${connection.database}`,
-                  title: `函数 (0)`,
-                  children: []
-                }
-              ]
-            };
-            expandedKeys = [`db-${connection.database}`];
-            onDataLoaded([dbNode], expandedKeys);
-          } else if (connection && connection.type === 'sqlite') {
-            // 对于SQLite，如果没有指定数据库名称，使用'main'
-            const dbNode: TreeNode = {
-              key: 'db-main',
-              title: 'main',
-              type: 'database' as const,
-              children: [
-                {
-                  key: 'tables-main',
-                  title: `表 (0)`,
-                  children: []
-                },
-                {
-                  key: 'views-main',
-                  title: `视图 (0)`,
-                  children: []
-                },
-                {
-                  key: 'procedures-main',
-                  title: `存储过程 (0)`,
-                  children: []
-                },
-                {
-                  key: 'functions-main',
-                  title: `函数 (0)`,
-                  children: []
-                }
-              ]
-            };
-            expandedKeys = ['db-main'];
-            onDataLoaded([dbNode], expandedKeys);
-          } else {
-      console.error('DATABASE DATA LOADER - 无法创建数据库节点，连接信息不完整');
-      onDataLoaded([], []);
-    }
-    
+          // 不提供任何默认数据库，必须从数据库中获得正确的数据库列表
+          console.log('所有备用方法都失败，必须从数据库中获得正确的数据库列表');
+          onDataLoaded([], []);
+
     // 注意：刷新触发器由父组件控制，这里不需要重置
           return;
         }

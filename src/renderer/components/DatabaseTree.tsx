@@ -22,6 +22,7 @@ export interface DatabaseTreeProps {
   selectedKeys: Key[];
   onNodeSelect: (node: TreeNode) => void;
   onMenuSelect: (action: string, node: TreeNode) => void;
+  onExpand?: (expandedKeys: Key[]) => void;
   loading: boolean;
   darkMode: boolean;
 }
@@ -32,6 +33,7 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
   selectedKeys,
   onNodeSelect,
   onMenuSelect,
+  onExpand,
   loading,
   darkMode
 }) => {
@@ -55,30 +57,17 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
   const handleSelect = (selectedKeys: Key[], info: any) => {
     console.log('DATABASE TREE - 节点选择事件', { selectedKeys, info });
     
-    // 健壮的节点信息获取逻辑
+    // 改进的节点信息获取逻辑，确保能够更可靠地获取节点数据
     try {
-      // 确保info对象和node对象存在
-      if (!info || !info.node) {
-        console.warn('DATABASE TREE - 选择事件缺少必要信息', { selectedKeys, info });
-        return;
-      }
-      
-      // 安全地获取选中的节点数据
-      const selectedNode = info.node.props?.dataRef || info.node;
-      if (selectedNode && selectedNode.key && selectedNode.title) {
+      // 直接从info中获取节点数据
+      if (info && info.node && info.node.props && info.node.props.dataRef) {
+        const selectedNode = info.node.props.dataRef;
         console.log('DATABASE TREE - 选择节点:', selectedNode.key, selectedNode.title);
         onNodeSelect(selectedNode);
       } else {
-        console.warn('DATABASE TREE - 选中的节点数据不完整', { selectedNode });
-      }
-    } catch (error) {
-      console.error('DATABASE TREE - 处理节点选择时发生错误:', error);
-      // 尝试从selectedKeys直接获取信息（作为最后的备用方案）
-      if (selectedKeys && selectedKeys.length > 0) {
-        console.log('DATABASE TREE - 尝试使用selectedKeys作为备用:', selectedKeys);
-        // 至少触发一个基本的选择事件
-        if (treeData && treeData.length > 0) {
-          // 查找与selectedKeys匹配的节点
+        console.log('DATABASE TREE - 尝试从selectedKeys和treeData获取节点数据');
+        // 当info对象不完整时，尝试直接从treeData中查找节点
+        if (selectedKeys && selectedKeys.length > 0) {
           const findNodeByKey = (nodes: TreeNode[], key: Key): TreeNode | undefined => {
             for (const node of nodes) {
               if (node.key === key) return node;
@@ -94,18 +83,30 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
           for (const key of selectedKeys) {
             const matchedNode = findNodeByKey(treeData, key);
             if (matchedNode) {
+              console.log('DATABASE TREE - 从treeData中查找到匹配节点:', key);
               onNodeSelect(matchedNode);
               break;
             }
           }
         }
       }
+    } catch (error) {
+      console.error('DATABASE TREE - 处理节点选择时发生错误:', error);
     }
   };
 
-  // 处理节点展开
-  const handleExpand = (expandedKeys: Key[]) => {
-    // 这里可以添加展开逻辑，但接口定义中没有onExpand属性
+  // 处理节点展开/折叠
+  const handleExpand = (expandedKeys: Key[], info: any) => {
+    console.log('DATABASE TREE - 处理节点展开/折叠:', expandedKeys, info);
+    try {
+      // 调用父组件传入的onExpand回调函数
+      if (onExpand) {
+        onExpand(expandedKeys);
+        console.log('DATABASE TREE - 节点展开/折叠事件已传递给父组件');
+      }
+    } catch (error) {
+      console.error('DATABASE TREE - 处理节点展开/折叠时发生错误:', error);
+    }
   };
 
   // 渲染树节点

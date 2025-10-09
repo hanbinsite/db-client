@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DatabaseConnection } from '../types';
+import type { Key } from 'react';
 import { useTheme } from './ThemeContext';
 import { DbType } from '../utils/database-utils';
 import DatabaseTree from './DatabaseTree';
@@ -41,6 +42,8 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  // 添加一个新的状态来跟踪当前选中的非表对象
+  const [activeOtherObject, setActiveOtherObject] = useState<string>('');
   const { darkMode } = useTheme();
   
   // 创建对DatabaseDataLoader组件的引用
@@ -60,19 +63,24 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
 
   // 处理数据加载完成回调
   const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
-    console.log('DATABASE PANEL - 数据加载完成，更新树数据:', data.length, '个节点');
-    setTreeData(data);
-    setExpandedKeys(expanded);
+    console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', data.length, '个数据库');
+    // 简化树数据，只保留数据库节点，移除子节点
+    const simplifiedData = data.map(dbNode => ({
+      ...dbNode,
+      children: [] // 清空子节点，只显示数据库列表
+    }));
+    setTreeData(simplifiedData);
+    setExpandedKeys([]); // 不需要展开任何节点
     setLoading(false);
     
-    // 自动选择第一个数据库
-    if (data.length > 0 && onDatabaseSelect) {
-      const firstDbName = typeof data[0].title === 'string' ? data[0].title : '';
-      if (firstDbName) {
-        onDatabaseSelect(firstDbName);
-        console.log('DATABASE PANEL - 自动选择第一个数据库:', firstDbName);
-      }
-    }
+    // 注释掉自动选择第一个数据库的逻辑，避免自动打开数据浏览tab
+    // if (data.length > 0 && onDatabaseSelect) {
+    //   const firstDbName = typeof data[0].title === 'string' ? data[0].title : '';
+    //   if (firstDbName) {
+    //     onDatabaseSelect(firstDbName);
+    //     console.log('DATABASE PANEL - 自动选择第一个数据库:', firstDbName);
+    //   }
+    // }
     
     // 通知父组件数据已加载完成
     if (onDataLoaded) {
@@ -95,9 +103,9 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     setRefreshTrigger(prev => prev + 1);
   };
 
-  // 处理节点选择
+  // 处理节点选择 - 简化版，只处理数据库选择
   const handleNodeSelect = (node: TreeNode) => {
-    console.log('DATABASE PANEL - 节点被选择:', node.key, node.title, node.type);
+    console.log('DATABASE PANEL - 数据库被选择:', node.key, node.title);
     
     if (node.type === 'database') {
       // 选择数据库
@@ -105,42 +113,7 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
       console.log('DATABASE PANEL - 选择数据库:', dbName);
       onDatabaseSelect(dbName);
       onTableSelect('');
-    } else if (node.type === 'table') {
-      // 选择表
-      const tableName = node.title as string;
-      let dbName = '';
-      
-      // 从节点key中提取数据库名称
-      if (connection && connection.type === DbType.POSTGRESQL) {
-        // PostgreSQL: 从schema-key中提取数据库名
-        const keyParts = node.key.split('-');
-        if (keyParts.length >= 3) {
-          dbName = keyParts[1];
-        }
-      } else {
-        // 其他数据库: 从db-key中提取数据库名
-        const keyParts = node.key.split('-');
-        if (keyParts.length >= 2) {
-          // 查找包含db-前缀的父节点key
-          const parentNode = findParentNodeWithPrefix(treeData, 'db-', node.key);
-          if (parentNode) {
-            dbName = parentNode.title as string;
-          }
-        }
-      }
-      
-      if (dbName) {
-        console.log('DATABASE PANEL - 选择表:', tableName, '数据库:', dbName);
-        onDatabaseSelect(dbName);
-        onTableSelect(tableName);
-      }
-    } else if (node.type === 'view' || node.type === 'procedure' || node.type === 'function' || node.type === 'query' || node.type === 'backup') {
-      // 选择其他类型的对象，清除选中的表
-      const dbName = extractDatabaseNameFromNode(node, treeData);
-      if (dbName) {
-        onDatabaseSelect(dbName);
-      }
-      onTableSelect('');
+      setActiveOtherObject('');
     }
   };
 
@@ -225,56 +198,7 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     }
   };
 
-  // 处理展开/折叠操作
-  const handleExpandCollapse = (type: 'expand' | 'collapse' | 'expandAll' | 'collapseAll') => {
-    console.log('DATABASE PANEL - 展开/折叠操作:', type);
-    
-    switch (type) {
-      case 'expandAll':
-        const allKeys = getAllNodeKeys(treeData);
-        setExpandedKeys(allKeys);
-        break;
-      case 'collapseAll':
-        setExpandedKeys([]);
-        break;
-      case 'expand':
-        // 展开当前选中的节点（如果有）
-        if (activeDatabase) {
-          const dbKey = `db-${activeDatabase}`;
-          setExpandedKeys([...new Set([...expandedKeys, dbKey])]);
-        }
-        break;
-      case 'collapse':
-        // 折叠当前选中的节点（如果有）
-        if (activeDatabase) {
-          const dbKey = `db-${activeDatabase}`;
-          setExpandedKeys(expandedKeys.filter(key => key !== dbKey));
-        }
-        break;
-    }
-  };
-
-  // 辅助函数：获取所有节点的key
-  const getAllNodeKeys = (nodes: TreeNode[]): string[] => {
-    let keys: string[] = [];
-    for (const node of nodes) {
-      keys.push(node.key);
-      if (node.children && node.children.length > 0) {
-        keys = [...keys, ...getAllNodeKeys(node.children)];
-      }
-    }
-    return keys;
-  };
-
-  // 展开所有数据库节点
-  const expandAllDatabases = () => {
-    handleExpandCollapse('expandAll');
-  };
-
-  // 折叠所有数据库节点
-  const collapseAllDatabases = () => {
-    handleExpandCollapse('collapseAll');
-  };
+  // 不再需要展开/折叠功能，因为我们只显示数据库列表
 
   return (
     <div className={`database-panel ${darkMode ? 'dark' : ''}`}>
@@ -282,9 +206,6 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
       <DatabaseHeader 
         loading={loading}
         onRefresh={handleRefresh}
-        onExpandCollapse={handleExpandCollapse}
-        expandAll={expandAllDatabases}
-        collapseAll={collapseAllDatabases}
       />
 
       {/* 数据库状态显示已移除 */}
@@ -306,11 +227,8 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         ) : (
           <DatabaseTree
             treeData={treeData}
-            expandedKeys={expandedKeys}
-            selectedKeys={[
-              ...(activeDatabase ? [`db-${activeDatabase}`] : []),
-              ...(activeTable ? [`table-${activeDatabase}-${activeTable}`] : [])
-            ]}
+            expandedKeys={[]} // 固定为空，不展开任何节点
+            selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
             onNodeSelect={handleNodeSelect}
             onMenuSelect={handleMenuSelect}
             loading={loading}

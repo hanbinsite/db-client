@@ -1,55 +1,544 @@
-import React, { useState } from 'react';
-import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag } from 'antd';
-import { DatabaseOutlined, TableOutlined, BarChartOutlined, CodeOutlined, SettingOutlined } from '@ant-design/icons';
+import React, { useState, useEffect } from 'react';
+import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input } from 'antd';
+import { DatabaseOutlined, TableOutlined, BarChartOutlined, CodeOutlined, EyeOutlined, PlayCircleOutlined, FunctionOutlined } from '@ant-design/icons';
 import { DatabaseConnection, DatabaseType } from '../types';
 import QueryPanel from './QueryPanel';
-import DataPanel from './DataPanel';
+import './DatabaseTabPanel.css';
 
 const { TabPane } = Tabs;
-
 interface DatabaseTabPanelProps {
-  connection: DatabaseConnection | null;
+  connection: DatabaseConnection;
   database: string;
   type: DatabaseType;
   darkMode: boolean;
+  onTableSelect: (tableName: string) => void;
 }
 
 const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
   connection,
   database,
   type,
-  darkMode
+  darkMode,
+  onTableSelect
 }) => {
   const [activeTab, setActiveTab] = useState('tables');
-  const [activeTable, setActiveTable] = useState<string>('');
-
-  // 模拟数据库统计信息
-  const databaseStats = {
-    tableCount: 24,
-    totalSize: '2.4 GB',
-    rowCount: 1250000,
-    indexCount: 48
+  const [loading, setLoading] = useState(false);
+  const [databaseStats, setDatabaseStats] = useState({
+    tableCount: 0,
+    totalSize: '0 MB',
+    rowCount: 0,
+    indexCount: 0,
+    viewCount: 0,
+    procedureCount: 0,
+    functionCount: 0
+  });
+  const [mysqlVersion, setMysqlVersion] = useState<string>('未知');
+  const [tableList, setTableList] = useState<any[]>([]);
+  const [recentQueries, setRecentQueries] = useState<any[]>([]);
+  const [viewList, setViewList] = useState<any[]>([]);
+  const [procedureList, setProcedureList] = useState<any[]>([]);
+  const [functionList, setFunctionList] = useState<any[]>([]);
+  
+  // 搜索状态
+  const [tableSearchTerm, setTableSearchTerm] = useState('');
+  const [viewSearchTerm, setViewSearchTerm] = useState('');
+  const [procedureSearchTerm, setProcedureSearchTerm] = useState('');
+  const [functionSearchTerm, setFunctionSearchTerm] = useState('');
+  
+  // 刷新函数
+  const refreshTables = () => {
+    loadTableList();
+  };
+  
+  const refreshViews = () => {
+    loadViewList();
+  };
+  
+  const refreshProcedures = () => {
+    loadProcedureList();
+  };
+  
+  const refreshFunctions = () => {
+    loadFunctionList();
+  };
+  
+  // 搜索过滤函数
+  const filterListBySearch = (list: any[], searchTerm: string) => {
+    if (!searchTerm.trim()) {
+      return list;
+    }
+    
+    const term = searchTerm.toLowerCase();
+    return list.filter(item => 
+      (item.name && item.name.toLowerCase().includes(term)) ||
+      (item.comment && item.comment.toLowerCase().includes(term))
+    );
   };
 
-  // 模拟表列表
-  const tableList = [
-    { name: 'users', rows: 50000, size: '450 MB', created: '2023-01-15', comment: '用户信息表', engine: 'InnoDB' },
-    { name: 'orders', rows: 800000, size: '1.2 GB', created: '2023-02-20', comment: '订单信息表', engine: 'InnoDB' },
-    { name: 'products', rows: 15000, size: '120 MB', created: '2023-01-10', comment: '产品信息表', engine: 'InnoDB' },
-    { name: 'categories', rows: 500, size: '2 MB', created: '2023-01-08', comment: '分类信息表', engine: 'MyISAM' },
-    { name: 'logs', rows: 400000, size: '650 MB', created: '2023-03-01', comment: '系统日志表', engine: 'MyISAM' }
-  ];
+  // 格式化大小函数，将字节数转换为MB或GB
+  const formatSize = (bytes: number | string): string => {
+    let sizeBytes = 0;
+    
+    // 处理传入的可能是字符串的情况
+    if (typeof bytes === 'string') {
+      // 检查是否已经包含单位
+      if (bytes.includes('MB') || bytes.includes('GB') || bytes.includes('KB') || bytes.includes('TB')) {
+        return bytes; // 如果已经有单位，直接返回
+      }
+      sizeBytes = parseFloat(bytes) || 0;
+    } else {
+      sizeBytes = bytes || 0;
+    }
 
-  // 模拟最近查询
-  const recentQueries = [
-    { query: 'SELECT * FROM users WHERE status = \'active\'', time: '2.3s', rows: 15000 },
-    { query: 'UPDATE orders SET status = \'completed\' WHERE created_at < \'2023-06-01\'', time: '1.8s', rows: 120000 },
-    { query: 'CREATE INDEX idx_users_email ON users(email)', time: '0.5s', rows: 0 }
-  ];
+    // 转换为MB
+    const sizeInMB = sizeBytes / (1024 * 1024);
+    
+    // 如果大于1024MB，转换为GB
+    if (sizeInMB >= 1024) {
+      return (sizeInMB / 1024).toFixed(2) + ' GB';
+    }
+    
+    // 最小显示为MB
+    return sizeInMB.toFixed(2) + ' MB';
+  };
 
+  // 加载数据库统计信息
+  const loadDatabaseStats = async () => {
+    if (!connection || !connection.isConnected || !window.electronAPI) {
+      setDatabaseStats({ 
+        tableCount: 0, 
+        totalSize: '0 MB', 
+        rowCount: 0, 
+        indexCount: 0,
+        viewCount: 0,
+        procedureCount: 0,
+        functionCount: 0
+      });
+      return;
+    }
+
+    try {
+      const poolId = connection.connectionId || connection.id;
+      let countQuery = '';
+      let sizeQuery = '';
+      let rowCountQuery = '';
+      let viewCountQuery = '';
+      let procedureCountQuery = '';
+      let functionCountQuery = '';
+
+      switch (connection.type) {
+        case 'mysql':
+          countQuery = `SELECT COUNT(*) AS table_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${database}' AND TABLE_TYPE = 'BASE TABLE'`;
+          sizeQuery = `SELECT SUM(data_length + index_length) AS total_size FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${database}'`;
+          rowCountQuery = `SELECT SUM(table_rows) AS row_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${database}'`;
+          viewCountQuery = `SELECT COUNT(*) AS view_count FROM information_schema.VIEWS WHERE TABLE_SCHEMA = '${database}'`;
+          procedureCountQuery = `SELECT COUNT(*) AS procedure_count FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${database}' AND ROUTINE_TYPE = 'PROCEDURE'`;
+          functionCountQuery = `SELECT COUNT(*) AS function_count FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${database}' AND ROUTINE_TYPE = 'FUNCTION'`;
+          break;
+        case 'postgresql':
+        case 'gaussdb':
+          countQuery = `SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '${database}'`;
+          sizeQuery = `SELECT SUM(pg_total_relation_size(table_schema || '.' || table_name)) AS total_size_bytes FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '${database}'`;
+          rowCountQuery = `SELECT SUM(pg_relation_size(quote_ident(table_name))) AS row_count FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '${database}'`;
+          break;
+        case 'oracle':
+          countQuery = `SELECT COUNT(*) AS table_count FROM all_tables WHERE owner = '${database.toUpperCase()}'`;
+          sizeQuery = `SELECT 'N/A' AS total_size FROM dual`;
+          rowCountQuery = `SELECT SUM(num_rows) AS row_count FROM all_tables WHERE owner = '${database.toUpperCase()}'`;
+          break;
+        case 'sqlite':
+          countQuery = `SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`;
+          sizeQuery = `SELECT 'N/A' AS total_size`;
+          rowCountQuery = `SELECT 'N/A' AS row_count`;
+          break;
+        default:
+          countQuery = 'SELECT 0 AS table_count';
+          sizeQuery = 'SELECT \'0 MB\' AS total_size';
+          rowCountQuery = 'SELECT 0 AS row_count';
+      }
+
+      // 如果是MySQL数据库，获取版本信息
+      if (connection.type === 'mysql') {
+        try {
+          const dbInfo = await window.electronAPI.getDatabaseInfo(poolId);
+          if (dbInfo?.success && dbInfo?.version) {
+            setMysqlVersion(dbInfo.version);
+          } else {
+            setMysqlVersion('未知');
+          }
+        } catch (error) {
+          console.error('获取数据库版本信息失败:', error);
+          setMysqlVersion('未知');
+        }
+      }
+      
+      const countResult = await window.electronAPI.executeQuery(poolId, countQuery);
+      const sizeResult = await window.electronAPI.executeQuery(poolId, sizeQuery);
+      const rowCountResult = await window.electronAPI.executeQuery(poolId, rowCountQuery);
+
+      let totalSize = '0 MB';
+      
+      // 处理不同数据库的大小结果
+      if (connection.type === 'mysql' && sizeResult?.success && sizeResult.data?.length > 0) {
+        // MySQL返回的是字节数，需要格式化
+        totalSize = formatSize(sizeResult.data[0].total_size || 0);
+      } else if ((connection.type === 'postgresql' || connection.type === 'gaussdb') && sizeResult?.success && sizeResult.data?.length > 0) {
+        // PostgreSQL返回的是字节数，需要格式化
+          totalSize = formatSize(sizeResult.data[0].total_size_bytes || 0);
+        } else if (sizeResult?.success && sizeResult.data?.length > 0 && sizeResult.data[0].total_size) {
+          // 其他数据库可能已经格式化过
+          totalSize = sizeResult.data[0].total_size;
+        }
+
+        // 初始化视图、存储过程和函数数量为0
+        let viewCount = 0;
+        let procedureCount = 0;
+        let functionCount = 0;
+
+        // 对于MySQL数据库，执行额外的查询来获取视图、存储过程和函数数量
+        if (connection.type === 'mysql') {
+          const viewResult = viewCountQuery ? await window.electronAPI.executeQuery(poolId, viewCountQuery) : null;
+          const procedureResult = procedureCountQuery ? await window.electronAPI.executeQuery(poolId, procedureCountQuery) : null;
+          const functionResult = functionCountQuery ? await window.electronAPI.executeQuery(poolId, functionCountQuery) : null;
+
+          viewCount = viewResult?.success && viewResult.data?.length > 0 ? viewResult.data[0].view_count || 0 : 0;
+          procedureCount = procedureResult?.success && procedureResult.data?.length > 0 ? procedureResult.data[0].procedure_count || 0 : 0;
+          functionCount = functionResult?.success && functionResult.data?.length > 0 ? functionResult.data[0].function_count || 0 : 0;
+        }
+
+        setDatabaseStats({
+          tableCount: countResult?.success && countResult.data?.length > 0 ? countResult.data[0].table_count || 0 : 0,
+          totalSize: totalSize,
+          rowCount: rowCountResult?.success && rowCountResult.data?.length > 0 ? rowCountResult.data[0].row_count || 0 : 0,
+          indexCount: 0, // 索引数量需要额外查询，这里简化处理
+          viewCount: viewCount,
+          procedureCount: procedureCount,
+          functionCount: functionCount
+        });
+    } catch (error) {
+        console.error('加载数据库统计信息失败:', error);
+        setDatabaseStats({ 
+          tableCount: 0, 
+          totalSize: '0 MB', 
+          rowCount: 0, 
+          indexCount: 0,
+          viewCount: 0,
+          procedureCount: 0,
+          functionCount: 0
+        });
+      }
+  };
+
+  // 加载表列表
+  const loadTableList = async () => {
+    try {
+      if (!connection || !connection.isConnected || !window.electronAPI) {
+        console.warn('数据库未连接或Electron API不可用，无法加载表列表');
+        // 连接断开时清空列表，而不是显示模拟数据
+        setTableList([]);
+        return;
+      }
+
+      const poolId = connection.connectionId || connection.id;
+      let tablesQuery = '';
+        let queryParams: any[] = [];
+
+      switch (connection.type) {
+        case 'mysql':
+          // 增强MySQL查询，使用参数化查询防止SQL注入
+          tablesQuery = `SELECT table_name, table_name AS name, table_comment AS comment, engine, table_rows AS \`rows\`, 
+            ROUND((data_length + index_length) / 1024 / 1024, 2) AS size_mb, 
+            create_time AS created 
+            FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?`;
+          queryParams = [database];
+          break;
+        case 'postgresql':
+        case 'gaussdb':
+          tablesQuery = `SELECT table_name AS name, 
+            (SELECT description FROM pg_description WHERE objoid = c.oid AND objsubid = 0) AS comment, 
+            'PostgreSQL' AS engine, 
+            0 AS rows, 
+            pg_size_pretty(pg_relation_size('"' || ? || '".' || quote_ident(table_name))) AS size, 
+            to_char(created, 'YYYY-MM-DD') AS created 
+            FROM information_schema.tables c WHERE table_schema = 'public' AND table_catalog = ?`;
+          queryParams = [database, database];
+          break;
+        case 'oracle':
+          tablesQuery = `SELECT table_name AS name, comments AS comment, 'Oracle' AS engine, 
+            num_rows AS rows, 'N/A' AS size, 
+            to_char(created, 'YYYY-MM-DD') AS created 
+            FROM all_tables WHERE owner = ?`;
+          queryParams = [database.toUpperCase()];
+          break;
+        case 'sqlite':
+          // SQLite不支持在子查询中引用外部表名，简化查询
+          tablesQuery = `SELECT name, 'N/A' AS comment, 'SQLite' AS engine, 
+            0 AS rows, 'N/A' AS size, 
+            'N/A' AS created 
+            FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`;
+          queryParams = [];
+          break;
+        default:
+          tablesQuery = 'SELECT NULL AS name, NULL AS comment, NULL AS engine, 0 AS rows, NULL AS size, NULL AS created LIMIT 0';
+          queryParams = [];
+      }
+
+      console.log('执行的表列表查询:', tablesQuery, '数据库:', database);
+      const result = await window.electronAPI.executeQuery(poolId, tablesQuery, queryParams);
+      console.log('表列表查询结果:', JSON.stringify(result, null, 2));
+      
+      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+        // 处理大小格式，确保所有表都有size字段
+        const processedTables = result.data.map((table: any) => {
+          // 增强表名处理逻辑，确保能够正确提取表名
+          console.log('原始表数据:', JSON.stringify(table));
+          
+          // 支持更多可能的表名字段格式
+          const tableName = 
+            table.name || 
+            table.table_name || 
+            table.TABLE_NAME || 
+            table.tableName || 
+            table['table-name'] || 
+            table['TABLE-NAME'] ||
+            (typeof table === 'object' && Object.values(table)[0]) || // 作为最后的备选，尝试获取第一个值
+            '未知表'; // 最差情况下使用默认名称
+          
+          console.log('处理后表名:', tableName);
+          
+          return {
+            ...table,
+            name: tableName,
+            size: table.size || (table.size_mb ? `${table.size_mb} MB` : '0 MB'),
+            rows: table.rows || table.TABLE_ROWS || table.table_rows || 0,
+            comment: table.comment || table.table_comment || table.TABLE_COMMENT || '',
+            created: table.created || table.CREATE_TIME || table.create_time || 'N/A',
+            engine: table.engine || table.ENGINE || 'N/A'
+          };
+        });
+        
+        console.log('成功加载表列表，共', processedTables.length, '个表');
+        setTableList(processedTables);
+      } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
+        // 查询成功但没有数据
+        console.log('当前数据库没有表');
+        setTableList([]);
+      } else {
+        console.error('表列表查询返回非预期结果:', JSON.stringify(result, null, 2));
+        setTableList([]);
+      }
+    } catch (error) {
+      console.error('加载表列表失败:', error);
+      // 出错时清空列表，而不是显示模拟数据
+      setTableList([]);
+    }
+  };
+
+  // 加载最近查询（简化处理，真实应用中可能需要从本地存储或服务器获取）
+  const loadRecentQueries = async () => {
+    // 在真实应用中，这里应该从本地存储或服务器获取最近执行的查询
+    // 这里简化处理，暂时返回空数组
+    setRecentQueries([]);
+  };
+
+  // 表选择函数
   const handleTableSelect = (tableName: string) => {
-    setActiveTable(tableName);
-    setActiveTab('data');
+    if (onTableSelect) {
+      onTableSelect(tableName);
+    }
+  };
+
+  useEffect(() => {
+    // 当连接或数据库变化时，重新加载数据
+    if (connection && connection.isConnected) {
+      loadAllData();
+    } else {
+      // 连接断开时，清空数据
+      setDatabaseStats({ 
+        tableCount: 0, 
+        totalSize: '0 MB', 
+        rowCount: 0, 
+        indexCount: 0,
+        viewCount: 0,
+        procedureCount: 0,
+        functionCount: 0
+      });
+      setTableList([]);
+      setRecentQueries([]);
+    }
+  }, [connection, database]);
+
+  // 加载视图列表
+  const loadViewList = async () => {
+    // 只有在MySQL连接时才尝试加载视图
+    if (connection?.type !== 'mysql') {
+      setViewList([]);
+      return;
+    }
+
+    try {
+      if (!connection || !connection.isConnected || !window.electronAPI) {
+        console.warn('数据库未连接或Electron API不可用，无法加载视图列表');
+        // 连接断开时清空列表，而不是显示模拟数据
+        setViewList([]);
+        return;
+      }
+
+      const poolId = connection.connectionId || connection.id;
+      // MySQL中视图的注释信息实际上存储在TABLE_COMMENT列中
+      const viewQuery = `SELECT table_name, view_definition, table_comment, create_time 
+        FROM information_schema.VIEWS 
+        WHERE TABLE_SCHEMA = ?`;
+      
+      console.log('执行视图列表查询:', viewQuery, '数据库:', database);
+      const result = await window.electronAPI.executeQuery(poolId, viewQuery, [database]);
+      
+      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+        // 处理真实数据
+        const processedViews = result.data.map((view: any) => ({
+          name: view.table_name || view.name || '未知视图',
+          definition: view.view_definition || '',
+          comment: view.table_comment || '',
+          created: view.create_time ? new Date(view.create_time).toLocaleDateString() : 'N/A'
+        }));
+        console.log('成功加载视图列表，共', processedViews.length, '个视图');
+        setViewList(processedViews);
+      } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
+        // 查询成功但没有数据
+        console.log('当前数据库没有视图');
+        setViewList([]);
+      } else {
+        console.error('视图列表查询返回非预期结果:', JSON.stringify(result, null, 2));
+        setViewList([]);
+      }
+    } catch (error) {
+      console.error('加载视图列表失败:', error);
+      // 出错时清空列表，而不是显示模拟数据
+      setViewList([]);
+    }
+  };
+
+  // 加载存储过程列表
+  const loadProcedureList = async () => {
+    // 只有在MySQL连接时才尝试加载存储过程
+    if (connection?.type !== 'mysql') {
+      setProcedureList([]);
+      return;
+    }
+
+    try {
+      if (!connection || !connection.isConnected || !window.electronAPI) {
+        console.warn('数据库未连接或Electron API不可用，无法加载存储过程列表');
+        // 连接断开时清空列表，而不是显示模拟数据
+        setProcedureList([]);
+        return;
+      }
+
+      const poolId = connection.connectionId || connection.id;
+      const procedureQuery = `SELECT routine_name, routine_definition, routine_comment, created 
+        FROM information_schema.ROUTINES 
+        WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'`;
+      
+      console.log('执行存储过程列表查询:', procedureQuery, '数据库:', database);
+      const result = await window.electronAPI.executeQuery(poolId, procedureQuery, [database]);
+      
+      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+        // 处理真实数据
+        const processedProcedures = result.data.map((procedure: any) => ({
+          name: procedure.routine_name || procedure.name || '未知存储过程',
+          definition: procedure.routine_definition || '',
+          comment: procedure.routine_comment || '',
+          created: procedure.created ? new Date(procedure.created).toLocaleDateString() : 'N/A'
+        }));
+        console.log('成功加载存储过程列表，共', processedProcedures.length, '个存储过程');
+        setProcedureList(processedProcedures);
+      } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
+        // 查询成功但没有数据
+        console.log('当前数据库没有存储过程');
+        setProcedureList([]);
+      } else {
+        console.error('存储过程列表查询返回非预期结果:', JSON.stringify(result, null, 2));
+        setProcedureList([]);
+      }
+    } catch (error) {
+      console.error('加载存储过程列表失败:', error);
+      // 出错时清空列表，而不是显示模拟数据
+      setProcedureList([]);
+    }
+  };
+
+  // 加载函数列表
+  const loadFunctionList = async () => {
+    // 只有在MySQL连接时才尝试加载函数
+    if (connection?.type !== 'mysql') {
+      setFunctionList([]);
+      return;
+    }
+
+    try {
+      if (!connection || !connection.isConnected || !window.electronAPI) {
+        console.warn('数据库未连接或Electron API不可用，无法加载函数列表');
+        // 连接断开时清空列表，而不是显示模拟数据
+        setFunctionList([]);
+        return;
+      }
+
+      const poolId = connection.connectionId || connection.id;
+      const functionQuery = `SELECT routine_name, routine_definition, routine_comment, created 
+        FROM information_schema.ROUTINES 
+        WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'`;
+      
+      console.log('执行函数列表查询:', functionQuery, '数据库:', database);
+      const result = await window.electronAPI.executeQuery(poolId, functionQuery, [database]);
+      
+      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+        // 处理真实数据
+        const processedFunctions = result.data.map((func: any) => ({
+          name: func.routine_name || func.name || '未知函数',
+          definition: func.routine_definition || '',
+          comment: func.routine_comment || '',
+          created: func.created ? new Date(func.created).toLocaleDateString() : 'N/A'
+        }));
+        console.log('成功加载函数列表，共', processedFunctions.length, '个函数');
+        setFunctionList(processedFunctions);
+      } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
+        // 查询成功但没有数据
+        console.log('当前数据库没有函数');
+        setFunctionList([]);
+      } else {
+        console.error('函数列表查询返回非预期结果:', JSON.stringify(result, null, 2));
+        setFunctionList([]);
+      }
+    } catch (error) {
+      console.error('加载函数列表失败:', error);
+      // 出错时清空列表，而不是显示模拟数据
+      setFunctionList([]);
+    }
+  };
+
+  // 加载所有数据
+  const loadAllData = async () => {
+    setLoading(true);
+    try {
+      const promises = [
+        loadDatabaseStats(),
+        loadTableList(),
+        loadRecentQueries()
+      ];
+
+      // 对于MySQL数据库，额外加载视图、存储过程和函数
+      if (connection?.type === 'mysql') {
+        promises.push(loadViewList());
+        promises.push(loadProcedureList());
+        promises.push(loadFunctionList());
+      }
+
+      await Promise.all(promises);
+    } catch (error) {
+      console.error('加载数据失败:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getDatabaseColor = (dbType: DatabaseType) => {
@@ -135,6 +624,100 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
     }
   ];
 
+  // 视图列定义
+  const viewColumns = [
+    {
+      title: '视图名',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text: string) => (
+        <Button 
+          type="link" 
+          icon={<EyeOutlined />}
+        >
+          {text}
+        </Button>
+      )
+    },
+    {
+      title: '视图注释',
+      dataIndex: 'comment',
+      key: 'comment',
+      width: 150
+    },
+    {
+      title: '定义',
+      dataIndex: 'definition',
+      key: 'definition',
+      render: (text: string) => (
+        <code style={{ fontSize: '12px', background: '#f5f5f5', padding: '2px 4px', borderRadius: '3px' }}>
+          {text.length > 100 ? text.substring(0, 100) + '...' : text}
+        </code>
+      )
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created',
+      key: 'created'
+    }
+  ];
+
+  // 存储过程列定义
+  const procedureColumns = [
+    {
+      title: '存储过程名',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text: string) => (
+        <Button 
+          type="link" 
+          icon={<PlayCircleOutlined />}
+        >
+          {text}
+        </Button>
+      )
+    },
+    {
+      title: '注释',
+      dataIndex: 'comment',
+      key: 'comment',
+      width: 150
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created',
+      key: 'created'
+    }
+  ];
+
+  // 函数列定义
+  const functionColumns = [
+    {
+      title: '函数名',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text: string) => (
+        <Button 
+          type="link" 
+          icon={<FunctionOutlined />}
+        >
+          {text}
+        </Button>
+      )
+    },
+    {
+      title: '注释',
+      dataIndex: 'comment',
+      key: 'comment',
+      width: 150
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created',
+      key: 'created'
+    }
+  ];
+
   return (
     <div className="database-tab-panel">
       {/* 数据库头部信息 */}
@@ -146,7 +729,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
           <Col flex="none">
             <div 
               className="database-icon"
-              style={{ 
+              style={{
                 backgroundColor: getDatabaseColor(type),
                 width: 48,
                 height: 48,
@@ -170,16 +753,43 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                 <Space size={8} style={{ marginTop: 4 }}>
                   <Tag color={getDatabaseColor(type)}>{type.toUpperCase()}</Tag>
                   <span style={{ color: '#666', fontSize: 12 }}>
-                    连接: {connection?.name || '-'}
+                    连接: {connection?.name || '-'} - 状态: {connection?.isConnected ? '已连接' : '未连接'}
                   </span>
+                  {/* MySQL特定的详情信息 */}
+                  {connection?.type === 'mysql' && (
+                    <span style={{ color: '#666', fontSize: 12 }}>
+                      版本: {mysqlVersion}
+                    </span>
+                  )}
                 </Space>
               </div>
               <Space>
-                <Statistic title="表数量" value={databaseStats.tableCount} />
-                <Statistic title="总大小" value={databaseStats.totalSize} />
-                <Statistic title="总行数" value={databaseStats.rowCount} formatter={value => 
-                  Number(value).toLocaleString()
-                } />
+                <Spin spinning={loading && activeTab === 'tables'}>
+                  <Statistic title="表数量" value={databaseStats.tableCount} />
+                </Spin>
+                {connection?.type === 'mysql' && (
+                  <Spin spinning={loading}>
+                    <Statistic title="视图数量" value={databaseStats.viewCount} />
+                  </Spin>
+                )}
+                {connection?.type === 'mysql' && (
+                  <Spin spinning={loading}>
+                    <Statistic title="存储过程" value={databaseStats.procedureCount} />
+                  </Spin>
+                )}
+                {connection?.type === 'mysql' && (
+                  <Spin spinning={loading}>
+                    <Statistic title="函数数量" value={databaseStats.functionCount} />
+                  </Spin>
+                )}
+                <Spin spinning={loading && activeTab === 'tables'}>
+                  <Statistic title="总大小" value={databaseStats.totalSize} />
+                </Spin>
+                <Spin spinning={loading && activeTab === 'tables'}>
+                  <Statistic title="总行数" value={databaseStats.rowCount} formatter={value => 
+                    Number(value).toLocaleString()
+                  } />
+                </Spin>
               </Space>
             </div>
           </Col>
@@ -197,23 +807,161 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
             label: (
               <span>
                 <TableOutlined />
-                表对象
+                表
               </span>
             ),
             children: (
-              <div style={{ padding: '24px 0' }}>
-                <Card title="表列表" size="small">
-                  <Table
-                    dataSource={tableList}
-                    columns={tableColumns}
-                    pagination={false}
-                    size="small"
-                    rowKey="name"
+            <div className="database-tab-content">
+              <Card title="表" size="small" className="table-list-card">
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Input
+                    placeholder="搜索表名或注释"
+                    allowClear
+                    style={{ width: 200 }}
+                    value={tableSearchTerm}
+                    onChange={(e) => setTableSearchTerm(e.target.value)}
                   />
-                </Card>
-              </div>
-            )
+                  <Button 
+                    type="primary" 
+                    icon={<DatabaseOutlined />} 
+                    onClick={refreshTables}
+                  >
+                    刷新
+                  </Button>
+                </div>
+                <Table
+                  dataSource={filterListBySearch(tableList, tableSearchTerm)}
+                  columns={tableColumns}
+                  pagination={false}
+                  size="small"
+                  rowKey="name"
+                  className="table-list-table"
+                  locale={{ emptyText: '暂无表数据' }}
+                />
+              </Card>
+            </div>
+          )
           },
+          // 仅对MySQL数据库显示视图、存储过程和函数标签页
+          ...(connection?.type === 'mysql' ? [
+            {
+              key: 'views',
+              label: (
+                <span>
+                  <EyeOutlined />
+                  视图
+                </span>
+              ),
+              children: (
+                <div className="database-tab-content">
+                  <Card title="视图" size="small">
+                    <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Input
+                        placeholder="搜索视图名或注释"
+                        allowClear
+                        style={{ width: 200 }}
+                        value={viewSearchTerm}
+                        onChange={(e) => setViewSearchTerm(e.target.value)}
+                      />
+                      <Button 
+                        type="primary" 
+                        icon={<EyeOutlined />} 
+                        onClick={refreshViews}
+                      >
+                        刷新
+                      </Button>
+                    </div>
+                    <Table
+                      dataSource={filterListBySearch(viewList, viewSearchTerm)}
+                      columns={viewColumns}
+                      pagination={false}
+                      size="small"
+                      rowKey="name"
+                      locale={{ emptyText: '暂无视图数据' }}
+                    />
+                  </Card>
+                </div>
+              )
+            },
+            {
+              key: 'procedures',
+              label: (
+                <span>
+                  <PlayCircleOutlined />
+                  存储过程
+                </span>
+              ),
+              children: (
+                <div className="database-tab-content">
+                  <Card title="存储过程" size="small">
+                    <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Input
+                        placeholder="搜索存储过程名或注释"
+                        allowClear
+                        style={{ width: 200 }}
+                        value={procedureSearchTerm}
+                        onChange={(e) => setProcedureSearchTerm(e.target.value)}
+                      />
+                      <Button 
+                        type="primary" 
+                        icon={<PlayCircleOutlined />} 
+                        onClick={refreshProcedures}
+                      >
+                        刷新
+                      </Button>
+                    </div>
+                    <Table
+                      dataSource={filterListBySearch(procedureList, procedureSearchTerm)}
+                      columns={procedureColumns}
+                      pagination={false}
+                      size="small"
+                      rowKey="name"
+                      locale={{ emptyText: '暂无存储过程数据' }}
+                    />
+                  </Card>
+                </div>
+              )
+            },
+            {
+              key: 'functions',
+              label: (
+                <span>
+                  <FunctionOutlined />
+                  函数
+                </span>
+              ),
+              children: (
+                <div className="database-tab-content">
+                  <Card title="函数" size="small">
+                    <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Input
+                        placeholder="搜索函数名或注释"
+                        allowClear
+                        style={{ width: 200 }}
+                        value={functionSearchTerm}
+                        onChange={(e) => setFunctionSearchTerm(e.target.value)}
+                      />
+                      <Button 
+                        type="primary" 
+                        icon={<FunctionOutlined />} 
+                        onClick={refreshFunctions}
+                      >
+                        刷新
+                      </Button>
+                    </div>
+                    <Table
+                      dataSource={filterListBySearch(functionList, functionSearchTerm)}
+                      columns={functionColumns}
+                      pagination={false}
+                      size="small"
+                      rowKey="name"
+                      locale={{ emptyText: '暂无函数数据' }}
+                    />
+                  </Card>
+                </div>
+              )
+            }
+          ] : []),
           {
             key: 'recent-queries',
             label: (
@@ -223,7 +971,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
               </span>
             ),
             children: (
-              <div style={{ padding: '24px 0' }}>
+              <div className="database-tab-content">
                 <Card title="最近查询" size="small">
                   <Table
                     dataSource={recentQueries}
@@ -233,37 +981,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                     rowKey="query"
                   />
                 </Card>
-              </div>
-            )
-          },
-          {
-            key: 'data',
-            label: (
-              <span>
-                <DatabaseOutlined />
-                数据
-              </span>
-            ),
-            children: (
-              <DataPanel
-                connection={connection}
-                database={database}
-                table={activeTable}
-              />
-            )
-          },
-          {
-            key: 'structure',
-            label: (
-              <span>
-                <SettingOutlined />
-                结构
-              </span>
-            ),
-            children: (
-              <div style={{ padding: '24px', textAlign: 'center', color: '#666' }}>
-                <DatabaseOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                <p>数据库结构查看功能开发中...</p>
               </div>
             )
           }

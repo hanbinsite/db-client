@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Tabs, message, Button, Tooltip, Dropdown, Badge, Menu } from 'antd';
-import { 
+import {
   PlusOutlined, DatabaseOutlined, UserOutlined,
   FileTextOutlined, BankOutlined, 
   MoonOutlined, SunOutlined, MenuOutlined, SearchOutlined,
@@ -12,6 +12,7 @@ import DatabasePanel from './components/DatabasePanel';
 import QueryPanel from './components/QueryPanel';
 import DataPanel from './components/DataPanel';
 import DatabaseTabPanel from './components/DatabaseTabPanel';
+import TableDataPanel from './components/TableDataPanel';
 import { DatabaseConnection, DatabaseType } from './types';
 import { ThemeProvider, useTheme } from './components/ThemeContext';
 import './App.css';
@@ -36,6 +37,15 @@ interface QueryTab {
   database?: string;
 }
 
+interface TableDataTab {
+  key: string;
+  label: string;
+  connection: DatabaseConnection;
+  database: string;
+  tableName: string;
+  type: DatabaseType;
+}
+
 const AppContent: React.FC = () => {
   // 核心状态管理
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
@@ -47,6 +57,7 @@ const AppContent: React.FC = () => {
   // 标签页管理
   const [databaseTabs, setDatabaseTabs] = useState<DatabaseTab[]>([]);
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([]);
+  const [tableDataTabs, setTableDataTabs] = useState<TableDataTab[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string>('');
   
   // UI状态
@@ -299,7 +310,30 @@ const AppContent: React.FC = () => {
 
   // 表选择处理
   const handleTableSelect = (table: string) => {
+    if (!activeConnection || !activeDatabase || !table) return;
+    
+    // 设置当前活动表
     setActiveTable(table);
+    
+    // 创建表数据标签页
+    const tabKey = `table-${activeConnection.id}-${activeDatabase}-${table}`;
+    const existingTab = tableDataTabs.find(tab => tab.key === tabKey);
+    
+    if (!existingTab) {
+      const newTab: TableDataTab = {
+        key: tabKey,
+        label: `${activeDatabase}.${table}`,
+        connection: activeConnection,
+        database: activeDatabase,
+        tableName: table,
+        type: activeConnection.type
+      };
+      
+      setTableDataTabs(prev => [...prev, newTab]);
+      setActiveTabKey(tabKey);
+    } else {
+      setActiveTabKey(tabKey);
+    }
   };
 
   // 关闭标签页
@@ -308,33 +342,30 @@ const AppContent: React.FC = () => {
     const key = typeof targetKey === 'string' ? targetKey : '';
     // 查找标签类型
     const isDbTab = databaseTabs.some(t => t.key === targetKey);
+    const isQueryTab = queryTabs.some(t => t.key === targetKey);
+    const isTableTab = tableDataTabs.some(t => t.key === targetKey);
     
     if (isDbTab) {
       const newTabs = databaseTabs.filter(tab => tab.key !== targetKey);
       setDatabaseTabs(newTabs);
-      
-      if (targetKey === activeTabKey) {
-        if (newTabs.length > 0) {
-          setActiveTabKey(newTabs[newTabs.length - 1].key);
-        } else if (queryTabs.length > 0) {
-          setActiveTabKey(queryTabs[0].key);
-        } else {
-          setActiveTabKey('');
-          setActiveDatabase('');
-        }
-      }
-    } else {
+    } else if (isQueryTab) {
       const newTabs = queryTabs.filter(tab => tab.key !== targetKey);
       setQueryTabs(newTabs);
-      
-      if (targetKey === activeTabKey) {
-        if (newTabs.length > 0) {
-          setActiveTabKey(newTabs[newTabs.length - 1].key);
-        } else if (databaseTabs.length > 0) {
-          setActiveTabKey(databaseTabs[0].key);
-        } else {
-          setActiveTabKey('');
-        }
+    } else if (isTableTab) {
+      const newTabs = tableDataTabs.filter(tab => tab.key !== targetKey);
+      setTableDataTabs(newTabs);
+    }
+    
+    // 如果关闭的是当前活跃标签，切换到下一个合适的标签
+    if (activeTabKey === key) {
+      if (databaseTabs.length > 0) {
+        setActiveTabKey(databaseTabs[0].key);
+      } else if (queryTabs.length > 0) {
+        setActiveTabKey(queryTabs[0].key);
+      } else if (tableDataTabs.length > 0) {
+        setActiveTabKey(tableDataTabs[0].key);
+      } else {
+        setActiveTabKey('');
       }
     }
   };
@@ -640,24 +671,40 @@ const AppContent: React.FC = () => {
                     database={tab.database}
                     type={tab.type}
                     darkMode={darkMode}
+                    onTableSelect={handleTableSelect}
                   />
                 </TabPane>
               ))}
               
               {queryTabs.map(tab => (
-                <TabPane 
-                  key={tab.key} 
-                  tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
-                  closable={true}
-                >
-                  <QueryPanel
-                    connection={tab.connection || activeConnection}
-                    database={tab.database || activeDatabase}
-                    darkMode={darkMode}
-                  />
-                </TabPane>
-              ))}
-            </Tabs>
+              <TabPane 
+                key={tab.key} 
+                tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
+                closable={true}
+              >
+                <QueryPanel
+                  connection={tab.connection || activeConnection}
+                  database={tab.database || activeDatabase}
+                  darkMode={darkMode}
+                />
+              </TabPane>
+            ))}
+            
+            {tableDataTabs.map(tab => (
+              <TabPane 
+                key={tab.key} 
+                tab={<span><TableOutlined style={{marginRight: 4}} />{tab.label}</span>}
+                closable={true}
+              >
+                <TableDataPanel
+                  connection={tab.connection}
+                  database={tab.database}
+                  tableName={tab.tableName}
+                  darkMode={darkMode}
+                />
+              </TabPane>
+            ))}
+          </Tabs>
           ) : (
             <div className="welcome-panel">
               <div className="welcome-content">

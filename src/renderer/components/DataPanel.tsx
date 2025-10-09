@@ -188,71 +188,192 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
 
     setLoading(true);
     try {
-      // 模拟加载表数据
-      const mockColumns = [
-        { title: 'ID', dataIndex: 'id', key: 'id', type: 'int', editable: false },
-        { title: '姓名', dataIndex: 'name', key: 'name', type: 'varchar', editable: true },
-        { title: '邮箱', dataIndex: 'email', key: 'email', type: 'varchar', editable: true },
-        { title: '年龄', dataIndex: 'age', key: 'age', type: 'int', editable: true },
-        { title: '创建时间', dataIndex: 'created_at', key: 'created_at', type: 'datetime', editable: false }
-      ];
-
-      const mockData: TableData[] = Array.from({ length: 50 }, (_, index) => ({
-        key: index.toString(),
-        id: index + 1,
-        name: `用户${index + 1}`,
-        email: `user${index + 1}@example.com`,
-        age: Math.floor(Math.random() * 50) + 18,
-        created_at: new Date(Date.now() - Math.random() * 10000000000).toISOString().split('T')[0]
-      }));
-
-      // 应用搜索过滤
-      let filteredData = mockData;
-      if (searchText) {
-        filteredData = mockData.filter(item =>
-          Object.values(item).some(value =>
-            value && value.toString().toLowerCase().includes(searchText.toLowerCase())
-          )
-        );
+      // 使用真实数据库连接获取数据
+      if (!window.electronAPI || !connection.isConnected) {
+        message.error('数据库连接不可用');
+        console.error('数据库连接不可用');
+        setData([]);
+        setColumns([]);
+        setTotal(0);
+        return;
       }
 
-      // 应用列过滤
-      Object.entries(filterConfig).forEach(([column, value]) => {
-        if (value) {
-          filteredData = filteredData.filter(item => {
-            const cellValue = item[column];
-            return cellValue && cellValue.toString().toLowerCase().includes(value.toLowerCase());
-          });
+      // 使用连接池ID
+      const poolId = connection.connectionId || connection.id;
+      if (!poolId) {
+        message.error('连接池ID不存在');
+        console.error('连接池ID不存在');
+        setData([]);
+        setColumns([]);
+        setTotal(0);
+        return;
+      }
+
+      console.log('尝试从真实数据库获取数据:', { connectionId: poolId, database, table });
+
+      // 初始化params变量和查询语句
+      let paramsArray: any[] = [];
+      let query = '';
+      
+      // 根据数据库类型构建查询语句
+      switch (connection.type) {
+        case 'mysql':
+          query = `SELECT * FROM \`${database}\`.\`${table}\` LIMIT ${(currentPage - 1) * pageSize}, ${pageSize}`;
+          break;
+        case 'postgresql':
+        case 'gaussdb':
+          query = `SELECT * FROM "${database}"."${table}" LIMIT ${pageSize} OFFSET ${(currentPage - 1) * pageSize}`;
+          break;
+        case 'oracle':
+          // Oracle 分页语法不同
+          query = `SELECT * FROM (SELECT t.*, ROWNUM rn FROM "${database}"."${table}" t) WHERE rn BETWEEN ${(currentPage - 1) * pageSize + 1} AND ${currentPage * pageSize}`;
+          break;
+        case 'sqlite':
+          query = `SELECT * FROM "${table}" LIMIT ${pageSize} OFFSET ${(currentPage - 1) * pageSize}`;
+          break;
+        case 'redis':
+          // Redis特殊处理 - 获取键的值
+          query = 'get';
+          paramsArray = [table];
+          break;
+        default:
+          query = `SELECT * FROM "${table}" LIMIT ${pageSize} OFFSET ${(currentPage - 1) * pageSize}`;
+      }
+
+      // 执行查询获取数据
+      const result = await window.electronAPI.executeQuery(poolId, query, paramsArray);
+      console.log('数据库查询结果:', result);
+
+      if (result && result.success && Array.isArray(result.data)) {
+        // 处理查询结果
+        const realData = result.data.map((row: any, index: number) => ({
+          key: index.toString(),
+          ...row
+        }));
+
+        // 获取总记录数用于分页
+      let totalCount = 1; // 默认至少有一条记录
+      if (connection.type !== 'redis') {
+        let countQuery = '';
+        switch (connection.type) {
+          case 'mysql':
+            countQuery = `SELECT COUNT(*) AS total FROM \`${database}\`.\`${table}\``;
+            break;
+          case 'postgresql':
+          case 'gaussdb':
+            countQuery = `SELECT COUNT(*) AS total FROM "${database}"."${table}"`;
+            break;
+          case 'oracle':
+            countQuery = `SELECT COUNT(*) AS total FROM "${database}"."${table}"`;
+            break;
+          case 'sqlite':
+            countQuery = `SELECT COUNT(*) AS total FROM "${table}"`;
+            break;
+          default:
+            countQuery = `SELECT COUNT(*) AS total FROM "${table}"`;
         }
-      });
 
-      // 应用排序
-      if (sortConfig) {
-        filteredData.sort((a, b) => {
-          const aValue = a[sortConfig.column];
-          const bValue = b[sortConfig.column];
-          
-          if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-          if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
-          return 0;
-        });
+        const countResult = await window.electronAPI.executeQuery(poolId, countQuery);
+        totalCount = countResult && countResult.success && countResult.data.length > 0 
+          ? countResult.data[0].total 
+          : realData.length;
       }
 
-      // 初始化可见列
-      if (mockColumns.length && visibleColumns.size === 0) {
-        setVisibleColumns(new Set(mockColumns.map(col => col.key)));
+        // 动态生成列配置
+        if (realData.length > 0) {
+          if (connection.type === 'redis') {
+            // Redis特殊处理 - 为键值对创建特殊的列配置
+            const keyName = table;
+            let value = realData[0]?.value;
+            if (value === undefined) {
+              // 如果result格式不同，尝试其他方式获取值
+              if (typeof realData[0] === 'object' && realData[0] !== null) {
+                value = JSON.stringify(realData[0]);
+              } else {
+                value = realData[0];
+              }
+            }
+
+            // 获取键的类型
+            const typeResult = await window.electronAPI.executeQuery(poolId, 'type', [keyName]);
+            let keyType = 'string';
+            if (typeResult && typeResult.success && typeResult.data && typeResult.data.length > 0) {
+              keyType = typeResult.data[0].value || 'string';
+            }
+
+            const realColumns = [
+              {
+                title: '键名',
+                dataIndex: 'key',
+                key: 'key',
+                type: 'string',
+                editable: false
+              },
+              {
+                title: '值',
+                dataIndex: 'value',
+                key: 'value',
+                type: typeof value === 'number' ? 'number' : 'string',
+                editable: true
+              },
+              {
+                title: '类型',
+                dataIndex: 'type',
+                key: 'type',
+                type: 'string',
+                editable: false
+              }
+            ];
+
+            // 设置数据格式化为对象数组
+            setData([{
+              key: keyName,
+              value: value,
+              type: keyType
+            }]);
+
+            // 初始化可见列
+            if (realColumns.length && visibleColumns.size === 0) {
+              setVisibleColumns(new Set(realColumns.map(col => col.key)));
+            }
+
+            setColumns(realColumns);
+          } else {
+            // 传统数据库的处理方式
+            const firstRow = realData[0];
+            const realColumns = Object.keys(firstRow).map(key => ({
+              title: key === 'key' ? '索引' : key,
+              dataIndex: key,
+              key: key,
+              type: typeof firstRow[key] === 'number' ? 'number' : 'string',
+              editable: key !== 'key' && key.toLowerCase() !== 'id' && key.toLowerCase().indexOf('created_at') === -1
+            })).filter(col => col.key !== 'key'); // 移除key列
+
+            // 初始化可见列
+            if (realColumns.length && visibleColumns.size === 0) {
+              setVisibleColumns(new Set(realColumns.map(col => col.key)));
+            }
+
+            setColumns(realColumns);
+          }
+        } else {
+          setColumns([]);
+        }
+
+        setData(realData);
+        setTotal(totalCount);
+      } else {
+        console.warn('未获取到数据或查询失败');
+        setData([]);
+        setColumns([]);
+        setTotal(0);
       }
-
-      // 分页
-      const startIndex = (currentPage - 1) * pageSize;
-      const paginatedData = filteredData.slice(startIndex, startIndex + pageSize);
-
-      setColumns(mockColumns);
-      setData(paginatedData);
-      setTotal(filteredData.length);
     } catch (error) {
       message.error('加载数据失败');
       console.error('加载数据失败:', error);
+      setData([]);
+      setColumns([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }

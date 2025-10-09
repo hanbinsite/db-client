@@ -49,22 +49,48 @@ const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, o
     const startTime = Date.now();
 
     try {
-      // 模拟执行查询
-      const mockResult: QueryResult = {
-        success: true,
-        data: [
-          { id: 1, name: '张三', email: 'zhangsan@example.com', created_at: '2023-01-01' },
-          { id: 2, name: '李四', email: 'lisi@example.com', created_at: '2023-01-02' },
-          { id: 3, name: '王五', email: 'wangwu@example.com', created_at: '2023-01-03' }
-        ],
-        columns: ['id', 'name', 'email', 'created_at'],
-        rowCount: 3,
-        executionTime: 150
-      };
+      // 使用真实的数据库连接执行查询
+      const poolId = connection.connectionId || connection.id;
+      if (!poolId) {
+        throw new Error('连接池ID不存在');
+      }
+      
+      // 执行真实的SQL查询
+      const result = await window.electronAPI.executeQuery(poolId, query);
+      console.log('查询执行结果:', result);
+      
+      if (result && result.success && Array.isArray(result.data)) {
+        // 提取列名
+        const columns = result.data.length > 0 ? Object.keys(result.data[0]) : [];
+        
+        // 处理真实查询结果
+        const queryResult: QueryResult = {
+          success: true,
+          data: result.data,
+          columns: columns,
+          rowCount: result.data.length,
+          executionTime: Date.now() - startTime
+        };
 
-      setResults(mockResult);
-      setExecutionTime(Date.now() - startTime);
-      message.success('查询执行成功');
+        setResults(queryResult);
+        setExecutionTime(Date.now() - startTime);
+        message.success('查询执行成功');
+      } else if (result && result.success) {
+        // 处理没有返回数据的成功查询
+        const queryResult: QueryResult = {
+          success: true,
+          data: [],
+          columns: [],
+          rowCount: 0,
+          executionTime: Date.now() - startTime
+        };
+
+        setResults(queryResult);
+        setExecutionTime(Date.now() - startTime);
+        message.success('命令执行成功');
+      } else {
+        throw new Error(result?.error || '查询执行失败');
+      }
     } catch (error) {
       const errorResult: QueryResult = {
         success: false,

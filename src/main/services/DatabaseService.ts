@@ -558,10 +558,8 @@ export class DatabaseService extends EventEmitter {
 
   // 生成连接池ID
   private generatePoolId(config: DatabaseConnection): string {
-    // 为不同类型的数据库提供默认数据库名，避免生成包含undefined的ID
-    const databaseName = config.database || 
-      (config.type === 'postgresql' ? 'postgres' : 
-       (config.type === 'mysql' ? 'performance_schema' : ''));
+    // 不使用默认数据库名，只使用配置中指定的数据库名
+    const databaseName = config.database || '';
     return `${config.type}_${config.host}_${config.port}_${databaseName}`;
   }
 
@@ -970,12 +968,342 @@ class GaussDBConnection extends BaseDatabaseConnection {
 }
 
 class RedisConnection extends BaseDatabaseConnection {
+  private client: any = null;
+  protected isConnecting: boolean = false;
+
   // Redis连接实现
-  async connect(): Promise<boolean> { return false; }
-  async disconnect(): Promise<void> {}
-  async executeQuery(): Promise<QueryResult> { return { success: false, error: 'Redis连接未实现' }; }
-  async getDatabaseInfo(): Promise<DatabaseInfo> { throw new Error('未实现'); }
-  async getTableStructure(): Promise<TableStructure> { throw new Error('未实现'); }
+  async connect(): Promise<boolean> {
+    if (this.isConnected()) {
+      return true;
+    }
+
+    this.isConnecting = true;
+    try {
+      const { createClient } = require('redis');
+      const config = this.getConfig();
+      
+      // 构建Redis连接选项
+      const redisOptions: any = {
+        socket: {
+          host: config.host,
+          port: config.port,
+          connectTimeout: (config.timeout || 30) * 1000
+        }
+      };
+
+      // 如果提供了用户名和密码，添加认证信息
+      if (config.username && config.username.trim()) {
+        redisOptions.username = config.username;
+      }
+      if (config.password && config.password.trim()) {
+        redisOptions.password = config.password;
+      }
+
+      // 如果提供了默认数据库，选择数据库
+      if (config.database && !isNaN(Number(config.database))) {
+        this.selectedDb = Number(config.database);
+      }
+
+      // 创建Redis客户端
+      this.client = createClient(redisOptions);
+
+      // 监听错误事件
+      this.client.on('error', (err: Error) => {
+        console.error('Redis client error:', err);
+      });
+
+      // 连接到Redis
+      await this.client.connect();
+      console.log('Redis connection established');
+
+      // 如果有默认数据库，切换到该数据库
+      if (this.selectedDb !== undefined) {
+        await this.client.select(this.selectedDb);
+      }
+
+      this.isConnecting = false;
+      return true;
+    } catch (error) {
+      console.error('Redis connection failed:', error);
+      this.isConnecting = false;
+      this.client = null;
+      return false;
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.client) {
+      try {
+        await this.client.quit();
+        console.log('Redis connection closed');
+      } catch (error) {
+        console.error('Error closing Redis connection:', error);
+      }
+      this.client = null;
+    }
+  }
+
+  async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
+    try {
+      if (!this.client || !this.isConnected()) {
+        throw new Error('Redis client not connected');
+      }
+
+      // 将命令转换为小写
+      const cmd = command.toLowerCase();
+      
+      // 根据Redis命令执行相应操作
+      let result: any;
+      switch (cmd) {
+        case 'info':
+          // 获取Redis信息
+          if (params && params.length > 0 && params[0] === 'keyspace') {
+            // 只获取keyspace信息
+            const info = await this.client.info('keyspace');
+            result = info;
+          } else {
+            result = await this.client.info();
+          }
+          break;
+        case 'select':
+          // 切换数据库
+          if (params && params.length > 0) {
+            this.selectedDb = Number(params[0]);
+            await this.client.select(this.selectedDb);
+            result = 'OK';
+          } else {
+            throw new Error('Database index is required for SELECT command');
+          }
+          break;
+        case 'keys':
+          // 列出键
+          if (params && params.length > 0) {
+            result = await this.client.keys(params[0]);
+          } else {
+            result = await this.client.keys('*');
+          }
+          break;
+        case 'get':
+          // 获取键的值
+          if (params && params.length > 0) {
+            result = await this.client.get(params[0]);
+          } else {
+            throw new Error('Key name is required for GET command');
+          }
+          break;
+        case 'set':
+          // 设置键的值
+          if (params && params.length >= 2) {
+            result = await this.client.set(params[0], params[1]);
+          } else {
+            throw new Error('Key and value are required for SET command');
+          }
+          break;
+        case 'del':
+          // 删除键
+          if (params && params.length > 0) {
+            result = await this.client.del(params[0]);
+          } else {
+            throw new Error('Key name is required for DEL command');
+          }
+          break;
+        default:
+          // 尝试直接执行命令
+          if (typeof this.client[cmd] === 'function') {
+            result = await this.client[cmd](...(params || []));
+          } else {
+            throw new Error(`Unsupported Redis command: ${cmd}`);
+          }
+      }
+
+      // 格式化返回结果
+      return {
+        success: true,
+        data: this.formatResult(result, cmd)
+      };
+    } catch (error: any) {
+      console.error('Redis query execution failed:', error);
+      return {
+        success: false,
+        error: error.message || 'Redis query execution failed'
+      };
+    }
+  }
+
+  async getDatabaseInfo(): Promise<DatabaseInfo> {
+    try {
+      if (!this.client || !this.isConnected()) {
+        throw new Error('Redis client not connected');
+      }
+
+      const info = await this.client.info();
+      const infoLines = info.split('\r\n');
+      const infoObj: Record<string, string> = {};
+
+      infoLines.forEach((line: string) => {
+        const parts = line.split(':');
+        if (parts.length === 2) {
+          infoObj[parts[0]] = parts[1];
+        }
+      });
+
+      return {
+        version: infoObj['redis_version'] || 'Unknown',
+        uptime: parseInt(infoObj['uptime_in_seconds'] || '0'),
+        connections: parseInt(infoObj['connected_clients'] || '0'),
+        storage: {
+          total: parseInt(infoObj['total_system_memory'] || '0'),
+          used: parseInt(infoObj['used_memory'] || '0'),
+          free: 0 // Redis不直接提供空闲内存信息
+        },
+        performance: {
+          queriesPerSecond: parseInt(infoObj['instantaneous_ops_per_sec'] || '0'),
+          slowQueries: parseInt(infoObj['slowlog_length'] || '0')
+        }
+      };
+    } catch (error) {
+      console.error('Failed to get Redis info:', error);
+      throw error;
+    }
+  }
+
+  async getTableStructure(tableName: string): Promise<TableStructure> {
+    // Redis没有表的概念，这里返回键空间信息
+    try {
+      if (!this.client || !this.isConnected()) {
+        throw new Error('Redis client not connected');
+      }
+
+      // 尝试获取键的类型
+      let type = 'unknown';
+      try {
+        type = await this.client.type(tableName);
+      } catch {
+        // 如果键不存在，type命令会失败
+      }
+
+      // 构建类似表结构的信息
+      return {
+        name: tableName,
+        columns: [
+          {
+            name: 'key',
+            type: 'string',
+            nullable: false,
+            primaryKey: true,
+            autoIncrement: false
+          },
+          {
+            name: 'value',
+            type: type,
+            nullable: false,
+            primaryKey: false,
+            autoIncrement: false
+          },
+          {
+            name: 'type',
+            type: 'string',
+            nullable: false,
+            primaryKey: false,
+            autoIncrement: false
+          }
+        ],
+        indexes: [],
+        foreignKeys: [],
+        rowCount: 1, // Redis键是单个记录
+        size: 0 // 暂时不计算大小
+      };
+    } catch (error) {
+      console.error('Failed to get Redis key structure:', error);
+      throw error;
+    }
+  }
+
+  async listTables(): Promise<string[]> {
+    // Redis没有表的概念，但我们可以返回当前数据库中的所有键
+    try {
+      if (!this.client || !this.isConnected()) {
+        return [];
+      }
+
+      const keys = await this.client.keys('*');
+      return keys.sort();
+    } catch (error) {
+      console.error('Failed to list Redis keys:', error);
+      return [];
+    }
+  }
+
+  async listDatabases(): Promise<string[]> {
+    // 获取Redis数据库列表
+    try {
+      if (!this.client || !this.isConnected()) {
+        return [];
+      }
+
+      const info = await this.client.info('keyspace');
+      const dbNames: string[] = [];
+      
+      // 解析info keyspace输出，提取数据库名称
+      const lines = info.split('\r\n');
+      lines.forEach((line: string) => {
+        if (line.startsWith('db')) {
+          const dbName = line.split(':')[0];
+          dbNames.push(dbName);
+        }
+      });
+      
+      // 如果没有找到数据库信息，返回默认的数据库列表
+      if (dbNames.length === 0) {
+        return ['db0'];
+      }
+      
+      return dbNames.sort();
+    } catch (error) {
+      console.error('Failed to list Redis databases:', error);
+      return ['db0'];
+    }
+  }
+
+  isConnected(): boolean {
+    return this.client !== null && this.client.isReady;
+  }
+
+  async ping(): Promise<boolean> {
+    try {
+      if (!this.isConnected()) {
+        return false;
+      }
+      
+      const pong = await this.client.ping();
+      return pong === 'PONG';
+    } catch {
+      return false;
+    }
+  }
+
+  // 辅助方法：格式化Redis结果以便前端处理
+  private formatResult(result: any, command: string): any {
+    // 对于info命令，返回原始字符串
+    if (command === 'info') {
+      return result;
+    }
+    
+    // 对于其他命令，尝试格式化结果为数组
+    if (Array.isArray(result)) {
+      return result;
+    }
+    
+    // 对于单个键值对，包装为对象数组
+    if (typeof result !== 'object' || result === null) {
+      return [{ value: result }];
+    }
+    
+    return [result];
+  }
+
+  // 存储当前选择的数据库
+  private selectedDb?: number;
 }
 
 class SQLiteConnection extends BaseDatabaseConnection {

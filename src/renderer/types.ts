@@ -76,6 +76,7 @@ export interface DatabaseInfo {
 // 表结构信息
 export interface TableStructure {
   name: string;
+  schema?: string;
   columns: TableColumn[];
   indexes: TableIndex[];
   foreignKeys: ForeignKey[];

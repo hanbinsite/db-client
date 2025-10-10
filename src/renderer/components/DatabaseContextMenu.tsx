@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Dropdown } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Menu } from 'antd';
+import type { MenuProps } from 'antd';
 import { TreeNode } from './DatabaseTree';
 import './DatabasePanel.css';
 
@@ -20,7 +21,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 根据节点类型生成对应的右键菜单
-  const getMenuItems = () => {
+  const getMenuItems = (): MenuProps['items'] => {
     const items = [];
     const nodeType = node.type || 'unknown';
 
@@ -35,19 +36,48 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({
     if (nodeType === 'database') {
       items.push(
         {
+          key: 'add-database',
+          label: '新增数据库',
+          onClick: () => onMenuSelect('add-database', node)
+        },
+        {
+          key: 'edit-database',
+          label: '编辑数据库',
+          onClick: () => onMenuSelect('edit-database', node)
+        },
+        {
+          key: 'delete-database',
+          label: '删除数据库',
+          onClick: () => onMenuSelect('delete-database', node)
+        },
+        {
+          type: 'divider' as const
+        },
+        {
           key: 'new-query',
-          label: '新建查询',
+          label: '新增查询',
           onClick: () => onMenuSelect('new-query', node)
         },
         {
-          key: 'export',
-          label: '导出数据库',
-          onClick: () => onMenuSelect('export', node)
+          key: 'run-sql-file',
+          label: '运行SQL文件',
+          onClick: () => onMenuSelect('run-sql-file', node)
         },
         {
-          key: 'backup',
-          label: '备份数据库',
-          onClick: () => onMenuSelect('backup', node)
+          key: 'dump-sql',
+          label: '转储SQL文件',
+          children: [
+            {
+              key: 'dump-all',
+              label: '数据和结构',
+              onClick: () => onMenuSelect('dump-all', node)
+            },
+            {
+              key: 'dump-structure',
+              label: '仅结构',
+              onClick: () => onMenuSelect('dump-structure', node)
+            }
+          ]
         }
       );
     }

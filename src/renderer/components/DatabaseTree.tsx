@@ -3,6 +3,7 @@ import { Tree, Spin } from 'antd';
 import type { Key } from 'react';
 import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, IeOutlined } from '@ant-design/icons';
 import { useTheme } from './ThemeContext';
+import DatabaseContextMenu from './DatabaseContextMenu';
 
 const { DirectoryTree } = Tree;
 
@@ -21,7 +22,7 @@ export interface DatabaseTreeProps {
   expandedKeys: Key[];
   selectedKeys: Key[];
   onNodeSelect: (node: TreeNode) => void;
-  onMenuSelect: (action: string, node: TreeNode) => void;
+  onMenuSelect?: (action: string, node: TreeNode) => void;
   onExpand?: (expandedKeys: Key[]) => void;
   loading: boolean;
   darkMode: boolean;
@@ -116,11 +117,14 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
     const { title, type, key } = nodeData;
     const icon = type ? objectTypeIcons[type] || <FolderOutlined /> : <FolderOutlined />;
     
+    // 包装节点以提供右键菜单
     return (
-      <span className={`tree-node ${darkMode ? 'dark-mode' : ''}`}>
-        <span className="tree-node-icon">{icon}</span>
-        <span className="tree-node-title">{title || 'Unknown'}</span>
-      </span>
+      <DatabaseContextMenu node={nodeData} onMenuSelect={onMenuSelect || (() => {})}>
+        <span className={`tree-node ${darkMode ? 'dark-mode' : ''}`}>
+          <span className="tree-node-icon">{icon}</span>
+          <span className="tree-node-title">{title || 'Unknown'}</span>
+        </span>
+      </DatabaseContextMenu>
     );
   };
 

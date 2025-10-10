@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input } from 'antd';
+import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input, Dropdown, Menu, Modal } from 'antd';
 import { DatabaseOutlined, TableOutlined, BarChartOutlined, CodeOutlined, EyeOutlined, PlayCircleOutlined, FunctionOutlined } from '@ant-design/icons';
 import { DatabaseConnection, DatabaseType } from '../types';
 import QueryPanel from './QueryPanel';
@@ -385,10 +385,12 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       }
 
       const poolId = connection.connectionId || connection.id;
-      // MySQL中视图的注释信息实际上存储在TABLE_COMMENT列中
-      const viewQuery = `SELECT table_name, view_definition, table_comment, create_time 
-        FROM information_schema.VIEWS 
-        WHERE TABLE_SCHEMA = ?`;
+      // 修正：在MySQL中，视图的注释信息存储在information_schema.TABLES表中
+      // 使用LEFT JOIN连接VIEWS和TABLES表来获取完整信息
+      const viewQuery = `SELECT v.table_name, v.view_definition, t.table_comment, v.create_time 
+        FROM information_schema.VIEWS v
+        LEFT JOIN information_schema.TABLES t ON v.table_schema = t.table_schema AND v.table_name = t.table_name
+        WHERE v.TABLE_SCHEMA = ?`;
       
       console.log('执行视图列表查询:', viewQuery, '数据库:', database);
       const result = await window.electronAPI.executeQuery(poolId, viewQuery, [database]);
@@ -553,29 +555,193 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
     return colors[dbType] || '#666';
   };
 
+  // 右键菜单处理函数
+  const handleTableContextMenu = (tableName: string) => {
+    const menu = (
+      <Menu>
+        <Menu.Item onClick={() => handleTableSelect(tableName)}>
+          查看数据
+        </Menu.Item>
+        <Menu.Item onClick={() => handleAlterTable(tableName)}>
+          修改结构
+        </Menu.Item>
+        <Menu.Item onClick={() => handleTruncateTable(tableName)}>
+          清空表
+        </Menu.Item>
+        <Menu.Item onClick={() => handleDropTable(tableName)} danger>
+          删除表
+        </Menu.Item>
+      </Menu>
+    );
+    return menu;
+  };
+
+  const handleViewContextMenu = (viewName: string) => {
+    const menu = (
+      <Menu>
+        <Menu.Item onClick={() => handleViewSelect(viewName)}>
+          查看数据
+        </Menu.Item>
+        <Menu.Item onClick={() => handleAlterView(viewName)}>
+          修改结构
+        </Menu.Item>
+        <Menu.Item onClick={() => handleDropView(viewName)} danger>
+          删除视图
+        </Menu.Item>
+      </Menu>
+    );
+    return menu;
+  };
+
+  const handleProcedureContextMenu = (procedureName: string) => {
+    const menu = (
+      <Menu>
+        <Menu.Item onClick={() => handleExecuteProcedure(procedureName)}>
+          执行
+        </Menu.Item>
+        <Menu.Item onClick={() => handleAlterProcedure(procedureName)}>
+          修改
+        </Menu.Item>
+        <Menu.Item onClick={() => handleDropProcedure(procedureName)} danger>
+          删除存储过程
+        </Menu.Item>
+      </Menu>
+    );
+    return menu;
+  };
+
+  const handleFunctionContextMenu = (functionName: string) => {
+    const menu = (
+      <Menu>
+        <Menu.Item onClick={() => handleExecuteFunction(functionName)}>
+          执行
+        </Menu.Item>
+        <Menu.Item onClick={() => handleAlterFunction(functionName)}>
+          修改
+        </Menu.Item>
+        <Menu.Item onClick={() => handleDropFunction(functionName)} danger>
+          删除函数
+        </Menu.Item>
+      </Menu>
+    );
+    return menu;
+  };
+
+  // 处理函数（实际功能需要根据项目具体实现）
+  const handleViewSelect = (viewName: string) => {
+    onTableSelect(viewName);
+  };
+
+  const handleExecuteProcedure = (procedureName: string) => {
+    console.log('Execute procedure:', procedureName);
+  };
+
+  const handleExecuteFunction = (functionName: string) => {
+    console.log('Execute function:', functionName);
+  };
+
+  const handleAlterTable = (tableName: string) => {
+    console.log('Alter table:', tableName);
+  };
+
+  const handleAlterView = (viewName: string) => {
+    console.log('Alter view:', viewName);
+  };
+
+  const handleAlterProcedure = (procedureName: string) => {
+    console.log('Alter procedure:', procedureName);
+  };
+
+  const handleAlterFunction = (functionName: string) => {
+    console.log('Alter function:', functionName);
+  };
+
+  // 清空表函数
+  const handleTruncateTable = (tableName: string) => {
+    Modal.confirm({
+      title: '确认清空表',
+      content: `确定要清空表 "${tableName}" 中的所有数据吗？此操作不可撤销！`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => {
+        console.log('Truncate table:', tableName);
+      }
+    });
+  };
+
+  const handleDropTable = (tableName: string) => {
+    Modal.confirm({
+      title: '确认删除表',
+      content: `确定要删除表 "${tableName}" 吗？此操作不可撤销！`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => {
+        console.log('Drop table:', tableName);
+      }
+    });
+  };
+
+  const handleDropView = (viewName: string) => {
+    Modal.confirm({
+      title: '确认删除视图',
+      content: `确定要删除视图 "${viewName}" 吗？此操作不可撤销！`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => {
+        console.log('Drop view:', viewName);
+      }
+    });
+  };
+
+  const handleDropProcedure = (procedureName: string) => {
+    Modal.confirm({
+      title: '确认删除存储过程',
+      content: `确定要删除存储过程 "${procedureName}" 吗？此操作不可撤销！`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => {
+        console.log('Drop procedure:', procedureName);
+      }
+    });
+  };
+
+  const handleDropFunction = (functionName: string) => {
+    Modal.confirm({
+      title: '确认删除函数',
+      content: `确定要删除函数 "${functionName}" 吗？此操作不可撤销！`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => {
+        console.log('Drop function:', functionName);
+      }
+    });
+  };
+
   const tableColumns = [
     {
       title: '表名',
       dataIndex: 'name',
       key: 'name',
       render: (text: string) => (
-        <Button 
-          type="link" 
-          onClick={() => handleTableSelect(text)}
-          icon={<TableOutlined />}
-        >
-          {text}
-        </Button>
+        <Dropdown overlay={handleTableContextMenu(text)}>
+          <Button 
+            type="link" 
+            onClick={() => handleTableSelect(text)}
+            icon={<TableOutlined />}
+          >
+            {text}
+          </Button>
+        </Dropdown>
       )
     },
     {
-      title: '表注释',
+      title: '注释',
       dataIndex: 'comment',
       key: 'comment',
       width: 150
     },
     {
-      title: '数据库引擎',
+      title: '引擎',
       dataIndex: 'engine',
       key: 'engine',
       width: 120
@@ -610,13 +776,13 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       )
     },
     {
-      title: '执行时间',
+      title: '耗时',
       dataIndex: 'time',
       key: 'time',
       width: 80
     },
     {
-      title: '影响行数',
+      title: '行数',
       dataIndex: 'rows',
       key: 'rows',
       width: 100,
@@ -631,16 +797,18 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       dataIndex: 'name',
       key: 'name',
       render: (text: string) => (
-        <Button 
-          type="link" 
-          icon={<EyeOutlined />}
-        >
-          {text}
-        </Button>
+        <Dropdown overlay={handleViewContextMenu(text)}>
+          <Button 
+            type="link" 
+            icon={<EyeOutlined />}
+          >
+            {text}
+          </Button>
+        </Dropdown>
       )
     },
     {
-      title: '视图注释',
+      title: '注释',
       dataIndex: 'comment',
       key: 'comment',
       width: 150
@@ -669,12 +837,14 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       dataIndex: 'name',
       key: 'name',
       render: (text: string) => (
-        <Button 
-          type="link" 
-          icon={<PlayCircleOutlined />}
-        >
-          {text}
-        </Button>
+        <Dropdown overlay={handleProcedureContextMenu(text)}>
+          <Button 
+            type="link" 
+            icon={<PlayCircleOutlined />}
+          >
+            {text}
+          </Button>
+        </Dropdown>
       )
     },
     {
@@ -697,12 +867,14 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       dataIndex: 'name',
       key: 'name',
       render: (text: string) => (
-        <Button 
-          type="link" 
-          icon={<FunctionOutlined />}
-        >
-          {text}
-        </Button>
+        <Dropdown overlay={handleFunctionContextMenu(text)}>
+          <Button 
+            type="link" 
+            icon={<FunctionOutlined />}
+          >
+            {text}
+          </Button>
+        </Dropdown>
       )
     },
     {
@@ -755,8 +927,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                   <span style={{ color: '#666', fontSize: 12 }}>
                     连接: {connection?.name || '-'} - 状态: {connection?.isConnected ? '已连接' : '未连接'}
                   </span>
-                  {/* MySQL特定的详情信息 */}
-                  {connection?.type === 'mysql' && (
+                  {/* MySQL特定的详情信息 - 只有获取到版本信息时才显示 */}
+                  {connection?.type === 'mysql' && mysqlVersion !== '未知' && (
                     <span style={{ color: '#666', fontSize: 12 }}>
                       版本: {mysqlVersion}
                     </span>
@@ -837,6 +1009,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                   rowKey="name"
                   className="table-list-table"
                   locale={{ emptyText: '暂无表数据' }}
+                  bordered
+                  style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                 />
               </Card>
             </div>
@@ -878,6 +1052,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                       size="small"
                       rowKey="name"
                       locale={{ emptyText: '暂无视图数据' }}
+                      bordered
+                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                     />
                   </Card>
                 </div>
@@ -917,6 +1093,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                       size="small"
                       rowKey="name"
                       locale={{ emptyText: '暂无存储过程数据' }}
+                      bordered
+                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                     />
                   </Card>
                 </div>
@@ -956,6 +1134,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                       size="small"
                       rowKey="name"
                       locale={{ emptyText: '暂无函数数据' }}
+                      bordered
+                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                     />
                   </Card>
                 </div>

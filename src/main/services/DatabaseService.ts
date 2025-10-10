@@ -863,12 +863,20 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
 
   async getTableStructure(tableName: string): Promise<TableStructure> {
     try {
+      // 首先获取表所在的模式名
+      const schemaResult = await this.connection.query(`
+        SELECT table_schema FROM information_schema.tables 
+        WHERE table_name = $1
+        LIMIT 1
+      `, [tableName]);
+      const schema = schemaResult.rows[0]?.table_schema || 'public';
+      
       // 获取表结构信息
       const columnsResult = await this.connection.query(`
         SELECT column_name, data_type, is_nullable, column_default 
         FROM information_schema.columns 
-        WHERE table_name = $1
-      `, [tableName]);
+        WHERE table_name = $1 AND table_schema = $2
+      `, [tableName, schema]);
       
       const indexesResult = await this.connection.query(`
         SELECT indexname, indexdef 
@@ -894,6 +902,7 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
 
       return {
         name: tableName,
+        schema: schema,
         columns,
         indexes,
         foreignKeys: [],

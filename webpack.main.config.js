@@ -8,7 +8,8 @@ module.exports = {
   target: 'electron-main',
   output: {
     path: path.resolve(__dirname, 'dist'),
-    filename: '[name].js'
+    filename: '[name].js',
+    clean: true
   },
   module: {
     rules: [

@@ -9,6 +9,7 @@ import DatabaseDataLoader from './DatabaseDataLoader';
 import DatabaseStatus from './DatabaseStatus';
 import DatabaseContextMenu from './DatabaseContextMenu';
 import TreeNodeRenderer from './TreeNodeRenderer';
+import AddDatabaseModal from './AddDatabaseModal';
 import './DatabasePanel.css';
 
 interface TreeNode {
@@ -45,6 +46,8 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   // 添加一个新的状态来跟踪当前选中的非表对象
   const [activeOtherObject, setActiveOtherObject] = useState<string>('');
   const { darkMode } = useTheme();
+  // 控制新增数据库弹窗的显示
+  const [isAddDatabaseModalVisible, setIsAddDatabaseModalVisible] = useState(false);
   
   // 创建对DatabaseDataLoader组件的引用
   const dataLoaderRef = useRef<any>(null);
@@ -170,6 +173,30 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     
     // 根据不同的操作和节点类型执行相应的逻辑
     switch (action) {
+      case 'add-database':
+        console.log('DATABASE PANEL - 打开新增数据库弹窗');
+        setIsAddDatabaseModalVisible(true);
+        break;
+      case 'edit-database':
+        console.log('DATABASE PANEL - 编辑数据库:', node.title);
+        // 这里可以实现编辑数据库的逻辑
+        break;
+      case 'delete-database':
+        console.log('DATABASE PANEL - 删除数据库:', node.title);
+        // 这里可以实现删除数据库的逻辑，需要添加确认对话框
+        break;
+      case 'new-query':
+        console.log('DATABASE PANEL - 创建新查询');
+        break;
+      case 'run-sql-file':
+        console.log('DATABASE PANEL - 运行SQL文件');
+        break;
+      case 'dump-all':
+        console.log('DATABASE PANEL - 转储SQL文件（数据和结构）');
+        break;
+      case 'dump-structure':
+        console.log('DATABASE PANEL - 转储SQL文件（仅结构）');
+        break;
       case 'refresh':
         handleRefresh();
         break;
@@ -177,15 +204,6 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         if (node.type === 'table' || node.type === 'view') {
           handleNodeSelect(node);
         }
-        break;
-      case 'new-query':
-        console.log('DATABASE PANEL - 创建新查询');
-        break;
-      case 'export':
-        console.log('DATABASE PANEL - 导出数据库:', node.title);
-        break;
-      case 'backup':
-        console.log('DATABASE PANEL - 备份数据库:', node.title);
         break;
       case 'edit':
         console.log('DATABASE PANEL - 编辑对象:', node.title);
@@ -196,6 +214,18 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
       default:
         console.log('DATABASE PANEL - 执行未知操作:', action);
     }
+  };
+  
+  // 处理新增数据库弹窗的取消
+  const handleAddDatabaseCancel = () => {
+    setIsAddDatabaseModalVisible(false);
+  };
+  
+  // 处理新增数据库成功
+  const handleAddDatabaseSuccess = () => {
+    setIsAddDatabaseModalVisible(false);
+    // 刷新数据库列表
+    handleRefresh();
   };
 
   // 不再需要展开/折叠功能，因为我们只显示数据库列表
@@ -238,6 +268,14 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
       </div>
 
       {/* 活动对象信息显示已移除 */}
+      
+      {/* 新增数据库弹窗 */}
+      <AddDatabaseModal
+        visible={isAddDatabaseModalVisible}
+        connection={connection}
+        onCancel={handleAddDatabaseCancel}
+        onSuccess={handleAddDatabaseSuccess}
+      />
     </div>
   );
 };

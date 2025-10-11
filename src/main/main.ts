@@ -65,7 +65,9 @@ class DBClientApp {
       titleBarStyle: 'default',
       show: false,
       title: 'DB-CLIENT',
-      icon: icon
+      icon: icon,
+      fullscreenable: true,
+      autoHideMenuBar: false
     });
 
     if (process.env.NODE_ENV === 'development') {
@@ -78,6 +80,7 @@ class DBClientApp {
     }
 
     this.mainWindow.once('ready-to-show', () => {
+      this.mainWindow?.maximize();
       this.mainWindow?.show();
     });
   }

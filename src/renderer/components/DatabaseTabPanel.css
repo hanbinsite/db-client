@@ -171,5 +171,45 @@
 
 .ant-tabs-tabpane-active {
   height: 100%;
+  overflow: hidden;
+}
+
+/* 表格容器样式 - 确保表格在固定高度内显示，仅在表格内部显示滚动条 */
+.table-container {
+  border-radius: 6px;
   overflow: auto;
+  box-sizing: border-box;
+}
+
+/* 表格容器滚动条样式优化 */
+.table-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.table-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.table-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 暗黑模式下的表格容器滚动条样式 */
+.dark-mode .table-container::-webkit-scrollbar-track {
+  background: #2c2c2c;
+}
+
+.dark-mode .table-container::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+}
+
+.dark-mode .table-container::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
 }

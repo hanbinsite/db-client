@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Table, Pagination, Spin, Empty, Select, Space, Button, Input, InputNumber, Checkbox, Modal, Form, message, Tag } from 'antd';
 import { DatePicker, TimePicker } from 'antd';
 const { RangePicker } = DatePicker;
-import { ReloadOutlined, DatabaseOutlined, ColumnHeightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, FilterOutlined, DownloadOutlined, UploadOutlined, SwapRightOutlined, DatabaseFilled, EditOutlined, TableOutlined } from '@ant-design/icons';
+import { ReloadOutlined, DatabaseOutlined, ColumnHeightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, FilterOutlined, DownloadOutlined, UploadOutlined, SwapRightOutlined, DatabaseFilled, EditOutlined, TableOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { DatabaseConnection, TableColumn, DataEditOperation, TransactionConfig } from '../types';
 import RecordDetailModal from './RecordDetailModal';
 
@@ -487,11 +487,10 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           }
         };
         
-        // 不查询总行数，提升超大表加载性能
-        setTotal(0);
+        // 不查询总行数，提高超大表查询效率
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]开始执行数据查询，不查询总行数以提高性能`);
         
-        // 只执行数据查询
-        console.log(`超大表加载监控 - 表[${database}.${tableName}]开始执行数据查询函数`);
+        // 只执行数据查询，不查询总数
         await fetchData();
         console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询函数执行完毕`);
       } else {
@@ -979,20 +978,23 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
       const tableColumns = tableStructure
         .filter(col => visibleColumns.includes(col.name))
         .map((column: TableColumn) => {
-          const columnWidth = Math.min(300, Math.max(120, column.name.length * 10));
+          // 优化列宽计算逻辑，限制最大宽度为200px，避免单元格过宽
+          const columnWidth = Math.min(200, Math.max(100, Math.min(column.name.length * 8, 200)));
           const columnConfig: any = {
             title: (
                 <div style={{ textAlign: 'center', lineHeight: 1.2 }}>
-                  <div style={{ fontWeight: 'bold' }}>{column.name}</div>
+                  <div style={{ fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{column.name}</div>
                   <div style={{
                     color: darkMode ? '#999' : '#666',
-                    fontSize: '12px'
+                    fontSize: '12px',
+                    whiteSpace: 'nowrap'
                   }}>#{column.type}</div>
                   {(connection.type === 'postgresql' || connection.type === 'gaussdb') && tableStructureSchema && (
                     <div style={{
                       color: darkMode ? '#888' : '#555',
                       fontSize: '10px',
-                      fontStyle: 'italic'
+                      fontStyle: 'italic',
+                      whiteSpace: 'nowrap'
                     }}>schema: {tableStructureSchema}</div>
                   )}
                 </div>
@@ -1021,8 +1023,9 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                 return getFieldEditor(column, record, () => saveEditing(record.key));
               }
               if (text === null) return <span style={{ color: '#999' }}>NULL</span>;
-              if (typeof text === 'string' && text.length > 50) {
-                return <span title={text}>{text.substring(0, 50)}...</span>;
+              if (text === undefined) return <span style={{ color: '#ccc' }}>UNDEFINED</span>;
+              if (typeof text === 'string' && text.length > 40) {
+                return <span title={text}>{text.substring(0, 40)}...</span>;
               }
               return text;
             }
@@ -1075,13 +1078,12 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
               icon={<DatabaseFilled />} 
               onClick={startTransaction} 
               disabled={transactionActive}
-            >
-              开始事务
-            </Button>
+              title="开始事务"
+            />
             {transactionActive && (
               <Space>
-                <Button onClick={commitTransaction} type="primary">提交</Button>
-                <Button onClick={rollbackTransaction} danger>回滚</Button>
+                <Button onClick={commitTransaction} type="primary" title="提交事务" icon={<CheckCircleOutlined />} />
+                <Button onClick={rollbackTransaction} danger title="回滚事务" icon={<CloseCircleOutlined />} />
               </Space>
             )}
           </Space>
@@ -1090,15 +1092,13 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
             <Button 
               icon={<FilterOutlined />} 
               onClick={() => setFilterMode(filterMode ? false : 'normal')}
-            >
-              筛选排序
-            </Button>
+              title="筛选排序"
+            />
             <Button 
               icon={<ColumnHeightOutlined />} 
               onClick={() => setShowColumnSelector(!showColumnSelector)}
-            >
-              列
-            </Button>
+              title="列选择器"
+            />
             <Button 
               icon={<DatabaseFilled />} 
               onClick={() => {
@@ -1114,14 +1114,44 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                 }
               }}
               disabled={selectedRowKeys.length !== 1}
-            >
-              详情
-            </Button>
+              title="查看详情"
+            />
           </Space>
           
           <Space>
-            <Button icon={<UploadOutlined />} onClick={importData}>导入</Button>
-            <Button icon={<DownloadOutlined />} onClick={exportData}>导出</Button>
+            <Button 
+              type="primary" 
+              icon={<PlusOutlined />} 
+              onClick={addNewRecord}
+              title="新增记录"
+            />
+            <Button 
+              danger 
+              icon={<DeleteOutlined />} 
+              onClick={deleteSelectedRecords}
+              disabled={selectedRowKeys.length === 0}
+              title={`删除记录 (${selectedRowKeys.length})`}
+            />
+          </Space>
+          
+          <Space>
+            <Button icon={<UploadOutlined />} onClick={importData} title="导入数据" />
+            <Button icon={<DownloadOutlined />} onClick={exportData} title="导出数据" />
+          </Space>
+          
+          <Space>
+            <Button 
+              icon={<SaveOutlined />} 
+              onClick={submitChanges}
+              disabled={editOperations.length === 0}
+              title={`提交变更 (${editOperations.length})`}
+            />
+            <Button 
+              icon={<ReloadOutlined />} 
+              onClick={handleRefresh} 
+              loading={loading}
+              title="刷新数据"
+            />
           </Space>
         </div>
 
@@ -1289,95 +1319,91 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
             <Empty description={error} />
           </div>
         ) : data.length > 0 ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <Table
-              columns={columns}
-              dataSource={data}
-              pagination={false}
-              size="small"
-              scroll={{ x: 'max-content', y: 'calc(100vh - 400px)' }}
-              className="table-data-table"
-              style={{ border: '1px solid #d9d9d9' }}
-              bordered={true}
-              rowClassName={(record) => {
-                if (!record || record.key === undefined) return 'table-row-with-border';
-                const isSelected = selectedRowKeys.includes(record.key);
-                return isSelected ? 'table-row-selected' : 'table-row-with-border';
-              }}
-              rowSelection={{
-                selectedRowKeys,
-                onChange: setSelectedRowKeys,
-                getCheckboxProps: (record) => ({
-                  style: {
-                    backgroundColor: record && record.key !== undefined && selectedRowKeys.includes(record.key) ? '#e6f7ff' : 'transparent'
-                  }
-                })
-              }}
-              onChange={handleTableChange}
-              components={{
-                body: {
-                  row: (props: any) => {
-                    const { className, style, ...restProps } = props;
-                    const isSelected = props.record && props.record.key !== undefined && selectedRowKeys.includes(props.record.key);
-                    return (
-                      <tr
-                        className={className}
-                        style={{
-                          ...style,
-                          backgroundColor: isSelected ? '#e6f7ff' : 'transparent',
-                          transition: 'background-color 0.3s'
-                        }}
-                        {...restProps}
-                      />
-                    );
-                  }
-                }
-              }}
-            />
-            
-            <div style={{ marginTop: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <div>
-                  {editOperations.length > 0 && (
-                    <Tag color="warning" style={{ marginLeft: 10 }}>
-                      {editOperations.length} 项变更待提交
-                    </Tag>
-                  )}
-                </div>
-                <Pagination
-                    current={currentPage}
-                    pageSize={pageSize}
-                    total={999999}  // 设置一个大值，确保分页器可用
-                    onChange={handlePageChange}
-                    showSizeChanger={true}
-                    pageSizeOptions={['200', '500', '1000']}
-                    onShowSizeChange={handlePageSizeChange}
-                    showQuickJumper={false}
-                    showTotal={undefined}
-                    showLessItems={true}
-                    simple={false}
-                    // 简化的按钮控制：
-                    // 当当前页面不是第一页时，上一页按钮可用
-                    // 当当前列表数据数量等于当前分页数量时，下一页按钮可用
-                    // 通过itemRender自定义显示仅四个按钮
-                    itemRender={(current, type, element) => {
-                      if (type === 'prev') {
-                        return React.cloneElement(element as React.ReactElement, { 
-                          disabled: currentPage === 1 
-                        });
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }} className="table-container-wrapper">
+            <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <Table
+                  columns={columns}
+                  dataSource={data}
+                  pagination={{
+                    current: currentPage,
+                    pageSize: pageSize,
+                    pageSizeOptions: [],
+                    showSizeChanger: false,
+                    showQuickJumper: false,
+                    showTotal: () => '',
+                    hideOnSinglePage: false,
+                    showLessItems: true,
+                    showTitle: false,
+                    showPrevNextJumpers: true,
+                    // 自定义分页按钮
+                    itemRender: (_, type, originalElement) => {
+                      // 根据当前状态控制按钮
+                      const isFirstPage = currentPage === 1;
+                      const hasMoreData = data.length === pageSize;
+                       
+                      // 仅显示四个导航按钮，隐藏其他元素
+                      if (type === 'prev' || type === 'next' || type === 'jump-prev' || type === 'jump-next') {
+                        // 确保originalElement存在
+                        if (!originalElement) return null;
+                         
+                        // 第一页和上一页按钮仅在不是第一页时可用
+                        if ((type === 'prev' || type === 'jump-prev') && isFirstPage) {
+                          // @ts-ignore 临时忽略类型检查，确保功能正常
+                          return React.cloneElement(originalElement as React.ReactElement, { disabled: true });
+                        }
+                        // 下一页和最后一页按钮仅在列表数据数量等于分页数量时可用
+                        if ((type === 'next' || type === 'jump-next') && !hasMoreData) {
+                          // @ts-ignore 临时忽略类型检查，确保功能正常
+                          return React.cloneElement(originalElement as React.ReactElement, { disabled: true });
+                        }
+                        return originalElement;
                       }
-                      if (type === 'next') {
-                        return React.cloneElement(element as React.ReactElement, { 
-                          disabled: data.length < pageSize 
-                        });
+                      return null;
+                    },
+                    // 设置足够大的total值以确保分页功能正常工作
+                    total: 999999999
+                  }}
+                  size="small"
+                  scroll={{ y: 600 }}
+                  className="table-data-table"
+                  style={{ border: '1px solid #d9d9d9', borderRadius: '6px', width: '100%' }}
+                  bordered={true}
+                  rowClassName={(record) => {
+                    if (!record || record.key === undefined) return 'table-row-with-border';
+                    const isSelected = selectedRowKeys.includes(record.key);
+                    return isSelected ? 'table-row-selected' : 'table-row-with-border';
+                  }}
+                  rowSelection={{
+                    selectedRowKeys,
+                    onChange: setSelectedRowKeys,
+                    getCheckboxProps: (record) => ({
+                      style: {
+                        backgroundColor: record && record.key !== undefined && selectedRowKeys.includes(record.key) ? '#e6f7ff' : 'transparent'
                       }
-                      if (type === 'page') {
-                        // 隐藏页码按钮
-                        return null;
+                    })
+                  }}
+                  onChange={handleTableChange}
+                  components={{
+                    body: {
+                      row: (props: any) => {
+                        const { className, style, ...restProps } = props;
+                        const isSelected = props.record && props.record.key !== undefined && selectedRowKeys.includes(props.record.key);
+                        return (
+                          <tr
+                            className={className}
+                            style={{
+                              ...style,
+                              backgroundColor: isSelected ? '#e6f7ff' : 'transparent',
+                              transition: 'background-color 0.3s'
+                            }}
+                            {...restProps}
+                          />
+                        );
                       }
-                      return element;
-                    }}
-                  />
+                    }
+                  }}
+                />
               </div>
             </div>
           </div>
@@ -1387,54 +1413,6 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           </div>
         )}
       </Card>
-      
-      {/* 下方固定操作栏 */}
-      <div style={{ 
-        marginTop: 16, 
-        padding: 12, 
-        backgroundColor: darkMode ? '#1a1a1a' : '#f5f5f5', 
-        border: '1px solid #d9d9d9',
-        borderRadius: 4,
-        display: 'flex',
-        gap: 8,
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}>
-        <Space>
-          <Button 
-            type="primary" 
-            icon={<PlusOutlined />} 
-            onClick={addNewRecord}
-          >
-            新增记录
-          </Button>
-          <Button 
-            danger 
-            icon={<DeleteOutlined />} 
-            onClick={deleteSelectedRecords}
-            disabled={selectedRowKeys.length === 0}
-          >
-            删除记录 ({selectedRowKeys.length})
-          </Button>
-        </Space>
-        
-        <Space>
-          <Button 
-            icon={<SaveOutlined />} 
-            onClick={submitChanges}
-            disabled={editOperations.length === 0}
-          >
-            提交变更 ({editOperations.length})
-          </Button>
-          <Button 
-            icon={<ReloadOutlined />} 
-            onClick={handleRefresh} 
-            loading={loading}
-          >
-            刷新
-          </Button>
-        </Space>
-      </div>
       
       {/* 详情模态框 - 使用新的RecordDetailModal组件 */}
       <RecordDetailModal

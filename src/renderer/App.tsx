@@ -649,7 +649,7 @@ const AppContent: React.FC = () => {
           </Sider>
         )}
         
-        <Content className={`main-content ${darkMode ? 'dark' : ''}`}>
+        <Content className={`main-content ${darkMode ? 'dark' : ''}`} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
           {(databaseTabs.length > 0 || queryTabs.length > 0) ? (
             <Tabs
               activeKey={activeTabKey}
@@ -658,7 +658,8 @@ const AppContent: React.FC = () => {
                 if (action === 'remove') handleTabClose(typeof e === 'string' ? e : '');
               }}
               type="editable-card"
-              className="database-tabs"
+              className="database-tabs navicat-tabs"
+              style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
             >
               {databaseTabs.map(tab => (
                 <TabPane 
@@ -666,13 +667,15 @@ const AppContent: React.FC = () => {
                   tab={<span><Badge status={tab.connection.isConnected ? 'success' : 'error'} offset={[-1, 8]} style={{ zIndex: 1 }} /><span>{tab.label}</span></span>}
                   closable={true}
                 >
-                  <DatabaseTabPanel
-                    connection={tab.connection}
-                    database={tab.database}
-                    type={tab.type}
-                    darkMode={darkMode}
-                    onTableSelect={handleTableSelect}
-                  />
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <DatabaseTabPanel
+                      connection={tab.connection}
+                      database={tab.database}
+                      type={tab.type}
+                      darkMode={darkMode}
+                      onTableSelect={handleTableSelect}
+                    />
+                  </div>
                 </TabPane>
               ))}
               
@@ -682,11 +685,13 @@ const AppContent: React.FC = () => {
                 tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
                 closable={true}
               >
-                <QueryPanel
-                  connection={tab.connection || activeConnection}
-                  database={tab.database || activeDatabase}
-                  darkMode={darkMode}
-                />
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <QueryPanel
+                    connection={tab.connection || activeConnection}
+                    database={tab.database || activeDatabase}
+                    darkMode={darkMode}
+                  />
+                </div>
               </TabPane>
             ))}
             
@@ -696,12 +701,14 @@ const AppContent: React.FC = () => {
                 tab={<span><TableOutlined style={{marginRight: 4}} />{tab.label}</span>}
                 closable={true}
               >
-                <TableDataPanel
-                  connection={tab.connection}
-                  database={tab.database}
-                  tableName={tab.tableName}
-                  darkMode={darkMode}
-                />
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <TableDataPanel
+                    connection={tab.connection}
+                    database={tab.database}
+                    tableName={tab.tableName}
+                    darkMode={darkMode}
+                  />
+                </div>
               </TabPane>
             ))}
           </Tabs>

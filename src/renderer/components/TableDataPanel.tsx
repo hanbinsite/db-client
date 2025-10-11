@@ -435,41 +435,11 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           }
         };
         
-        // 查询总数量的函数
-        const fetchTotalCount = async () => {
-          // 优化页面加载性能 - 默认加载时不获取总数量
-          // 只在有筛选条件时才获取总行数
-          if (filterClauses.length > 0) {
-            // 对COUNT查询进行优化，特别是对MySQL使用覆盖索引或限制计数
-            let shouldExecuteCount = true;
-            if (connection.type === 'mysql') {
-              // 使用EXPLAIN获取估计行数（适用于有WHERE条件的复杂查询）
-              const explainQuery = `EXPLAIN ${baseQuery}`;
-              console.log('SQL执行 - 执行计划分析:', explainQuery);
-              const explainResult = await window.electronAPI.executeQuery(poolId, explainQuery, []);
-              if (explainResult && explainResult.success && explainResult.data && explainResult.data.length > 0) {
-                const rowsEstimate = explainResult.data[0].rows || 0;
-                setTotal(rowsEstimate);
-                // 不需要再执行真实的COUNT查询
-                shouldExecuteCount = false;
-              }
-            }
-            
-            if (shouldExecuteCount) {
-              console.log('SQL执行 - 统计记录数:', countQuery);
-              const countResult = await window.electronAPI.executeQuery(poolId, countQuery, []);
-              if (countResult && countResult.success && countResult.data && countResult.data.length > 0) {
-                setTotal(countResult.data[0].count || 0);
-              }
-            }
-          } else {
-            // 默认加载时不设置总数量，提升页面初始化加载速度
-            setTotal(0);
-          }
-        };
+        // 不查询总行数，提升超大表加载性能
+        setTotal(0);
         
-        // 并行执行两个Promise
-        await Promise.all([fetchData(), fetchTotalCount()]);
+        // 只执行数据查询
+        await fetchData();
       } else {
         setError('获取表结构失败');
         console.error('表结构查询返回非预期结果:', JSON.stringify(tableStructureResult, null, 2));
@@ -1079,11 +1049,14 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                 <Pagination
                   current={currentPage}
                   pageSize={pageSize}
-                  total={total}
+                  total={0}
                   onChange={handlePageChange}
                   showSizeChanger
                   pageSizeOptions={['200', '500', '1000']}
                   onShowSizeChange={handlePageSizeChange}
+                  showQuickJumper={false}
+                  showTotal={() => ''}
+                  showLessItems
                 />
               </div>
             </div>

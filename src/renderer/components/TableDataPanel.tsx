@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Table, Pagination, Spin, Empty, Select, Space, Button, Input, InputNumber, Checkbox, Modal, Form, message, Tag } from 'antd';
 import { DatePicker, TimePicker } from 'antd';
 const { RangePicker } = DatePicker;
-import { ReloadOutlined, DatabaseOutlined, ColumnHeightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, FilterOutlined, DownloadOutlined, UploadOutlined, SwapRightOutlined, DatabaseFilled, EditOutlined } from '@ant-design/icons';
+import { ReloadOutlined, DatabaseOutlined, ColumnHeightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, FilterOutlined, DownloadOutlined, UploadOutlined, SwapRightOutlined, DatabaseFilled, EditOutlined, TableOutlined } from '@ant-design/icons';
 import { DatabaseConnection, TableColumn, DataEditOperation, TransactionConfig } from '../types';
 import RecordDetailModal from './RecordDetailModal';
 
@@ -44,6 +44,12 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
   const [selectedRecord, setSelectedRecord] = useState<any>(null);
   const [editingRecord, setEditingRecord] = useState<any>(null);
+  // 导出相关状态
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [showFormatModal, setShowFormatModal] = useState<boolean>(false);
+  const [exportType, setExportType] = useState<'all' | 'current' | null>(null);
+  const [exportFormat, setExportFormat] = useState<string>('csv');
+  const [exportLoading, setExportLoading] = useState<boolean>(false);
 
   // 根据字段类型渲染筛选控件
   const renderFilterControl = (column: TableColumn) => {
@@ -307,7 +313,7 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
     
     try {
       const poolId = connection.connectionId || connection.id;
-      
+      console.log("日志测试输出部分-----3");
       // 获取表结构 - 根据数据库类型使用不同的引号处理表名
       let tableIdentifier = '';
       if (connection.type === 'postgresql' || connection.type === 'gaussdb') {
@@ -317,13 +323,36 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
         // 其他数据库使用反引号
         tableIdentifier = `\`${database}\`.\`${tableName}\``;
       }
-      
-      // 第一步：加载表头信息（表结构）
-      const tableStructureResult = await window.electronAPI.getTableStructure(poolId, tableIdentifier);
+      console.log("日志测试输出部分-----4", tableIdentifier);
+      console.log(`超大表加载监控 - 表[${database}.${tableName}]即将调用getTableStructure方法，当前poolId: ${poolId}`);
+      // 第一步：加载表头信息（表结构）- 添加超时控制
+      let tableStructureResult;
+      try {
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]创建表结构查询Promise`);
+        // 为getTableStructure调用添加30秒超时控制
+        const getTableStructurePromise = window.electronAPI.getTableStructure(poolId, tableIdentifier);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`获取表结构超时: 超过30秒未完成`)), 30000)
+        );
+        
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]开始执行表结构查询，使用Promise.race进行超时控制`);
+        tableStructureResult = await Promise.race([
+          getTableStructurePromise,
+          timeoutPromise
+        ]);
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]表结构查询Promise完成，开始处理结果`);
+      } catch (structureError) {
+        console.error(`超大表加载监控 - 表[${database}.${tableName}]表结构查询异常:`, structureError);
+        throw new Error(`获取表结构失败: ${structureError instanceof Error ? structureError.message : String(structureError)}`);
+      }
       structureLoadTime = Date.now() - startTime;
       console.log(`超大表加载监控 - 表[${database}.${tableName}]表结构加载完成，耗时: ${structureLoadTime}ms`);
-      
+      console.log(`超大表加载监控 - 表结构查询结果类型: ${typeof tableStructureResult}, 是否包含success字段: ${tableStructureResult ? 'success' in tableStructureResult : '否'}`);
+      console.log(`超大表加载监控 - 表结构结果序列化: ${JSON.stringify(tableStructureResult).substring(0, 500)}...`);
       if (tableStructureResult && tableStructureResult.success && tableStructureResult.structure) {
+        console.log("日志测试输出部分---2");
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]表结构验证通过，开始处理表结构数据`);
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]表结构包含列数: ${tableStructureResult.structure.columns ? tableStructureResult.structure.columns.length : 0}`);
         const structure = tableStructureResult.structure;
         setTableStructure(structure.columns);
         setVisibleColumns(structure.columns.map((col: TableColumn) => col.name));
@@ -333,23 +362,23 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
         
         // 构建查询语句，包含筛选和排序
         // 对于超大数据表，实现选择性列查询以提高性能
-        let baseQuery = '';
+        let baseQuery = `SELECT * FROM \`${database}\`.\`${tableName}\``;
         let countQuery = `SELECT COUNT(*) as count FROM \`${database}\`.\`${tableName}\``;
         
         // 检查表是否有大量列或是否是超大表
-        const isLargeTable = structure.columns.length > 50 || (structure.rows && structure.rows > 100000);
+        // const isLargeTable = structure.columns.length > 50 || (structure.rows && structure.rows > 100000);
         
-        if (isLargeTable) {
-          console.log(`超大表加载监控 - 表[${database}.${tableName}]检测为大表，列数: ${structure.columns.length}，预估行数: ${structure.rows || '未知'}`);
+        // if (isLargeTable) {
+        //   console.log(`超大表加载监控 - 表[${database}.${tableName}]检测为大表，列数: ${structure.columns.length}，预估行数: ${structure.rows || '未知'}`);
           
-          // 对于大表，只选择前20列或主键+常用列
-           const selectedColumns = structure.columns.slice(0, 20).map((col: TableColumn) => `\`${col.name}\``).join(', ');
-          baseQuery = `SELECT ${selectedColumns} FROM \`${database}\`.\`${tableName}\``;
-          console.log(`超大表加载监控 - 表[${database}.${tableName}]使用选择性列查询，仅查询 ${selectedColumns.split(',').length} 列`);
-        } else {
-          // 对于普通表，查询所有列
-          baseQuery = `SELECT * FROM \`${database}\`.\`${tableName}\``;
-        }
+        //   // 对于大表，只选择前20列或主键+常用列
+        //    const selectedColumns = structure.columns.slice(0, 20).map((col: TableColumn) => `\`${col.name}\``).join(', ');
+        //   baseQuery = `SELECT ${selectedColumns} FROM \`${database}\`.\`${tableName}\``;
+        //   console.log(`超大表加载监控 - 表[${database}.${tableName}]使用选择性列查询，仅查询 ${selectedColumns.split(',').length} 列`);
+        // } else {
+        //   // 对于普通表，查询所有列
+        //   baseQuery = `SELECT * FROM \`${database}\`.\`${tableName}\``;
+        // }
         
         // 添加筛选条件
         const filterClauses: string[] = [];
@@ -393,18 +422,18 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
             filterClauses.push(`\`${column}\` LIKE '%${value}%'`);
           }
         });
-        
+        console.log('SQL执行 - 基础查询  1 :', baseQuery);
         if (filterClauses.length > 0) {
           const whereClause = ` WHERE ${filterClauses.join(' AND ')}`;
           baseQuery += whereClause;
           countQuery += whereClause;
         }
-        
+        console.log('SQL执行 - 基础查询  2 :', baseQuery);
         // 添加排序
         if (sortOrder) {
           baseQuery += ` ORDER BY \`${sortOrder.column}\` ${sortOrder.order === 'ascend' ? 'ASC' : 'DESC'}`;
         }
-        
+        console.log('SQL执行 - 基础查询  3 :', baseQuery);
         // 添加分页 - 强制限制首次渲染数据为200条，防止数据过多导致页面卡顿
         const offset = (actualPage - 1) * actualPageSize;
         baseQuery += ` LIMIT ${actualPageSize} OFFSET ${offset}`;
@@ -418,20 +447,43 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           queryStartTime = Date.now();
           console.log('SQL执行 - 查询数据:', baseQuery);
           console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询开始执行`);
-          const dataResult = await window.electronAPI.executeQuery(poolId, baseQuery, []);
-          queryEndTime = Date.now();
-          console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询执行完成，耗时: ${queryEndTime - queryStartTime}ms，返回数据条数: ${dataResult && dataResult.success && Array.isArray(dataResult.data) ? dataResult.data.length : 0}`);
           
-          if (dataResult && dataResult.success && Array.isArray(dataResult.data)) {
-            // 为每个数据项添加唯一key
-            const processedData = dataResult.data.map((item: any, index: number) => ({
-              ...item,
-              key: index + offset
-            }));
-            setData(processedData);
-          } else {
-            setError('查询表数据失败');
-            console.error('表数据查询返回非预期结果:', JSON.stringify(dataResult, null, 2));
+          try {
+            // 添加查询超时处理
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`查询超时: 超过30秒未完成`)), 30000)
+            );
+            
+            console.log(`超大表加载监控 - 表[${database}.${tableName}]执行查询前检查: 数据库类型=${connection.type}, poolId=${poolId}`);
+            console.log(`超大表加载监控 - 表[${database}.${tableName}]执行查询SQL长度: ${baseQuery.length}字符`);
+            
+            // 使用Promise.race实现查询超时控制
+            const dataResult = await Promise.race([
+              window.electronAPI.executeQuery(poolId, baseQuery, []),
+              timeoutPromise
+            ]);
+            
+            queryEndTime = Date.now();
+            console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询执行完成，耗时: ${queryEndTime - queryStartTime}ms，返回数据条数: ${dataResult && dataResult.success && Array.isArray(dataResult.data) ? dataResult.data.length : 0}`);
+            console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询结果类型: ${typeof dataResult}, 是否包含success字段: ${dataResult ? 'success' in dataResult : '否'}`);
+            
+            if (dataResult && dataResult.success && Array.isArray(dataResult.data)) {
+              console.log(`超大表加载监控 - 表[${database}.${tableName}]数据处理开始，原始数据长度: ${dataResult.data.length}`);
+              // 为每个数据项添加唯一key
+              const processedData = dataResult.data.map((item: any, index: number) => ({
+                ...item,
+                key: index + offset
+              }));
+              setData(processedData);
+              console.log(`超大表加载监控 - 表[${database}.${tableName}]数据处理完成，设置数据成功`);
+            } else {
+              setError('查询表数据失败');
+              console.error('表数据查询返回非预期结果:', JSON.stringify(dataResult, null, 2));
+              console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询失败: ${dataResult ? (dataResult.error || '未知错误') : '无返回结果'}`);
+            }
+          } catch (queryError) {
+            console.error(`超大表加载监控 - 表[${database}.${tableName}]数据查询异常:`, queryError);
+            setError(`数据查询失败: ${queryError instanceof Error ? queryError.message : String(queryError)}`);
           }
         };
         
@@ -439,20 +491,25 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
         setTotal(0);
         
         // 只执行数据查询
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]开始执行数据查询函数`);
         await fetchData();
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]数据查询函数执行完毕`);
       } else {
         setError('获取表结构失败');
         console.error('表结构查询返回非预期结果:', JSON.stringify(tableStructureResult, null, 2));
         console.log(`超大表加载监控 - 表[${database}.${tableName}]加载失败: 获取表结构失败`);
+        console.log(`超大表加载监控 - 表[${database}.${tableName}]表结构结果详细信息: 成功=${tableStructureResult?.success}, 结构=${tableStructureResult?.structure ? '存在' : '不存在'}`);
       }
     } catch (err) {
       const errorMessage = `加载表数据失败: ${err instanceof Error ? err.message : String(err)}`;
       setError(errorMessage);
       console.error('加载表数据异常:', err);
       console.log(`超大表加载监控 - 表[${database}.${tableName}]加载异常: ${errorMessage}`);
+      console.log(`超大表加载监控 - 表[${database}.${tableName}]异常详情:`, JSON.stringify(err instanceof Error ? { message: err.message, stack: err.stack } : err, null, 2));
     } finally {
       const totalLoadTime = Date.now() - startTime;
       console.log(`超大表加载监控 - 表[${database}.${tableName}]加载流程结束，总耗时: ${totalLoadTime}ms，表结构加载耗时: ${structureLoadTime}ms，数据查询耗时: ${queryEndTime - queryStartTime}ms`);
+      console.log(`超大表加载监控 - 表[${database}.${tableName}]最终状态: loading=${loading}, error=${error}, 数据量=${data.length}`);
       setLoading(false);
     }
   };
@@ -678,14 +735,10 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
       }
     });
 
-    if (newRecord && newRecord.key !== undefined) {
-      setData([newRecord, ...data]);
-      setEditingKey(newRecord.key);
-      setEditCache({
-        ...editCache,
-        [newRecord.key]: { ...newRecord }
-      });
-    }
+    // 打开详情模态框以编辑新记录
+    setSelectedRecord(newRecord);
+    setEditingRecord({...newRecord}); // 创建可编辑的副本
+    setShowDetailModal(true);
   };
 
   // 删除选中记录
@@ -736,10 +789,170 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
 
   // 导出数据
   const exportData = () => {
-    message.info('导出数据功能待实现');
+    setShowExportModal(true);
   };
 
-  // 处理页面大小变化
+  // 处理导出类型选择
+  const handleExportTypeSelect = async (type: 'all' | 'current' | 'cancel') => {
+    setShowExportModal(false);
+    if (type === 'cancel') {
+      // 重置导出格式为默认值
+      setExportFormat('csv');
+      return;
+    }
+
+    setExportType(type);
+    setShowFormatModal(true);
+  };
+
+  // 选择导出格式（不立即执行）
+  const handleFormatSelect = (format: string) => {
+    setExportFormat(format);
+  };
+
+  // 确认导出格式并执行导出
+  const confirmExportFormat = async () => {
+    setShowFormatModal(false);
+    await performExport();
+  };
+
+  // 处理导出格式模态框取消
+  const handleFormatModalCancel = () => {
+    setShowFormatModal(false);
+    // 重置导出格式为默认值
+    setExportFormat('csv');
+  };
+
+  // 执行导出操作
+  const performExport = async () => {
+    if (!connection || !connection.isConnected || !window.electronAPI) {
+      message.error('数据库未连接或Electron API不可用');
+      return;
+    }
+
+    setExportLoading(true);
+    try {
+      // 获取保存文件路径
+      const defaultFileName = `${database}-${tableName}.${exportFormat}`;
+      const savePathResult = await window.electronAPI.showSaveDialog(defaultFileName, exportFormat);
+      
+      if (!savePathResult || savePathResult.canceled || !savePathResult.filePath) {
+        message.warning('导出已取消');
+        return;
+      }
+      
+      const savePath = savePathResult.filePath;
+      const poolId = connection.connectionId || connection.id;
+      
+      if (exportType === 'current') {
+        // 导出当前列表数据
+        console.log(`导出当前${data.length}条记录到${savePath}`);
+        
+        // 构建带筛选条件的查询语句
+        let query = `SELECT * FROM \`${database}\`.\`${tableName}\``;
+        
+        // 添加筛选条件
+        const filterClauses: string[] = [];
+        Object.entries(filterConditions).forEach(([column, value]) => {
+          if (!value) return;
+          
+          // 查找对应的列信息
+          const columnInfo = tableStructure.find(col => col.name === column);
+          if (!columnInfo) return;
+          
+          const type = columnInfo.type.toLowerCase();
+          
+          // 处理日期时间范围（格式：start||end）
+          if ((type.includes('datetime') || (type.includes('date') && type.includes('time'))) && value.includes('||')) {
+            const [start, end] = value.split('||');
+            if (start && end) {
+              filterClauses.push(`\`${column}\` BETWEEN '${start}' AND '${end}'`);
+            }
+          }
+          // 处理日期范围（格式：start||end）
+          else if (type.includes('date') && !type.includes('time') && value.includes('||')) {
+            const [start, end] = value.split('||');
+            if (start && end) {
+              filterClauses.push(`\`${column}\` BETWEEN '${start}' AND '${end}'`);
+            }
+          }
+          // 处理数值类型
+          else if (type.includes('int') || type.includes('float') || type.includes('double') || type.includes('decimal')) {
+            const numValue = parseFloat(value);
+            if (!isNaN(numValue)) {
+              filterClauses.push(`\`${column}\` = ${numValue}`);
+            }
+          }
+          // 处理布尔类型
+          else if (type.includes('boolean')) {
+            filterClauses.push(`\`${column}\` = ${value === 'true' ? 'TRUE' : 'FALSE'}`);
+          }
+          // 默认文本模糊查询
+          else {
+            filterClauses.push(`\`${column}\` LIKE '%${value}%'`);
+          }
+        });
+        
+        if (filterClauses.length > 0) {
+          const whereClause = ` WHERE ${filterClauses.join(' AND ')}`;
+          query += whereClause;
+        }
+        
+        // 添加排序
+        if (sortOrder) {
+          query += ` ORDER BY \`${sortOrder.column}\` ${sortOrder.order === 'ascend' ? 'ASC' : 'DESC'}`;
+        }
+        
+        // 添加分页限制（只导出当前页数据）
+        const offset = (currentPage - 1) * pageSize;
+        query += ` LIMIT ${pageSize} OFFSET ${offset}`;
+        
+        // 导出查询结果
+        const exportResult = await window.electronAPI.exportQueryResult(poolId, query, exportFormat);
+        
+        if (exportResult && exportResult.success) {
+          // 将数据写入文件
+          const writeResult = await window.electronAPI.writeExportFile(savePath, exportResult.data, exportFormat, connection?.type);
+          
+          if (writeResult && writeResult.success) {
+            message.success(`数据导出成功，已保存至：${savePath}`);
+          } else {
+            throw new Error(`文件写入失败: ${writeResult?.error || '未知错误'}`);
+          }
+        } else {
+          throw new Error(`数据导出失败: ${exportResult?.error || '未知错误'}`);
+        }
+      } else if (exportType === 'all') {
+        // 导出全部数据
+        console.log(`导出表${database}.${tableName}的全部数据到${savePath}`);
+        
+        // 使用tableData导出方法，可以支持流式查询
+        const exportResult = await window.electronAPI.exportTableData(
+          poolId, 
+          `\`${database}\`.\`${tableName}\``, 
+          exportFormat
+        );
+        
+        if (exportResult && exportResult.success) {
+          // 将数据写入文件
+          const writeResult = await window.electronAPI.writeExportFile(savePath, exportResult.data, exportFormat, connection?.type);
+          
+          if (writeResult && writeResult.success) {
+            message.success(`全部数据导出成功，已保存至：${savePath}`);
+          } else {
+            throw new Error(`文件写入失败: ${writeResult?.error || '未知错误'}`);
+          }
+        } else {
+          throw new Error(`全部数据导出失败: ${exportResult?.error || '未知错误'}`);
+        }
+      }
+    } catch (error) {
+      message.error(`导出数据失败: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('导出数据异常:', error);
+    } finally {
+      setExportLoading(false);
+    }
+  };// 处理页面大小变化
   const handlePageSizeChange = (current: number, size: number) => {
     setPageSize(size);
     setCurrentPage(1);
@@ -912,6 +1125,91 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           </Space>
         </div>
 
+        {/* 导出类型选择弹窗 */}
+        <Modal
+          title="导出数据"
+          open={showExportModal}
+          footer={null}
+          onCancel={() => setShowExportModal(false)}
+        >
+          <div style={{ padding: 20 }}>
+            <p style={{ marginBottom: 20 }}>请选择要导出的数据范围：</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <Button 
+                type="default" 
+                onClick={() => handleExportTypeSelect('all')}
+                icon={<DatabaseOutlined />}
+              >
+                全部数据
+              </Button>
+              <Button 
+                type="default" 
+                onClick={() => handleExportTypeSelect('current')}
+                icon={<TableOutlined />}
+              >
+                当前 {data.length} 条记录
+              </Button>
+              <Button 
+                danger 
+                onClick={() => handleExportTypeSelect('cancel')}
+              >
+                取消
+              </Button>
+            </div>
+          </div>
+        </Modal>
+
+        {/* 导出格式选择弹窗 */}
+        <Modal
+          title="选择导出格式"
+          open={showFormatModal}
+          footer={null}
+          onCancel={handleFormatModalCancel}
+        >
+          <div style={{ padding: 20 }}>
+            <p style={{ marginBottom: 20 }}>请选择导出文件格式：</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+              {['csv', 'txt', 'json', 'xml', 'xlsx', 'xls', 'sql'].map(format => (
+                <Button 
+                  key={format} 
+                  type={exportFormat === format ? 'primary' : 'default'} 
+                  onClick={() => handleFormatSelect(format)}
+                  block
+                >
+                  {format.toUpperCase()}
+                </Button>
+              ))}
+            </div>
+            <div style={{ marginTop: 20, textAlign: 'center' }}>
+              <Space>
+                <Button danger onClick={handleFormatModalCancel}>
+                  取消
+                </Button>
+                <Button type="primary" onClick={confirmExportFormat}>
+                  确定
+                </Button>
+              </Space>
+            </div>
+          </div>
+        </Modal>
+
+        {/* 导出加载中状态 */}
+        {exportLoading && (
+          <Modal
+            title="正在导出数据"
+            open={true}
+            footer={null}
+            closable={false}
+          >
+            <div style={{ textAlign: 'center', padding: 20 }}>
+              <Spin size="large" />
+              <p style={{ marginTop: 20 }}>
+                {exportType === 'all' ? '正在查询并导出全部数据...' : '正在导出当前数据...'}
+              </p>
+            </div>
+          </Modal>
+        )}
+
         {/* 筛选面板 */}
         {filterMode && (
           <div style={{ 
@@ -1047,17 +1345,39 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                   )}
                 </div>
                 <Pagination
-                  current={currentPage}
-                  pageSize={pageSize}
-                  total={0}
-                  onChange={handlePageChange}
-                  showSizeChanger
-                  pageSizeOptions={['200', '500', '1000']}
-                  onShowSizeChange={handlePageSizeChange}
-                  showQuickJumper={false}
-                  showTotal={() => ''}
-                  showLessItems
-                />
+                    current={currentPage}
+                    pageSize={pageSize}
+                    total={999999}  // 设置一个大值，确保分页器可用
+                    onChange={handlePageChange}
+                    showSizeChanger={true}
+                    pageSizeOptions={['200', '500', '1000']}
+                    onShowSizeChange={handlePageSizeChange}
+                    showQuickJumper={false}
+                    showTotal={undefined}
+                    showLessItems={true}
+                    simple={false}
+                    // 简化的按钮控制：
+                    // 当当前页面不是第一页时，上一页按钮可用
+                    // 当当前列表数据数量等于当前分页数量时，下一页按钮可用
+                    // 通过itemRender自定义显示仅四个按钮
+                    itemRender={(current, type, element) => {
+                      if (type === 'prev') {
+                        return React.cloneElement(element as React.ReactElement, { 
+                          disabled: currentPage === 1 
+                        });
+                      }
+                      if (type === 'next') {
+                        return React.cloneElement(element as React.ReactElement, { 
+                          disabled: data.length < pageSize 
+                        });
+                      }
+                      if (type === 'page') {
+                        // 隐藏页码按钮
+                        return null;
+                      }
+                      return element;
+                    }}
+                  />
               </div>
             </div>
           </div>

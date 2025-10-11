@@ -42,27 +42,45 @@ const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
     form.validateFields()
       .then(values => {
         try {
-          // 查找主键列
-          const primaryKeyColumn = tableStructure.find(col => col.primaryKey);
-          if (!primaryKeyColumn) {
-            message.error('找不到主键列，无法更新数据');
-            return;
+          // 判断是新增记录还是更新记录
+          // 通过检查record.key是否以'new_'开头来判断
+          const isNewRecord = record && record.key && record.key.startsWith('new_');
+
+          if (isNewRecord) {
+            // 创建新增操作
+            const insertOperation: DataEditOperation = {
+              type: 'insert',
+              table: tableName || 'unknown',
+              data: editingRecord
+            };
+
+            // 添加到编辑操作列表
+            onSave([...editOperations, insertOperation]);
+            message.success('记录已添加，请提交变更以应用更新');
+            onClose();
+          } else {
+            // 查找主键列
+            const primaryKeyColumn = tableStructure.find(col => col.primaryKey);
+            if (!primaryKeyColumn) {
+              message.error('找不到主键列，无法更新数据');
+              return;
+            }
+
+            // 创建更新操作
+            const updateOperation: DataEditOperation = {
+              type: 'update',
+              table: tableName || 'unknown',
+              data: editingRecord,
+              where: { [primaryKeyColumn.name]: record[primaryKeyColumn.name] }
+            };
+
+            // 添加到编辑操作列表
+            onSave([...editOperations, updateOperation]);
+            message.success('记录已更新，请提交变更以应用更新');
+            onClose();
           }
-
-          // 创建更新操作，使用正确的DataEditOperation类型
-          const updateOperation: DataEditOperation = {
-            type: 'update',
-            table: tableName || 'unknown',
-            data: editingRecord,
-            where: { [primaryKeyColumn.name]: record[primaryKeyColumn.name] }
-          };
-
-          // 添加到编辑操作列表
-          onSave([...editOperations, updateOperation]);
-          message.success('记录已更新，请提交变更以应用更新');
-          onClose();
         } catch (err) {
-          message.error(`更新记录失败: ${err instanceof Error ? err.message : String(err)}`);
+          message.error(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
         }
       })
       .catch(info => {
@@ -149,7 +167,7 @@ const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
 
   return (
     <Modal
-      title="记录详情"
+      title={record && record.key && record.key.startsWith('new_') ? "新增记录" : "记录详情"}
       open={visible}
       onCancel={onClose}
       footer={[

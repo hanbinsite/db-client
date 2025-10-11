@@ -50,6 +50,12 @@ declare global {
       testConnection: (config: any) => Promise<any>;
       closeTestConnection: (config: any) => Promise<any>;
       
+      // 导出功能
+      exportQueryResult: (connectionId: string, query: string, format: string) => Promise<any>;
+      exportTableData: (connectionId: string, tableName: string, format: string) => Promise<any>;
+      showSaveDialog: (defaultFileName: string, format: string) => Promise<any>;
+  writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
+      
       // 菜单事件监听
       onMenuNewConnection: (callback: () => void) => void;
       removeAllListeners: (channel: string) => void;

@@ -725,6 +725,10 @@ const AppContent: React.FC = () => {
                       type={tab.type}
                       darkMode={darkMode}
                       onTableSelect={handleTableSelect}
+                      onTableDesign={(connection, database, tableName) => {
+                        // 空实现，或者根据需要添加实际功能
+                        console.log('Table design requested:', tableName);
+                      }}
                     />
                   </div>
                 </TabPane>

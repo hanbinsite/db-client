@@ -1386,7 +1386,9 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
               </div>
             </div>
           </div>
-        )}
+        ): <div style={{ textAlign: 'center', padding: '60px 0', color: '#f5222d' }}>
+            <Empty description="无数据" />
+          </div>}
       </Card>
       
       {/* 详情模态框 - 使用新的RecordDetailModal组件 */}

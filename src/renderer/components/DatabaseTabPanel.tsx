@@ -1014,7 +1014,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                     刷新
                   </Button>
                 </div>
-<<<<<<< HEAD
                 <Table
                   dataSource={filterListBySearch(tableList, tableSearchTerm)}
                   columns={tableColumns}
@@ -1027,24 +1026,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                   bordered
                   style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                 />
-=======
-                <div style={{ height: 'calc(100vh - 465px)', position: 'relative' }}>
-                  <div style={{ overflowX: 'auto' }}>
-                    <Table
-                      dataSource={filterListBySearch(tableList, tableSearchTerm)}
-                      columns={tableColumns}
-                      pagination={false}
-                      size="small"
-                      rowKey="name"
-                      className="table-list-table"
-                      locale={{ emptyText: '暂无表数据' }}
-                      bordered
-                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px', minWidth: '100%' }}
-                      scroll={{ y: 'calc(100vh - 465px)', x: 'max-content' }}
-                    />
-                  </div>
-                </div>
->>>>>>> 9db458843e71704eefa7d62d47522aa2367ae386
               </Card>
             </div>
           )

@@ -1020,11 +1020,11 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#f5222d' }}>
             <Empty description={error} />
           </div>
-        ) : data.length > 0 ? (
+        ) : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <Table
               columns={columns}
-              dataSource={data}
+              dataSource={data.length > 0 ? data : []}
               pagination={false}
               size="small"
               scroll={{ x: 'max-content', y: 'calc(100vh - 400px)' }}
@@ -1046,6 +1046,9 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                 })
               }}
               onChange={handleTableChange}
+              locale={{
+                emptyText: () => <Empty description="表中暂无数据" />
+              }}
               components={{
                 body: {
                   row: (props: any) => {
@@ -1087,10 +1090,6 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                 />
               </div>
             </div>
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', padding: '60px 0' }}>
-            <Empty description="表中暂无数据" />
           </div>
         )}
       </Card>

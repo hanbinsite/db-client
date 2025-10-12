@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input, Dropdown, Menu, Modal } from 'antd';
+import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input, Dropdown, Menu, Modal, message } from 'antd';
 import { DatabaseOutlined, TableOutlined, BarChartOutlined, CodeOutlined, EyeOutlined, PlayCircleOutlined, FunctionOutlined } from '@ant-design/icons';
 import { DatabaseConnection, DatabaseType } from '../types';
 import QueryPanel from './QueryPanel';
+import TableStructurePanel from './TableStructurePanel';
 import './DatabaseTabPanel.css';
 
 const { TabPane } = Tabs;
@@ -12,6 +13,7 @@ interface DatabaseTabPanelProps {
   type: DatabaseType;
   darkMode: boolean;
   onTableSelect: (tableName: string) => void;
+  onTableDesign: (connection: DatabaseConnection, database: string, tableName: string) => void;
 }
 
 const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
@@ -19,7 +21,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
   database,
   type,
   darkMode,
-  onTableSelect
+  onTableSelect,
+  onTableDesign
 }) => {
   const [activeTab, setActiveTab] = useState('tables');
   const [loading, setLoading] = useState(false);
@@ -342,7 +345,11 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
   };
 
   // 表选择函数
+  const [selectedTable, setSelectedTable] = useState<any>(null);
+  
   const handleTableSelect = (tableName: string) => {
+    const table = tableList.find(t => t.name === tableName);
+    setSelectedTable(table);
     if (onTableSelect) {
       onTableSelect(tableName);
     }
@@ -563,7 +570,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
           查看数据
         </Menu.Item>
         <Menu.Item onClick={() => handleAlterTable(tableName)}>
-          修改结构
+          设计表
         </Menu.Item>
         <Menu.Item onClick={() => handleTruncateTable(tableName)}>
           清空表
@@ -582,8 +589,8 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
         <Menu.Item onClick={() => handleViewSelect(viewName)}>
           查看数据
         </Menu.Item>
-        <Menu.Item onClick={() => handleAlterView(viewName)}>
-          修改结构
+        <Menu.Item onClick={() => handleAlterTable(viewName)}>
+          设计表
         </Menu.Item>
         <Menu.Item onClick={() => handleDropView(viewName)} danger>
           删除视图
@@ -641,7 +648,13 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
   };
 
   const handleAlterTable = (tableName: string) => {
-    console.log('Alter table:', tableName);
+    if (!connection || !connection.isConnected) {
+      message.error('数据库未连接');
+      return;
+    }
+    
+    // 使用onTableDesign回调创建新的表设计标签页
+    onTableDesign(connection, database, tableName);
   };
 
   const handleAlterView = (viewName: string) => {
@@ -1006,6 +1019,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                   columns={tableColumns}
                   pagination={false}
                   size="small"
+                  scroll={{ x: 'max-content', y: 'calc(100vh - 530px)' }}
                   rowKey="name"
                   className="table-list-table"
                   locale={{ emptyText: '暂无表数据' }}

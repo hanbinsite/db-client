@@ -30,7 +30,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 移除监听器
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
-  }
+  },
+  
+  // 导出功能
+  exportQueryResult: (connectionId: string, query: string, format: string) => 
+    ipcRenderer.invoke('export-query-result', { connectionId, query, format }),
+  exportTableData: (connectionId: string, tableName: string, format: string) => 
+    ipcRenderer.invoke('export-table-data', { connectionId, tableName, format }),
+  showSaveDialog: (defaultFileName: string, format: string) => 
+    ipcRenderer.invoke('show-save-dialog', { defaultFileName, format }),
+  writeExportFile: (filePath: string, data: any, format: string, dbType?: string) =>
+    ipcRenderer.invoke('write-export-file', { filePath, data, format, dbType })
 });
 
 // 类型定义在 src/renderer/types.ts 中

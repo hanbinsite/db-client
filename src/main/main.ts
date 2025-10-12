@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, nativeImage, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
@@ -65,7 +65,9 @@ class DBClientApp {
       titleBarStyle: 'default',
       show: false,
       title: 'DB-CLIENT',
-      icon: icon
+      icon: icon,
+      fullscreenable: true,
+      autoHideMenuBar: false
     });
 
     if (process.env.NODE_ENV === 'development') {
@@ -78,6 +80,7 @@ class DBClientApp {
     }
 
     this.mainWindow.once('ready-to-show', () => {
+      this.mainWindow?.maximize();
       this.mainWindow?.show();
     });
   }
@@ -88,6 +91,254 @@ class DBClientApp {
   }
 
   private setupIpcHandlers(): void {
+    // 文件保存对话框处理器
+    ipcMain.handle('show-save-dialog', async (event, options) => {
+      try {
+        // 构建保存对话框选项，确保默认文件名和过滤器正确设置
+        const dialogOptions = {
+          title: '导出数据',
+          defaultPath: options.defaultFileName,
+          filters: [
+            {
+              name: `${options.format.toUpperCase()}文件`,
+              extensions: [options.format]
+            }
+          ],
+          properties: ['createDirectory' as const, 'showOverwriteConfirmation' as const]
+        };
+        
+        const result = await dialog.showSaveDialog(this.mainWindow!, dialogOptions);
+        return result;
+      } catch (error) {
+        console.error('显示保存对话框失败:', error);
+        return { canceled: true };
+      }
+    });
+
+    // 导出查询结果处理器
+    ipcMain.handle('export-query-result', async (event, { connectionId, query, format }) => {
+      try {
+        // 执行查询获取数据
+        const result = await this.databaseService.executeQuery(connectionId, query);
+        
+        if (!result.success) {
+          throw new Error(result.error || '查询执行失败');
+        }
+        
+        return { success: true, data: result.data };
+      } catch (error) {
+        console.error('导出查询结果失败:', error);
+        return { success: false, error: (error as Error).message };
+      }
+    });
+
+    // 文件写入处理器
+    ipcMain.handle('write-export-file', async (event, { filePath, data, format, dbType }) => {
+      try {
+        // 确保目录存在
+        const fs = require('fs');
+        const path = require('path');
+        const directory = path.dirname(filePath);
+        
+        if (!fs.existsSync(directory)) {
+          fs.mkdirSync(directory, { recursive: true });
+        }
+        
+        // 根据格式格式化数据并写入文件
+        if (format === 'json') {
+          fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        } else if (format === 'csv') {
+          // 简单的CSV格式化，添加BOM头解决中文乱码问题
+          if (data && data.length > 0) {
+            const headers = Object.keys(data[0]);
+            const csvRows = [headers.join(',')];
+            
+            for (const row of data) {
+              const values = headers.map(header => {
+                const value = row[header];
+                // 处理包含逗号或引号的值
+                if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+                  return `"${value.replace(/"/g, '""')}"`;
+                }
+                return value;
+              });
+              csvRows.push(values.join(','));
+            }
+            
+            // 添加BOM头确保中文显示正常
+            const csvContent = '\uFEFF' + csvRows.join('\n');
+            fs.writeFileSync(filePath, csvContent, 'utf8');
+          }
+        } else if (format === 'xlsx') {
+          // 使用xlsx库创建Excel文件
+          const XLSX = require('xlsx');
+          
+          if (data && data.length > 0) {
+            // 创建工作簿
+            const workbook = XLSX.utils.book_new();
+            
+            // 转换数据为工作表
+            const worksheet = XLSX.utils.json_to_sheet(data);
+            
+            // 添加工作表到工作簿
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+            
+            // 生成Excel文件内容
+            const excelBuffer = XLSX.write(workbook, {
+              bookType: 'xlsx',
+              type: 'buffer'
+            });
+            
+            // 使用Node.js的fs写入文件
+            fs.writeFileSync(filePath, excelBuffer);
+          }
+        } else if (format === 'sql') {
+          // SQL格式处理：根据数据库类型生成INSERT语句
+          if (data && data.length > 0) {
+            const headers = Object.keys(data[0]);
+            const baseName = path.basename(filePath, '.sql');
+            // 解析文件名，将"database-table"格式转换为"database.table"格式
+            const tableName = baseName.includes('-') ? baseName.replace('-', '.') : baseName;
+            const sqlInserts: string[] = [];
+            
+            // 根据数据库类型选择合适的SQL语法
+            for (const row of data) {
+              const values = headers.map(header => {
+                let value = row[header];
+                
+                // 处理NULL值
+                if (value === null || value === undefined) {
+                  return 'NULL';
+                }
+                
+                // 根据数据库类型处理字符串值
+                if (typeof value === 'string') {
+                  // 转义单引号
+                  value = value.replace(/'/g, "''");
+                  
+                  // 根据数据库类型添加引号
+                  return `'${value}'`;
+                }
+                
+                // 处理日期时间类型
+                if (value instanceof Date) {
+                  if (dbType === 'oracle' || dbType === 'gaussdb') {
+                    return `TO_DATE('${value.toISOString().slice(0, 19).replace('T', ' ')}', 'YYYY-MM-DD HH24:MI:SS')`;
+                  } else {
+                    return `'${value.toISOString().slice(0, 19).replace('T', ' ')}'`;
+                  }
+                }
+                
+                // 处理布尔类型
+                if (typeof value === 'boolean') {
+                  if (dbType === 'mysql') {
+                    return value ? '1' : '0';
+                  } else if (dbType === 'postgresql' || dbType === 'gaussdb') {
+                    return value ? 'TRUE' : 'FALSE';
+                  } else {
+                    return value ? '1' : '0';
+                  }
+                }
+                
+                // 其他类型直接返回
+                return String(value);
+              });
+              
+              // 生成INSERT语句
+              let insertStatement = `INSERT INTO ${tableName} (${headers.join(', ')}) VALUES (${values.join(', ')});`;
+              
+              // 根据数据库类型添加特定语法
+              if (dbType === 'postgresql' || dbType === 'gaussdb') {
+                // PostgreSQL支持ON CONFLICT语法
+                insertStatement += ' ON CONFLICT DO NOTHING';
+              }
+              
+              sqlInserts.push(insertStatement);
+            }
+            
+            // 合并所有INSERT语句并写入文件
+            const sqlContent = sqlInserts.join('\n');
+            fs.writeFileSync(filePath, sqlContent, 'utf8');
+          }
+        } else if (format === 'xml') {
+          // XML格式处理：生成符合标准的XML文件
+          if (data && data.length > 0) {
+            // 获取根节点名称（从文件名推断）
+            const baseName = path.basename(filePath, '.xml');
+            const rootElement = baseName.includes('-') ? baseName.replace('-', '_') : baseName;
+            const headers = Object.keys(data[0]);
+            
+            // 构建XML文档
+            let xmlContent = '<?xml version="1.0" encoding="UTF-8"?>' + '\n';
+            xmlContent += `<${rootElement}>` + '\n';
+            
+            // 遍历数据生成XML元素
+            for (const row of data) {
+              xmlContent += '  <record>' + '\n';
+              
+              for (const header of headers) {
+                const value = row[header];
+                const safeHeader = header.replace(/[^a-zA-Z0-9_]/g, '_');
+                
+                if (value === null || value === undefined) {
+                  xmlContent += `    <${safeHeader} xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>` + '\n';
+                } else if (typeof value === 'string') {
+                  // 转义XML特殊字符
+                  const escapedValue = value
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&apos;');
+                  xmlContent += `    <${safeHeader}>${escapedValue}</${safeHeader}>` + '\n';
+                } else if (value instanceof Date) {
+                  xmlContent += `    <${safeHeader}>${value.toISOString()}</${safeHeader}>` + '\n';
+                } else {
+                  xmlContent += `    <${safeHeader}>${String(value)}</${safeHeader}>` + '\n';
+                }
+              }
+              
+              xmlContent += '  </record>' + '\n';
+            }
+            
+            xmlContent += `</${rootElement}>`;
+            
+            // 写入XML文件
+            fs.writeFileSync(filePath, xmlContent, 'utf8');
+          }
+        } else {
+          // 默认为JSON格式
+          fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        }
+        
+        return { success: true };
+      } catch (error) {
+        console.error('写入导出文件失败:', error);
+        return { success: false, error: (error as Error).message };
+      }
+    });
+
+    // 导出表数据处理器
+    ipcMain.handle('export-table-data', async (event, { connectionId, tableName, format }) => {
+      try {
+        // 构建查询语句获取整个表的数据
+        const query = `SELECT * FROM ${tableName}`;
+        
+        // 执行查询获取数据
+        const result = await this.databaseService.executeQuery(connectionId, query);
+        
+        if (!result.success) {
+          throw new Error(result.error || '查询执行失败');
+        }
+        
+        // 这里返回查询结果，实际的文件保存逻辑由渲染进程处理
+        return { success: true, data: result.data };
+      } catch (error) {
+        console.error('导出表数据失败:', error);
+        return { success: false, error: (error as Error).message };
+      }
+    });
+
     // 连接存储相关处理器
     ipcMain.handle('get-all-connections', async () => {
       return await this.handleGetAllConnections();

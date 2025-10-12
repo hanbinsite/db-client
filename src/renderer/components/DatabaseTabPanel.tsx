@@ -1014,6 +1014,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                     刷新
                   </Button>
                 </div>
+<<<<<<< HEAD
                 <Table
                   dataSource={filterListBySearch(tableList, tableSearchTerm)}
                   columns={tableColumns}
@@ -1026,6 +1027,24 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                   bordered
                   style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
                 />
+=======
+                <div style={{ height: 'calc(100vh - 465px)', position: 'relative' }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <Table
+                      dataSource={filterListBySearch(tableList, tableSearchTerm)}
+                      columns={tableColumns}
+                      pagination={false}
+                      size="small"
+                      rowKey="name"
+                      className="table-list-table"
+                      locale={{ emptyText: '暂无表数据' }}
+                      bordered
+                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px', minWidth: '100%' }}
+                      scroll={{ y: 'calc(100vh - 465px)', x: 'max-content' }}
+                    />
+                  </div>
+                </div>
+>>>>>>> 9db458843e71704eefa7d62d47522aa2367ae386
               </Card>
             </div>
           )
@@ -1059,16 +1078,19 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                         刷新
                       </Button>
                     </div>
-                    <Table
-                      dataSource={filterListBySearch(viewList, viewSearchTerm)}
-                      columns={viewColumns}
-                      pagination={false}
-                      size="small"
-                      rowKey="name"
-                      locale={{ emptyText: '暂无视图数据' }}
-                      bordered
-                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
-                    />
+                    <div style={{ height: '400px', overflow: 'hidden' }}>
+                      <Table
+                        dataSource={filterListBySearch(viewList, viewSearchTerm)}
+                        columns={viewColumns}
+                        pagination={false}
+                        size="small"
+                        rowKey="name"
+                        locale={{ emptyText: '暂无视图数据' }}
+                        bordered
+                        style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
+                        scroll={{ y: 'calc(100% - 2px)' }}
+                      />
+                    </div>
                   </Card>
                 </div>
               )
@@ -1100,16 +1122,19 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                         刷新
                       </Button>
                     </div>
-                    <Table
-                      dataSource={filterListBySearch(procedureList, procedureSearchTerm)}
-                      columns={procedureColumns}
-                      pagination={false}
-                      size="small"
-                      rowKey="name"
-                      locale={{ emptyText: '暂无存储过程数据' }}
-                      bordered
-                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
-                    />
+                    <div style={{ height: '400px', overflow: 'hidden' }}>
+                      <Table
+                        dataSource={filterListBySearch(procedureList, procedureSearchTerm)}
+                        columns={procedureColumns}
+                        pagination={false}
+                        size="small"
+                        rowKey="name"
+                        locale={{ emptyText: '暂无存储过程数据' }}
+                        bordered
+                        style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
+                        scroll={{ y: 'calc(100% - 2px)' }}
+                      />
+                    </div>
                   </Card>
                 </div>
               )
@@ -1141,16 +1166,19 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
                         刷新
                       </Button>
                     </div>
-                    <Table
-                      dataSource={filterListBySearch(functionList, functionSearchTerm)}
-                      columns={functionColumns}
-                      pagination={false}
-                      size="small"
-                      rowKey="name"
-                      locale={{ emptyText: '暂无函数数据' }}
-                      bordered
-                      style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
-                    />
+                    <div style={{ height: '400px', overflow: 'hidden' }}>
+                      <Table
+                        dataSource={filterListBySearch(functionList, functionSearchTerm)}
+                        columns={functionColumns}
+                        pagination={false}
+                        size="small"
+                        rowKey="name"
+                        locale={{ emptyText: '暂无函数数据' }}
+                        bordered
+                        style={{ border: '1px solid #f0f0f0', borderRadius: '2px' }}
+                        scroll={{ y: 'calc(100% - 2px)' }}
+                      />
+                    </div>
                   </Card>
                 </div>
               )
@@ -1167,13 +1195,16 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
             children: (
               <div className="database-tab-content">
                 <Card title="最近查询" size="small">
-                  <Table
-                    dataSource={recentQueries}
-                    columns={queryColumns}
-                    pagination={false}
-                    size="small"
-                    rowKey="query"
-                  />
+                  <div style={{ height: '400px', overflow: 'hidden' }}>
+                    <Table
+                      dataSource={recentQueries}
+                      columns={queryColumns}
+                      pagination={false}
+                      size="small"
+                      rowKey="query"
+                      scroll={{ y: 'calc(100% - 2px)' }}
+                    />
+                  </div>
                 </Card>
               </div>
             )

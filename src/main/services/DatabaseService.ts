@@ -656,10 +656,9 @@ class MySQLConnection extends BaseDatabaseConnection {
 
   async getTableStructure(tableName: string): Promise<TableStructure> {
     try {
-      // 获取表结构信息
+      // 优化：对于MySQL数据库，优先获取表结构信息，不阻塞主线程
       const [columnsResult] = await this.connection.execute(`DESCRIBE ${tableName}`);
       const [indexesResult] = await this.connection.execute(`SHOW INDEX FROM ${tableName}`);
-      const [rowCountResult] = await this.connection.execute(`SELECT COUNT(*) as count FROM ${tableName}`);
       
       const columns = columnsResult.map((col: any) => ({
         name: col.Field,
@@ -675,7 +674,28 @@ class MySQLConnection extends BaseDatabaseConnection {
         unique: idx.Non_unique === 0
       }));
 
-      const rowCount = rowCountResult[0]?.count || 0;
+      // 优化：对于超大表，不直接执行COUNT(*)，而是返回0
+      // 在实际使用中，如果需要行数，可以单独异步获取
+      const rowCount = 0;
+
+      // 异步方式获取表大小信息，但不阻塞主流程
+      setTimeout(async () => {
+        try {
+          // 使用information_schema获取表大小估计值，比COUNT(*)更高效
+          const [sizeResult] = await this.connection.execute(
+            `SELECT table_rows, data_length + index_length as size_bytes 
+             FROM information_schema.tables 
+             WHERE table_schema = DATABASE() AND table_name = ?`,
+            [tableName]
+          );
+          // 这里可以记录大小信息，但不影响主返回值
+          if (sizeResult && sizeResult.length > 0) {
+            console.log(`表 ${tableName} 估计行数: ${sizeResult[0]?.table_rows}, 大小: ${(sizeResult[0]?.size_bytes / (1024 * 1024)).toFixed(2)}MB`);
+          }
+        } catch (err) {
+          console.error(`获取表大小信息失败:`, err);
+        }
+      }, 0);
 
       return {
         name: tableName,
@@ -884,8 +904,6 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
         WHERE tablename = $1
       `, [tableName]);
       
-      const rowCountResult = await this.connection.query(`SELECT COUNT(*) as count FROM ${tableName}`);
-      
       const columns = columnsResult.rows.map((col: any) => ({
         name: col.column_name,
         type: col.data_type,
@@ -898,7 +916,29 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
         definition: idx.indexdef
       }));
 
-      const rowCount = parseInt(rowCountResult.rows[0]?.count || '0');
+      // 优化：对于超大表，不直接执行COUNT(*)，而是返回0
+      // 在实际使用中，如果需要行数，可以单独异步获取
+      const rowCount = 0;
+      
+      // 异步方式获取表大小信息，但不阻塞主流程
+      setTimeout(async () => {
+        try {
+          // 使用PostgreSQL的pg_stat_user_tables视图获取表统计信息，比COUNT(*)更高效
+          const [sizeResult] = await this.connection.query(`
+            SELECT n_live_tup as estimated_rows 
+            FROM pg_stat_user_tables 
+            WHERE schemaname = $1 AND relname = $2
+            LIMIT 1
+          `, [schema, tableName]);
+          
+          // 这里可以记录大小信息，但不影响主返回值
+          if (sizeResult && sizeResult.rows && sizeResult.rows.length > 0) {
+            console.log(`表 ${schema}.${tableName} 估计行数: ${sizeResult.rows[0]?.estimated_rows}`);
+          }
+        } catch (err) {
+          console.error(`获取PostgreSQL表统计信息失败:`, err);
+        }
+      }, 0);
 
       return {
         name: tableName,

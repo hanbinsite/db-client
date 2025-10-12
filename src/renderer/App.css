@@ -34,7 +34,11 @@
   display: flex;
   align-items: center;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-  z-index: 10;
+  z-index: 100;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 
 .app-header.dark {
@@ -78,6 +82,11 @@
 .app-toolbar-container {
   border-bottom: 1px solid #e8e8e8;
   background: #fafafa;
+  position: fixed;
+  top: 48px;
+  left: 0;
+  right: 0;
+  z-index: 99;
 }
 
 .app-layout.dark .app-toolbar-container {
@@ -151,6 +160,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  margin-top: 96px; /* 48px header + 48px toolbar */
 }
 
 .connection-sider {
@@ -187,6 +197,26 @@
 
 .app-layout.dark .main-content {
   background: #141414;
+}
+
+/* 表格行选中样式 */
+.table-row-selected {
+  background-color: #e6f7ff !important;
+  transition: background-color 0.2s ease;
+}
+
+.app-layout.dark .table-row-selected {
+  background-color: #1890ff33 !important;
+  transition: background-color 0.2s ease;
+}
+
+/* 表格行边框样式 */
+.table-row-with-border {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.app-layout.dark .table-row-with-border {
+  border-bottom-color: #333;
 }
 
 /* 欢迎面板 */

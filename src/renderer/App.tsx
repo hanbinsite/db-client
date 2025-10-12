@@ -700,7 +700,7 @@ const AppContent: React.FC = () => {
           </Sider>
         )}
         
-        <Content className={`main-content ${darkMode ? 'dark' : ''}`}>
+        <Content className={`main-content ${darkMode ? 'dark' : ''}`} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
           {(databaseTabs.length > 0 || queryTabs.length > 0) ? (
             <Tabs
               activeKey={activeTabKey}
@@ -709,66 +709,58 @@ const AppContent: React.FC = () => {
                 if (action === 'remove') handleTabClose(typeof e === 'string' ? e : '');
               }}
               type="editable-card"
-              className="database-tabs"
+              className="database-tabs navicat-tabs"
+              style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
             >
               {databaseTabs.map(tab => (
                 <TabPane 
-                key={tab.key} 
-                tab={<span><Badge status={tab.connection.isConnected ? 'success' : 'error'} offset={[-1, 8]} style={{ zIndex: 1 }} /><span>{tab.label}</span></span>}
-                closable={true}
-              >
-                <DatabaseTabPanel
-                  connection={tab.connection}
-                  database={tab.database}
-                  type={tab.type}
-                  darkMode={darkMode}
-                  onTableSelect={handleTableSelect}
-                  onTableDesign={handleTableDesign}
-                />
-              </TabPane>
+                  key={tab.key} 
+                  tab={<span><Badge status={tab.connection.isConnected ? 'success' : 'error'} offset={[-1, 8]} style={{ zIndex: 1 }} /><span>{tab.label}</span></span>}
+                  closable={true}
+                >
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <DatabaseTabPanel
+                      connection={tab.connection}
+                      database={tab.database}
+                      type={tab.type}
+                      darkMode={darkMode}
+                      onTableSelect={handleTableSelect}
+                    />
+                  </div>
+                </TabPane>
               ))}
               
               {queryTabs.map(tab => (
-            <TabPane 
-              key={tab.key} 
-              tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
-              closable={true}
-            >
-              <QueryPanel
-                connection={tab.connection || activeConnection}
-                database={tab.database || activeDatabase}
-                darkMode={darkMode}
-              />
-            </TabPane>
-          ))}
-          
-          {tableDesignTabs.map(tab => (
-            <TabPane 
-              key={tab.key} 
-              tab={<span><AlignLeftOutlined style={{marginRight: 4}} />{tab.label}</span>}
-              closable={true}
-            >
-              <TableStructurePanel
-                connection={tab.connection}
-                database={tab.database}
-                table={tab.tableName}
-              />
-            </TabPane>
-          ))}
-          
-          {tableDataTabs.map(tab => (
-              <TabPane 
-                key={tab.key} 
-                tab={<span><TableOutlined style={{marginRight: 4}} />{tab.label}</span>}
-                closable={true}
-              >
-                <TableDataPanel
-                  connection={tab.connection}
-                  database={tab.database}
-                  tableName={tab.tableName}
-                  darkMode={darkMode}
-                />
-              </TabPane>
+                <TabPane 
+                  key={tab.key} 
+                  tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
+                  closable={true}
+                >
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <QueryPanel
+                      connection={tab.connection || activeConnection}
+                      database={tab.database || activeDatabase}
+                      darkMode={darkMode}
+                    />
+                  </div>
+                </TabPane>
+              ))}
+              
+              {tableDataTabs.map(tab => (
+                <TabPane 
+                  key={tab.key} 
+                  tab={<span><TableOutlined style={{marginRight: 4}} />{tab.label}</span>}
+                  closable={true}
+                >
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <TableDataPanel
+                      connection={tab.connection}
+                      database={tab.database}
+                      tableName={tab.tableName}
+                      darkMode={darkMode}
+                    />
+                  </div>
+                </TabPane>
             ))}
           </Tabs>
           ) : (

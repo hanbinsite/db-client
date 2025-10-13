@@ -1318,11 +1318,11 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#f5222d' }}>
             <Empty description={error} />
           </div>
-        ) : data.length > 0 ? (
+        ) : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <Table
               columns={columns}
-              dataSource={data}
+              dataSource={data.length > 0 ? data : []}
               pagination={false}
               size="small"
               scroll={{ x: 'max-content', y: 'calc(100vh - 400px)' }}
@@ -1363,6 +1363,13 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
                   }
                 }
               }}
+              locale={{
+                emptyText: (
+                  <div style={{ padding: '40px 0', textAlign: 'center', color: '#8c8c8c' }}>
+                    <Empty description="无数据" />
+                  </div>
+                )
+              }}
             />
             
             <div style={{ marginTop: 'auto' }}>
@@ -1386,9 +1393,7 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
               </div>
             </div>
           </div>
-        ): <div style={{ textAlign: 'center', padding: '60px 0', color: '#f5222d' }}>
-            <Empty description="无数据" />
-          </div>}
+        )}
       </Card>
       
       {/* 详情模态框 - 使用新的RecordDetailModal组件 */}

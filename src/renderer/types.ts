@@ -107,6 +107,7 @@ export interface TableIndex {
   columns: string[];
   unique: boolean;
   type: string;
+  comment: string;
 }
 
 // 外键信息

@@ -36,8 +36,10 @@ export interface TableField {
 export interface TableIndex {
   name: string;
   type: string; // PRIMARY, UNIQUE, INDEX, FULLTEXT, SPATIAL
+  method?: string; // BTREE, HASH 等索引方法
   columns: string[];
   comment: string;
+  unique: boolean;
 }
 
 /**
@@ -148,8 +150,8 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
       const result = await window.electronAPI.executeQuery(poolId, query, params);
       
       if (!result || !result.success) {
-        return { success: false, data: [], error: result?.error || '查询执行失败' };
-      }
+          return { success: false, data: [], error: result?.error || '查询执行失败' };
+        }
       
       let rows: any[] = [];
       if (Array.isArray(result.data)) {
@@ -182,14 +184,63 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
           key = 'PRI';
         }
         
+        // 获取字段类型和列类型
+        const dataType = row.DATA_TYPE || row.data_type || '';
+        const columnType = row.COLUMN_TYPE || row.column_type || '';
+        
+        // 从column_type中提取长度信息，适用于所有类型（如int(11), varchar(255)等）
+        let length: number | undefined;
+        const typeMatch = columnType.match(/^([a-zA-Z]+)(?:\((\d+)(?:,(\d+))?\))?$/i);
+        if (typeMatch && typeMatch[2]) {
+          length = parseInt(typeMatch[2], 10);
+        } 
+        // 如果从column_type中没有提取到长度，则使用系统表中的相应字段
+        else if (row.length != null) {
+          length = Number(row.length);
+        } else if (row.CHARACTER_MAXIMUM_LENGTH != null) {
+          length = Number(row.CHARACTER_MAXIMUM_LENGTH);
+        } else if (row.NUMERIC_PRECISION != null) {
+          // 对于数值类型，如果没有CHARACTER_MAXIMUM_LENGTH，尝试使用NUMERIC_PRECISION
+          length = Number(row.NUMERIC_PRECISION);
+        } else if (row.numeric_precision != null) {
+          length = Number(row.numeric_precision);
+        }
+        
+        // 处理小数位
+        let decimal: number | undefined;
+        if (typeMatch && typeMatch[3]) {
+          decimal = parseInt(typeMatch[3], 10);
+        } else if (row.decimal_places != null) {
+          decimal = Number(row.decimal_places);
+        } else if (row.NUMERIC_SCALE != null) {
+          decimal = Number(row.NUMERIC_SCALE);
+        } else if (row.numeric_scale != null) {
+          decimal = Number(row.numeric_scale);
+        }
+        
+        // 对于数值类型，如果没有显式设置length但有decimal，根据MySQL的行为设置默认长度
+        // 这是为了确保int、bigint等类型的字段能够显示正确的长度
+        if (['int', 'bigint', 'smallint', 'tinyint', 'mediumint', 'float', 'double', 'decimal'].includes(dataType.toLowerCase()) && 
+            length === undefined) {
+          // 设置常见数值类型的默认长度
+          const defaultLengths: Record<string, number> = {
+            'tinyint': 4,
+            'smallint': 6,
+            'mediumint': 9,
+            'int': 11,
+            'bigint': 20,
+            'float': 10,
+            'double': 22,
+            'decimal': 10
+          };
+          length = defaultLengths[dataType.toLowerCase()] || 11;
+        }
         // 优先使用大写字段名，因为MySQL返回的是大写
         const processedField = {
           name: row.COLUMN_NAME || row.column_name || '',
-          type: row.DATA_TYPE || row.data_type || row.COLUMN_TYPE || row.column_type || '',
-          // 保持为number类型，不进行toString()转换
-          length: row.length != null ? Number(row.length) : (row.CHARACTER_MAXIMUM_LENGTH != null ? Number(row.CHARACTER_MAXIMUM_LENGTH) : undefined),
-          // 保持为number类型，不进行toString()转换
-          decimal: row.decimal_places != null ? Number(row.decimal_places) : (row.NUMERIC_SCALE != null ? Number(row.NUMERIC_SCALE) : undefined),
+          type: dataType.toLowerCase(),
+          length: length,
+          decimal: decimal,
           // 确保notNull字段有明确的布尔值
           notNull: row.not_null !== undefined ? !!row.not_null : (row.IS_NULLABLE === 'NO'),
           // MySQL不直接支持virtual字段，默认设为false
@@ -217,18 +268,12 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
   
   async getIndexes(poolId: string, database: string, table: string): Promise<TableQueryResult<TableIndex[]>> {
     try {
-      const query = `
-        SELECT 
-          index_name, 
-          index_type, 
-          group_concat(column_name ORDER BY seq_in_index SEPARATOR ', ') AS columns, 
-          index_comment
-        FROM information_schema.statistics 
-        WHERE table_schema = ? AND table_name = ? 
-        GROUP BY index_name
-      `;
-      const params = [database, table];
-      const result = await window.electronAPI.executeQuery(poolId, query, params);
+      // 先切换到正确的数据库
+      await window.electronAPI.executeQuery(poolId, `USE ${database}`);
+      
+      // 使用SHOW INDEX语句获取更完整的索引信息
+      const query = `SHOW INDEX FROM \`${table}\``;
+      const result = await window.electronAPI.executeQuery(poolId, query, []);
       
       if (!result || !result.success) {
         return { success: false, data: [], error: result?.error || '查询执行失败' };
@@ -245,11 +290,55 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
         return { success: true, data: [] };
       }
       
-      const processedIndexes = rows.map((row: any) => ({
-        name: row.index_name || row.name,
-        type: row.index_type || 'INDEX',
-        columns: row.columns ? row.columns.split(', ') : [],
-        comment: row.index_comment || ''
+      // 按索引名分组处理
+      const indexMap = new Map<string, {columns: string[], type: string, method: string, comment: string, unique: boolean}>();
+      
+      rows.forEach((row: any) => {
+        // 标准化字段名
+        const keyName = row.Key_name || row.key_name || '';
+        const columnName = row.Column_name || row.column_name || '';
+        const indexType = row.Index_type || row.index_type || 'BTREE';
+        const nonUnique = row.Non_unique !== undefined ? row.Non_unique : (row.non_unique !== undefined ? row.non_unique : 1);
+        const comment = row.Comment || row.comment || '';
+        const indexComment = row.Index_comment || row.index_comment || '';
+        
+        // 确定索引类型
+        let type = 'INDEX'; // 默认类型
+        if (keyName.toUpperCase() === 'PRIMARY') {
+          type = 'PRIMARY';
+        } else if (nonUnique === 0) {
+          type = 'UNIQUE';
+        } else if (comment.toUpperCase().includes('FULLTEXT')) {
+          type = 'FULLTEXT';
+        } else if (comment.toUpperCase().includes('SPATIAL')) {
+          type = 'SPATIAL';
+        }
+        
+        // 索引方法
+        const method = indexType.toUpperCase();
+        
+        if (!indexMap.has(keyName)) {
+          indexMap.set(keyName, {
+            columns: [columnName],
+            type: type,
+            method: method,
+            comment: indexComment,
+            unique: nonUnique === 0
+          });
+        } else {
+          const indexInfo = indexMap.get(keyName)!;
+          indexInfo.columns.push(columnName);
+        }
+      });
+      
+      // 转换为TableIndex数组
+      const processedIndexes = Array.from(indexMap.entries()).map(([name, info]) => ({
+        name: name,
+        type: info.type,
+        method: info.method, // 添加索引方法字段
+        columns: info.columns,
+        comment: info.comment,
+        unique: info.unique
       }));
       
       return { success: true, data: processedIndexes };
@@ -263,7 +352,7 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
     try {
       const query = `
         SELECT 
-          constraint_name, 
+          rc.constraint_name, 
           group_concat(kcu.column_name ORDER BY kcu.ordinal_position SEPARATOR ', ') AS columns, 
           referenced_table_name, 
           group_concat(kcu.referenced_column_name ORDER BY kcu.ordinal_position SEPARATOR ', ') AS referenced_columns,
@@ -272,7 +361,7 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
         FROM information_schema.referential_constraints rc
         JOIN information_schema.key_column_usage kcu ON rc.constraint_name = kcu.constraint_name AND rc.constraint_schema = kcu.constraint_schema
         WHERE rc.constraint_schema = ? AND kcu.table_name = ?
-        GROUP BY constraint_name, referenced_table_name, delete_rule, update_rule
+        GROUP BY rc.constraint_name, referenced_table_name, delete_rule, update_rule
       `;
       const params = [database, table];
       const result = await window.electronAPI.executeQuery(poolId, query, params);
@@ -313,7 +402,7 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
       const query = `
         SELECT 
           constraint_name, 
-          check_clause AS condition
+          check_clause AS \`condition\`
         FROM information_schema.check_constraints
         WHERE constraint_schema = ? AND table_name = ?
       `;
@@ -443,24 +532,53 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
         WHERE table_schema = ? AND table_name = ?
       `;
       const params = [database, table];
+      console.log(`MySQL获取表注释 - 执行查询: ${query}`);
+      console.log(`MySQL获取表注释 - 查询参数: [${database}, ${table}]`);
       const result = await window.electronAPI.executeQuery(poolId, query, params);
       
-      if (!result || !result.success) {
+      if (!result) {
+        console.error('MySQL获取表注释 - 查询结果为空');
+        return { success: false, data: '', error: '查询结果为空' };
+      }
+      
+      if (!result.success) {
+        console.error('MySQL获取表注释 - 查询失败:', result.error);
         return { success: false, data: '', error: result?.error || '查询执行失败' };
       }
+      
+      console.log('MySQL获取表注释 - 查询结果:', JSON.stringify(result, null, 2));
       
       let rows: any[] = [];
       if (Array.isArray(result.data)) {
         rows = result.data;
+        console.log('MySQL获取表注释 - 直接从data获取行数据，行数:', rows.length);
       } else if (result.data && Array.isArray(result.data.rows)) {
         rows = result.data.rows;
+        console.log('MySQL获取表注释 - 从data.rows获取行数据，行数:', rows.length);
+      } else {
+        console.log('MySQL获取表注释 - 结果数据格式:', typeof result.data);
       }
       
       if (rows.length === 0) {
+        console.log('MySQL获取表注释 - 未找到表注释数据');
         return { success: true, data: '' };
       }
       
-      return { success: true, data: rows[0].table_comment || '' };
+      console.log('MySQL获取表注释 - 找到的表注释行数据:', JSON.stringify(rows[0], null, 2));
+      
+      // 处理大小写敏感性问题
+      let commentValue = '';
+      if (rows[0].table_comment) {
+        commentValue = rows[0].table_comment;
+        console.log('MySQL获取表注释 - 通过小写table_comment找到值:', commentValue);
+      } else if (rows[0].TABLE_COMMENT) {
+        commentValue = rows[0].TABLE_COMMENT;
+        console.log('MySQL获取表注释 - 通过大写TABLE_COMMENT找到值:', commentValue);
+      }
+      
+      console.log('MySQL获取表注释 - 最终表注释值:', commentValue);
+      
+      return { success: true, data: commentValue || '' };
     } catch (error) {
       console.error('MySQL获取表注释异常:', error);
       return { success: false, data: '', error: `查询过程出错: ${(error as Error).message}` };
@@ -584,7 +702,8 @@ export class PostgreSQLTableStructureStrategy implements TableStructureStrategy 
         name: row.index_name || row.name,
         type: row.index_type || 'INDEX',
         columns: row.columns ? row.columns.split(', ') : [],
-        comment: row.index_comment || row.description || ''
+        comment: row.index_comment || row.description || '',
+        unique: (row.index_type || '').toUpperCase() === 'UNIQUE' || (row.type || '').toUpperCase() === 'UNIQUE'
       }));
       
       return { success: true, data: processedIndexes };
@@ -785,23 +904,42 @@ export class PostgreSQLTableStructureStrategy implements TableStructureStrategy 
   
   async getComment(poolId: string, database: string, table: string): Promise<TableQueryResult<string>> {
     try {
+      // 确保数据库名不为空，默认为'public'
+      const schemaName = database || 'public';
+      
       const query = `
-        SELECT obj_description(oid) AS table_comment
-        FROM pg_class
-        WHERE relname = ? AND relkind = 'r'
+        SELECT obj_description(c.oid) AS table_comment
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = ? AND c.relkind = 'r' AND n.nspname = ?
       `;
-      const params = [table];
+      const params = [table, schemaName];
       const result = await window.electronAPI.executeQuery(poolId, query, params);
       
-      if (!result || !result.success) {
+      console.log(`PostgreSQL获取表注释 - 执行查询: ${query}`);
+      console.log(`PostgreSQL获取表注释 - 查询参数: [${table}, ${schemaName}]`);
+      
+      if (!result) {
+        console.error('PostgreSQL获取表注释 - 查询结果为空');
+        return { success: false, data: '', error: '查询结果为空' };
+      }
+      
+      if (!result.success) {
+        console.error('PostgreSQL获取表注释 - 查询失败:', result.error);
         return { success: false, data: '', error: result?.error || '查询执行失败' };
       }
+      
+      console.log('PostgreSQL获取表注释 - 查询结果:', JSON.stringify(result, null, 2));
       
       let rows: any[] = [];
       if (Array.isArray(result.data)) {
         rows = result.data;
+        console.log('PostgreSQL获取表注释 - 直接从data获取行数据，行数:', rows.length);
       } else if (result.data && Array.isArray(result.data.rows)) {
         rows = result.data.rows;
+        console.log('PostgreSQL获取表注释 - 从data.rows获取行数据，行数:', rows.length);
+      } else {
+        console.log('PostgreSQL获取表注释 - 结果数据格式:', typeof result.data);
       }
       
       if (rows.length === 0) {
@@ -926,7 +1064,8 @@ export class OracleTableStructureStrategy implements TableStructureStrategy {
         name: row.index_name || row.name,
         type: row.index_type || row.uniqueness || 'INDEX',
         columns: row.columns ? row.columns.split(', ') : [],
-        comment: row.index_comment || row.comments || ''
+        comment: row.index_comment || row.comments || '',
+        unique: (row.uniqueness || '').toUpperCase() === 'UNIQUE' || (row.index_type || '').toUpperCase() === 'UNIQUE'
       }));
       
       return { success: true, data: processedIndexes };
@@ -1180,19 +1319,50 @@ export class SQLiteTableStructureStrategy implements TableStructureStrategy {
       // SQLite的index_list只返回索引名称，需要进一步查询每个索引的列信息
       const processedIndexes: TableIndex[] = [];
       for (const row of rows) {
-        const indexInfoQuery = `PRAGMA index_info(${row.name})`;
+        // 安全地处理索引名称，避免SQL注入
+        const indexName = row.name || '';
+        if (!indexName) continue;
+        
+        const indexInfoQuery = `PRAGMA index_info('${indexName.replace(/'/g, "''")}')`;
         const indexInfoResult = await window.electronAPI.executeQuery(poolId, indexInfoQuery, []);
         
-        if (indexInfoResult && indexInfoResult.success && Array.isArray(indexInfoResult.data)) {
-          const columns = indexInfoResult.data.map((col: any) => col.name);
+        if (indexInfoResult && indexInfoResult.success) {
+          let indexRows: any[] = [];
+          if (Array.isArray(indexInfoResult.data)) {
+            indexRows = indexInfoResult.data;
+          } else if (indexInfoResult.data && Array.isArray(indexInfoResult.data.rows)) {
+            indexRows = indexInfoResult.data.rows;
+          }
+          
+          // 确保索引行数据正确
+          if (!Array.isArray(indexRows)) {
+            console.warn(`索引${indexName}的列信息格式不正确:`, indexInfoResult.data);
+            continue;
+          }
+          
+          const columns = indexRows.map((col: any) => col.name || '').filter((name: string) => name);
           processedIndexes.push({
-            name: row.name,
+            name: indexName,
             type: row.unique ? 'UNIQUE' : 'INDEX',
             columns: columns,
             comment: '' // SQLite不支持索引注释
+            , unique: row.unique === true
+          });
+        } else {
+          console.warn(`获取索引${indexName}信息失败:`, indexInfoResult?.error);
+          // 即使获取索引列信息失败，也添加索引基本信息
+          processedIndexes.push({
+            name: indexName,
+            type: row.unique ? 'UNIQUE' : 'INDEX',
+            columns: [],
+            comment: '',
+            unique: row.unique === true
           });
         }
       }
+      
+      // 记录处理后的索引数量以便调试
+      console.log(`SQLite表${table}处理后的索引数量:`, processedIndexes.length);
       
       return { success: true, data: processedIndexes };
     } catch (error) {
@@ -1355,6 +1525,35 @@ export class TableStructureStrategyFactory {
 }
 
 /**
+ * 表结构数据类型定义
+ */
+export type TableStructureDataType = 'fields' | 'indexes' | 'foreignKeys' | 'checks' | 'triggers' | 'options' | 'comment';
+
+/**
+ * 表结构数据加载状态
+ */
+export interface TableStructureLoadingStatus {
+  fields: boolean;
+  indexes: boolean;
+  foreignKeys: boolean;
+  checks: boolean;
+  triggers: boolean;
+  options: boolean;
+  comment: boolean;
+}
+
+/**
+ * 表结构数据加载结果
+ */
+export interface ProgressiveTableStructureResult {
+  success: boolean;
+  data: Partial<TableInfo>;
+  loadingStatus?: TableStructureLoadingStatus;
+  error?: string;
+  completedTypes: TableStructureDataType[];
+}
+
+/**
  * 获取完整的表结构信息
  * @param connection 数据库连接对象
  * @param database 数据库名称
@@ -1413,6 +1612,188 @@ export const getCompleteTableStructure = async (
 };
 
 /**
+ * 渐进式获取表结构信息（优化版）
+ * @param connection 数据库连接对象
+ * @param database 数据库名称
+ * @param table 表名称
+ * @param onPartialResult 部分结果回调函数
+ * @param priorityTypes 优先加载的数据类型
+ * @returns Promise<TableQueryResult<TableInfo>> 表结构信息查询结果
+ */
+export const getProgressiveTableStructure = async (
+  connection: DatabaseConnection,
+  database: string,
+  table: string,
+  onPartialResult?: (result: ProgressiveTableStructureResult) => void,
+  priorityTypes: TableStructureDataType[] = ['fields', 'indexes', 'foreignKeys']
+): Promise<TableQueryResult<TableInfo>> => {
+  try {
+    if (!connection || !database || !table || !connection.isConnected) {
+      return { success: false, data: {} as TableInfo, error: '连接信息不完整或未连接' };
+    }
+    
+    const poolId = connection.connectionId || connection.id;
+    const strategy = TableStructureStrategyFactory.getStrategy(connection);
+    
+    // 初始化结果对象
+    const tableInfo: TableInfo = {
+      name: table,
+      comment: '',
+      options: {},
+      fields: [],
+      indexes: [],
+      foreignKeys: [],
+      checks: [],
+      triggers: []
+    };
+    
+    // 初始化加载状态
+    const loadingStatus: TableStructureLoadingStatus = {
+      fields: true,
+      indexes: true,
+      foreignKeys: true,
+      checks: true,
+      triggers: true,
+      options: true,
+      comment: true
+    };
+    
+    const completedTypes: TableStructureDataType[] = [];
+    
+    // 优先加载的查询
+    const priorityQueries: Array<{type: TableStructureDataType, query: Promise<any>}> = [];
+    const secondaryQueries: Array<{type: TableStructureDataType, query: Promise<any>}> = [];
+    
+    // 根据优先级分组查询
+    const queryMap = {
+      fields: strategy.getFields(poolId, database, table),
+      indexes: strategy.getIndexes(poolId, database, table),
+      foreignKeys: strategy.getForeignKeys(poolId, database, table),
+      checks: strategy.getChecks(poolId, database, table),
+      triggers: strategy.getTriggers(poolId, database, table),
+      options: strategy.getOptions(poolId, database, table),
+      comment: strategy.getComment(poolId, database, table)
+    };
+    
+    // 如果priorityTypes只有一个类型，说明是在刷新特定类型的数据，只执行该类型的查询
+    if (priorityTypes.length === 1) {
+      const dataType = priorityTypes[0];
+      // 直接添加查询，因为queryMap中已经为所有TableStructureDataType定义了对应的查询函数
+      priorityQueries.push({ type: dataType, query: queryMap[dataType] });
+    } else {
+      // 否则按正常的优先级分组
+      Object.entries(queryMap).forEach(([type, query]) => {
+        const dataType = type as TableStructureDataType;
+        if (priorityTypes.includes(dataType)) {
+          priorityQueries.push({ type: dataType, query });
+        } else {
+          secondaryQueries.push({ type: dataType, query });
+        }
+      });
+    }
+    
+    // 处理查询结果的函数
+    const processQueryResult = async (type: TableStructureDataType, result: any) => {
+      try {
+        const queryResult = await result;
+        loadingStatus[type] = false;
+        
+        if (queryResult.success) {
+          switch (type) {
+            case 'fields':
+              tableInfo.fields = queryResult.data || [];
+              break;
+            case 'indexes':
+              tableInfo.indexes = queryResult.data || [];
+              break;
+            case 'foreignKeys':
+              tableInfo.foreignKeys = queryResult.data || [];
+              break;
+            case 'checks':
+              tableInfo.checks = queryResult.data || [];
+              break;
+            case 'triggers':
+              tableInfo.triggers = queryResult.data || [];
+              break;
+            case 'options':
+              tableInfo.options = queryResult.data || {};
+              break;
+            case 'comment':
+              tableInfo.comment = queryResult.data || '';
+              break;
+          }
+        } else {
+          console.warn(`获取${type}信息失败:`, queryResult.error);
+          // 失败时设置为空数组或空对象
+          if (['fields', 'indexes', 'foreignKeys', 'checks', 'triggers'].includes(type)) {
+            (tableInfo as any)[type] = [];
+          } else if (type === 'options') {
+            tableInfo.options = {};
+          } else if (type === 'comment') {
+            tableInfo.comment = '';
+          }
+        }
+        
+        completedTypes.push(type);
+        
+        // 发送部分结果更新
+        if (onPartialResult) {
+          onPartialResult({
+            success: true,
+            data: { ...tableInfo },
+            loadingStatus: { ...loadingStatus },
+            completedTypes: [...completedTypes]
+          });
+        }
+      } catch (error) {
+        console.error(`处理${type}查询结果异常:`, error);
+        loadingStatus[type] = false;
+        
+        // 失败时设置为空数组或空对象
+        if (['fields', 'indexes', 'foreignKeys', 'checks', 'triggers'].includes(type)) {
+          (tableInfo as any)[type] = [];
+        } else if (type === 'options') {
+          tableInfo.options = {};
+        } else if (type === 'comment') {
+          tableInfo.comment = '';
+        }
+        
+        completedTypes.push(type);
+        
+        if (onPartialResult) {
+          onPartialResult({
+            success: true,
+            data: { ...tableInfo },
+            loadingStatus: { ...loadingStatus },
+            completedTypes: [...completedTypes],
+            error: `处理${type}数据时出错: ${(error as Error).message}`
+          });
+        }
+      }
+    };
+    
+    // 先执行高优先级查询
+    await Promise.all(
+      priorityQueries.map(async ({ type, query }) => {
+        return processQueryResult(type, query);
+      })
+    );
+    
+    // 然后执行低优先级查询
+    await Promise.all(
+      secondaryQueries.map(async ({ type, query }) => {
+        return processQueryResult(type, query);
+      })
+    );
+    
+    return { success: true, data: tableInfo };
+  } catch (error) {
+    console.error('渐进式获取表结构信息异常:', error);
+    return { success: false, data: {} as TableInfo, error: `查询过程出错: ${(error as Error).message}` };
+  }
+};
+
+/**
  * 带重试机制的表结构信息获取函数
  * @param connection 数据库连接对象
  * @param database 数据库名称
@@ -1455,6 +1836,140 @@ export const getCompleteTableStructureWithRetry = async (
   return {
     success: false,
     data: {} as TableInfo,
+    error: lastError?.message || '获取表结构信息失败，已达到最大重试次数'
+  };
+};
+
+/**
+ * 带重试机制的渐进式表结构信息获取函数
+ * @param connection 数据库连接对象
+ * @param database 数据库名称
+ * @param table 表名称
+ * @param onPartialResult 部分结果回调函数
+ * @param priorityTypes 优先加载的数据类型
+ * @param maxRetries 最大重试次数（默认3次）
+ * @param retryInterval 重试间隔（默认500ms）
+ * @returns Promise<TableQueryResult<TableInfo>> 表结构信息查询结果
+ */
+export const getProgressiveTableStructureWithRetry = async (
+  connection: DatabaseConnection,
+  database: string,
+  table: string,
+  onPartialResult?: (result: ProgressiveTableStructureResult) => void,
+  priorityTypes: TableStructureDataType[] = ['fields', 'indexes', 'foreignKeys'],
+  maxRetries: number = 3,
+  retryInterval: number = 500
+): Promise<TableQueryResult<TableInfo>> => {
+  let lastError: Error | null = null;
+  
+  // 确保回调函数始终接收到有效的数据结构
+  const safeOnPartialResult = (result: ProgressiveTableStructureResult) => {
+    if (onPartialResult) {
+      // 确保数据结构完整性，特别是索引数据
+      const safeData = {
+        ...result.data,
+        fields: result.data?.fields || [],
+        indexes: result.data?.indexes || [],
+        foreignKeys: result.data?.foreignKeys || [],
+        checks: result.data?.checks || [],
+        triggers: result.data?.triggers || [],
+        options: result.data?.options || {},
+        comment: result.data?.comment || ''
+      };
+      
+      onPartialResult({
+        ...result,
+        data: safeData
+      });
+    }
+  };
+  
+  for (let retry = 0; retry < maxRetries; retry++) {
+    try {
+      console.log(`[getProgressiveTableStructureWithRetry] 尝试获取表结构信息 (${retry + 1}/${maxRetries})`, {
+        connectionType: connection?.type,
+        database,
+        table,
+        priorityTypes
+      });
+      
+      // 使用新的渐进式加载函数，并传递安全的回调函数
+      const result = await getProgressiveTableStructure(connection, database, table, safeOnPartialResult, priorityTypes);
+      
+      if (result.success) {
+        console.log(`[getProgressiveTableStructureWithRetry] 成功获取表结构信息`, {
+          hasIndexes: result.data?.indexes?.length > 0,
+          indexCount: result.data?.indexes?.length || 0
+        });
+        return result;
+      } else {
+        lastError = new Error(result.error || '查询执行失败');
+        console.warn(`[getProgressiveTableStructureWithRetry] 获取表结构信息失败`, {
+          error: lastError.message,
+          retry: retry + 1,
+          maxRetries
+        });
+        
+        if (retry < maxRetries - 1) {
+          console.warn(`[getProgressiveTableStructureWithRetry] 准备重试 (${retry + 1}/${maxRetries})...`);
+          await new Promise(resolve => setTimeout(resolve, retryInterval));
+        }
+      }
+    } catch (error) {
+      lastError = error as Error;
+      console.error(`[getProgressiveTableStructureWithRetry] 获取表结构信息异常`, {
+        error: lastError.message,
+        retry: retry + 1,
+        maxRetries
+      });
+      
+      if (retry < maxRetries - 1) {
+        console.warn(`[getProgressiveTableStructureWithRetry] 准备重试 (${retry + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+    }
+  }
+  
+  // 如果所有重试都失败，仍然尝试通知UI当前状态
+  if (onPartialResult) {
+    safeOnPartialResult({
+      success: false,
+      data: {
+        name: table,
+        comment: '',
+        options: {},
+        fields: [],
+        indexes: [], // 确保索引数组始终存在
+        foreignKeys: [],
+        checks: [],
+        triggers: []
+      },
+      error: lastError?.message || '获取表结构信息失败，已达到最大重试次数',
+      completedTypes: [],
+      loadingStatus: {
+        fields: false,
+        indexes: false,
+        foreignKeys: false,
+        checks: false,
+        triggers: false,
+        options: false,
+        comment: false
+      }
+    });
+  }
+  
+  return {
+    success: false,
+    data: {
+      name: table,
+      comment: '',
+      options: {},
+      fields: [],
+      indexes: [], // 确保索引数组始终存在
+      foreignKeys: [],
+      checks: [],
+      triggers: []
+    },
     error: lastError?.message || '获取表结构信息失败，已达到最大重试次数'
   };
 };
@@ -1514,4 +2029,23 @@ export const checkTableExists = async (
     console.error('检查表是否存在异常:', error);
     return false;
   }
+};
+
+/**
+ * 获取默认表字段配置
+ * @returns 默认的表字段配置
+ */
+export const getDefaultField = (): TableField => {
+  return {
+    name: '',
+    type: 'varchar',
+    length: 255,
+    decimal: undefined,
+    notNull: false,
+    virtual: false,
+    key: '',
+    comment: '',
+    defaultValue: undefined,
+    autoIncrement: false
+  };
 };

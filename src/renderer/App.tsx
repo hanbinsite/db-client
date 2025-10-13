@@ -725,10 +725,7 @@ const AppContent: React.FC = () => {
                       type={tab.type}
                       darkMode={darkMode}
                       onTableSelect={handleTableSelect}
-                      onTableDesign={(connection, database, tableName) => {
-                        // 空实现，或者根据需要添加实际功能
-                        console.log('Table design requested:', tableName);
-                      }}
+                      onTableDesign={handleTableDesign}
                     />
                   </div>
                 </TabPane>
@@ -765,7 +762,23 @@ const AppContent: React.FC = () => {
                     />
                   </div>
                 </TabPane>
-            ))}
+              ))}
+              
+              {tableDesignTabs.map(tab => (
+                <TabPane 
+                  key={tab.key} 
+                  tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
+                  closable={true}
+                >
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <TableStructurePanel
+                      connection={tab.connection}
+                      database={tab.database}
+                      table={tab.tableName}
+                    />
+                  </div>
+                </TabPane>
+              ))}
           </Tabs>
           ) : (
             <div className="welcome-panel">

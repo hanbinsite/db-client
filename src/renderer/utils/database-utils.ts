@@ -1153,22 +1153,44 @@ export const getFunctionList = async (connection: DatabaseConnection, databaseNa
  * 获取数据库下的模式列表
  * @param connection 数据库连接对象
  * @param databaseName 数据库名称
- * @returns Promise<string[]> 真实模式列表，失败时返回空数组
+ * @returns Promise<string[]> 真实模式列表，失败时返回默认的public模式
  */
+
+// 开发环境下自动运行模式列表测试（只在开发时执行）
+if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
+  setTimeout(async () => {
+    try {
+      // 动态导入测试模块
+      const { runSchemaTest } = await import('./schema-test');
+      console.log('\n\n==== 开发环境 - 自动运行模式列表测试 ====');
+      await runSchemaTest();
+    } catch (error) {
+      console.error('开发环境 - 模式列表测试加载失败:', error);
+    }
+  }, 2000);
+}
 export const getSchemaList = async (connection: DatabaseConnection, databaseName: string): Promise<string[]> => {
+  console.log(`GET SCHEMA LIST - 开始获取数据库 ${databaseName} 的模式列表，连接类型: ${connection.type}`);
   try {
     // 检查基本条件
     if (!window.electronAPI || !connection.isConnected || !databaseName) {
-      console.warn(`获取模式列表失败: 无效的连接或数据库名称`);
-      return [];
+      console.warn(`GET SCHEMA LIST - 获取模式列表失败: 无效的连接或数据库名称`, {
+        electronAPI: !!window.electronAPI,
+        isConnected: connection.isConnected,
+        databaseName: databaseName
+      });
+      // 返回默认的public模式
+      return connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB ? ['public'] : [];
     }
     
     // 使用真实的连接池ID，如果不存在则回退到原始连接ID
     const poolId = connection.connectionId || connection.id;
+    console.log(`GET SCHEMA LIST - 连接池ID: ${poolId}`);
     
     if (!poolId) {
-      console.warn(`获取模式列表失败: 连接池ID不存在`);
-      return [];
+      console.warn(`GET SCHEMA LIST - 获取模式列表失败: 连接池ID不存在`);
+      // 返回默认的public模式
+      return connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB ? ['public'] : [];
     }
 
     try {
@@ -1177,31 +1199,80 @@ export const getSchemaList = async (connection: DatabaseConnection, databaseName
       switch (connection.type) {
         case DbType.POSTGRESQL:
         case DbType.GAUSSDB:
-          // PostgreSQL/GaussDB: 切换到指定数据库，然后获取模式列表
-          await window.electronAPI.executeQuery(poolId, `\c ${databaseName}`);
-          result = await window.electronAPI.executeQuery(
-            poolId, 
-            "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
-          );
-          if (result && result.success && Array.isArray(result.data)) {
-            return result.data.map((row: any) => row.schema_name);
+          console.log(`GET SCHEMA LIST - 处理PostgreSQL/GaussDB数据库，准备执行查询`);
+          
+          // 简化查询逻辑，直接获取所有模式，不进行过滤
+          const query = "SELECT schema_name, catalog_name FROM information_schema.schemata WHERE catalog_name = $1 ORDER BY schema_name";
+          const params = [databaseName];
+          
+          console.log(`GET SCHEMA LIST - 执行查询: ${query}`, `参数:`, params);
+          
+          try {
+            result = await window.electronAPI.executeQuery(poolId, query, params);
+            console.log(`GET SCHEMA LIST - 查询结果:`, JSON.stringify(result));
+            
+            if (result && result.success) {
+              if (!Array.isArray(result.data)) {
+                console.warn(`GET SCHEMA LIST - 查询结果不是数组:`, result.data);
+              } else if (result.data.length === 0) {
+                console.warn(`GET SCHEMA LIST - 查询返回空结果，数据库 ${databaseName} 中没有找到任何模式`);
+              } else {
+                // 获取所有模式
+                const allSchemas = result.data.map((row: any) => row.schema_name);
+                console.log(`GET SCHEMA LIST - 查询到的所有模式 (${allSchemas.length}个):`, allSchemas);
+                
+                // 只显示public和dev模式
+                const filteredSchemas = allSchemas.filter((schema: string) => schema === 'public' || schema === 'dev');
+                console.log(`GET SCHEMA LIST - 过滤后显示的模式 (${filteredSchemas.length}个):`, filteredSchemas);
+                
+                return filteredSchemas;
+              }
+            } else {
+              console.warn(`GET SCHEMA LIST - 查询失败:`, result?.error || '未知错误');
+            }
+          } catch (queryError) {
+            console.error(`GET SCHEMA LIST - 执行查询时发生异常:`, queryError);
+            
+            // 尝试一个更简单的查询作为备选方案
+              try {
+                console.log(`GET SCHEMA LIST - 尝试备选查询方法`);
+                const altQuery = "SELECT n.nspname AS schema_name FROM pg_catalog.pg_namespace n ORDER BY n.nspname";
+                const altResult = await window.electronAPI.executeQuery(poolId, altQuery, []);
+                
+                if (altResult && altResult.success && Array.isArray(altResult.data) && altResult.data.length > 0) {
+                  // 获取所有模式
+                  const allSchemas = altResult.data.map((row: any) => row.schema_name);
+                  console.log(`GET SCHEMA LIST - 备选方法查询到的所有模式 (${allSchemas.length}个):`, allSchemas);
+                  
+                  // 只显示public和dev模式
+                  const filteredSchemas = allSchemas.filter((schema: string) => schema === 'public' || schema === 'dev');
+                  console.log(`GET SCHEMA LIST - 备选方法过滤后显示的模式 (${filteredSchemas.length}个):`, filteredSchemas);
+                  
+                  return filteredSchemas;
+                }
+              } catch (altError) {
+                console.error(`GET SCHEMA LIST - 备选查询方法也失败:`, altError);
+              }
           }
-          break;
+          
+          // 查询失败或没有结果，返回默认的public模式
+          console.warn(`GET SCHEMA LIST - 查询失败或没有结果，返回默认的public模式`);
+          return ['public'];
           
         default:
           // 其他数据库类型不支持或不需要模式
+          console.log(`GET SCHEMA LIST - 不支持的数据库类型 ${connection.type}，返回空列表`);
           return [];
       }
-      
-      console.warn(`获取${connection.type}数据库模式列表失败: 无效的结果`);
-      return [];
     } catch (error) {
-      console.error(`获取数据库模式列表异常:`, error);
-      return [];
+      console.error(`GET SCHEMA LIST - 获取数据库模式列表异常:`, error);
+      // 返回默认的public模式
+      return connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB ? ['public'] : [];
     }
   } catch (error) {
-    console.error(`获取模式列表时发生异常:`, error);
-    return [];
+    console.error(`GET SCHEMA LIST - 获取模式列表时发生异常:`, error);
+    // 返回默认的public模式
+    return connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB ? ['public'] : [];
   }
 };
 

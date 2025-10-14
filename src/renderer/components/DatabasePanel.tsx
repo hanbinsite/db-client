@@ -10,6 +10,7 @@ import DatabaseStatus from './DatabaseStatus';
 import DatabaseContextMenu from './DatabaseContextMenu';
 import TreeNodeRenderer from './TreeNodeRenderer';
 import AddDatabaseModal from './AddDatabaseModal';
+import AddSchemaModal from './AddSchemaModal';
 import './DatabasePanel.css';
 
 interface TreeNode {
@@ -48,6 +49,10 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   const { darkMode } = useTheme();
   // 控制新增数据库弹窗的显示
   const [isAddDatabaseModalVisible, setIsAddDatabaseModalVisible] = useState(false);
+  // 控制新增模式弹窗的显示
+  const [isAddSchemaModalVisible, setIsAddSchemaModalVisible] = useState(false);
+  // 当前选中的数据库名称，用于新增模式
+  const [selectedDatabaseName, setSelectedDatabaseName] = useState<string>('');
   
   // 创建对DatabaseDataLoader组件的引用
   const dataLoaderRef = useRef<any>(null);
@@ -67,13 +72,20 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   // 处理数据加载完成回调
   const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
     console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', data.length, '个数据库');
-    // 简化树数据，只保留数据库节点，移除子节点
-    const simplifiedData = data.map(dbNode => ({
-      ...dbNode,
-      children: [] // 清空子节点，只显示数据库列表
-    }));
-    setTreeData(simplifiedData);
-    setExpandedKeys([]); // 不需要展开任何节点
+    
+    // 检查数据库类型，如果是PostgreSQL则保留完整的树状结构
+    // 从连接信息中获取数据库类型
+    let treeDataToSet = data;
+    if (connection?.type !== DbType.POSTGRESQL && connection?.type !== DbType.GAUSSDB) {
+      // 对于非PostgreSQL数据库，简化树数据，只保留数据库节点，移除子节点
+      treeDataToSet = data.map(dbNode => ({
+        ...dbNode,
+        children: [] // 清空子节点，只显示数据库列表
+      }));
+    }
+    
+    setTreeData(treeDataToSet);
+    setExpandedKeys([]); // 初始不展开任何节点
     setLoading(false);
     
     // 注释掉自动选择第一个数据库的逻辑，避免自动打开数据浏览tab
@@ -106,18 +118,29 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     setRefreshTrigger(prev => prev + 1);
   };
 
-  // 处理节点选择 - 简化版，只处理数据库选择
+  // 处理节点选择 - 区分数据库类型
   const handleNodeSelect = (node: TreeNode) => {
-    console.log('DATABASE PANEL - 数据库被选择:', node.key, node.title);
+    console.log('DATABASE PANEL - 节点被选择:', node.key, node.title);
     
     if (node.type === 'database') {
-      // 选择数据库
-      const dbName = node.title as string;
-      console.log('DATABASE PANEL - 选择数据库:', dbName);
-      onDatabaseSelect(dbName);
-      onTableSelect('');
-      setActiveOtherObject('');
+      // 对于PostgreSQL数据库，点击数据库名称只展开/折叠节点，不打开数据库详情
+      // 对于其他数据库类型，保持原有行为
+      if (connection?.type !== DbType.POSTGRESQL && connection?.type !== DbType.GAUSSDB) {
+        const dbName = node.title as string;
+        console.log('DATABASE PANEL - 选择数据库:', dbName);
+        onDatabaseSelect(dbName);
+        onTableSelect('');
+        setActiveOtherObject('');
+      }
     }
+  };
+
+  // 处理节点展开/折叠
+  const handleNodeExpand = (keys: Key[]) => {
+    console.log('DATABASE PANEL - 节点展开/折叠:', keys);
+    // 将Key[]转换为string[]，因为expandedKeys状态期望的是string[]类型
+    const stringKeys = keys.map(key => String(key));
+    setExpandedKeys(stringKeys);
   };
 
   // 辅助函数：查找具有特定前缀的父节点
@@ -177,6 +200,13 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         console.log('DATABASE PANEL - 打开新增数据库弹窗');
         setIsAddDatabaseModalVisible(true);
         break;
+      case 'add-schema':
+        console.log('DATABASE PANEL - 打开新增模式弹窗');
+        if (node.type === 'database' && typeof node.title === 'string') {
+          setSelectedDatabaseName(node.title);
+          setIsAddSchemaModalVisible(true);
+        }
+        break;
       case 'edit-database':
         console.log('DATABASE PANEL - 编辑数据库:', node.title);
         // 这里可以实现编辑数据库的逻辑
@@ -227,6 +257,20 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     // 刷新数据库列表
     handleRefresh();
   };
+  
+  // 处理新增模式弹窗的取消
+  const handleAddSchemaCancel = () => {
+    setIsAddSchemaModalVisible(false);
+    setSelectedDatabaseName('');
+  };
+  
+  // 处理新增模式成功
+  const handleAddSchemaSuccess = () => {
+    setIsAddSchemaModalVisible(false);
+    setSelectedDatabaseName('');
+    // 刷新数据库列表
+    handleRefresh();
+  };
 
   // 不再需要展开/折叠功能，因为我们只显示数据库列表
 
@@ -257,10 +301,11 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         ) : (
           <DatabaseTree
             treeData={treeData}
-            expandedKeys={[]} // 固定为空，不展开任何节点
+            expandedKeys={expandedKeys}
             selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
             onNodeSelect={handleNodeSelect}
             onMenuSelect={handleMenuSelect}
+            onExpand={handleNodeExpand}
             loading={loading}
             darkMode={darkMode}
           />
@@ -275,6 +320,15 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         connection={connection}
         onCancel={handleAddDatabaseCancel}
         onSuccess={handleAddDatabaseSuccess}
+      />
+      
+      {/* 新增模式弹窗 */}
+      <AddSchemaModal
+        visible={isAddSchemaModalVisible}
+        connection={connection}
+        databaseName={selectedDatabaseName}
+        onCancel={handleAddSchemaCancel}
+        onSuccess={handleAddSchemaSuccess}
       />
     </div>
   );

@@ -41,6 +41,11 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({
           onClick: () => onMenuSelect('add-database', node)
         },
         {
+          key: 'add-schema',
+          label: '新增模式',
+          onClick: () => onMenuSelect('add-schema', node)
+        },
+        {
           key: 'edit-database',
           label: '编辑数据库',
           onClick: () => onMenuSelect('edit-database', node)

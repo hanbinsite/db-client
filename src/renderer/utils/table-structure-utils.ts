@@ -701,6 +701,7 @@ export class PostgreSQLTableStructureStrategy implements TableStructureStrategy 
       const processedIndexes = rows.map((row: any) => ({
         name: row.index_name || row.name,
         type: row.index_type || 'INDEX',
+        method: row.amname || '', // 添加索引方法字段映射
         columns: row.columns ? row.columns.split(', ') : [],
         comment: row.index_comment || row.description || '',
         unique: (row.index_type || '').toUpperCase() === 'UNIQUE' || (row.type || '').toUpperCase() === 'UNIQUE'

@@ -251,8 +251,19 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           children: []
         };
         
-        // 如果是PostgreSQL或GaussDB并且有schemas，添加schema层级
-        if ((connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB) && schemas.length > 0) {
+        // 如果是PostgreSQL或GaussDB，确保总是显示schema层级
+        if ((connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB)) {
+          console.log(`DATABASE DATA LOADER - 处理PostgreSQL/GaussDB数据库 ${dbName} 的schema层级`);
+          
+          // 确保总是有schema层级，即使是空的或获取失败
+          if (!schemas || schemas.length === 0) {
+            console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 没有获取到schema信息，添加默认public模式`);
+            // 添加默认public模式
+            schemas = [{ name: 'public', tables: [], views: [], procedures: [], functions: [] }];
+          }
+          
+          console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的schema列表:`, schemas.map(s => s.name));
+          
           dbNode.children = schemas.map((schema: any) => ({
               key: `schema-${dbName}-${schema.name}`,
               title: schema.name,

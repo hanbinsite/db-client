@@ -1221,8 +1221,15 @@ export const getSchemaList = async (connection: DatabaseConnection, databaseName
                 const allSchemas = result.data.map((row: any) => row.schema_name);
                 console.log(`GET SCHEMA LIST - 查询到的所有模式 (${allSchemas.length}个):`, allSchemas);
                 
-                // 只显示public和dev模式
-                const filteredSchemas = allSchemas.filter((schema: string) => schema === 'public' || schema === 'dev');
+                // 过滤掉系统自带且无法使用的模式
+                const filteredSchemas = allSchemas.filter((schema: string) => {
+                  // 排除系统模式
+                  return !schema.startsWith('information_schema') && 
+                         !schema.startsWith('pg_catalog') && 
+                         !schema.startsWith('pg_toast') && 
+                         !schema.startsWith('pg_temp_') && 
+                         !schema.startsWith('pg_toast_temp_');
+                });
                 console.log(`GET SCHEMA LIST - 过滤后显示的模式 (${filteredSchemas.length}个):`, filteredSchemas);
                 
                 return filteredSchemas;
@@ -1244,8 +1251,15 @@ export const getSchemaList = async (connection: DatabaseConnection, databaseName
                   const allSchemas = altResult.data.map((row: any) => row.schema_name);
                   console.log(`GET SCHEMA LIST - 备选方法查询到的所有模式 (${allSchemas.length}个):`, allSchemas);
                   
-                  // 只显示public和dev模式
-                  const filteredSchemas = allSchemas.filter((schema: string) => schema === 'public' || schema === 'dev');
+                  // 过滤掉系统自带且无法使用的模式
+                  const filteredSchemas = allSchemas.filter((schema: string) => {
+                    // 排除系统模式
+                    return !schema.startsWith('information_schema') && 
+                           !schema.startsWith('pg_catalog') && 
+                           !schema.startsWith('pg_toast') && 
+                           !schema.startsWith('pg_temp_') && 
+                           !schema.startsWith('pg_toast_temp_');
+                  });
                   console.log(`GET SCHEMA LIST - 备选方法过滤后显示的模式 (${filteredSchemas.length}个):`, filteredSchemas);
                   
                   return filteredSchemas;

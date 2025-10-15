@@ -1,122 +1,46 @@
-import { Dropdown } from 'antd';
-import { useTheme } from './ThemeContext';
-import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, RestOutlined, IeOutlined } from '@ant-design/icons';
+import React from 'react';
+import { DatabaseType } from '../../types';
+import MySqlTreeNodeRenderer from './MySqlTreeNodeRenderer';
+import PostgreSqlTreeNodeRenderer from './PostgreSqlTreeNodeRenderer';
+import { TreeNode } from './DatabaseTree';
 
-interface TreeNodeRendererProps {
-  node: any;
-  className: string;
-  style: React.CSSProperties;
-  title: React.ReactNode;
-  key: React.Key;
-  isLeaf: boolean;
-  isSelected: boolean;
-  onDatabaseSelect: (database: string) => void;
-  onTableSelect: (table: string) => void;
-  onRefresh: () => void;
+export interface TreeNodeRendererProps {
+  node: TreeNode;
+  onMenuSelect?: (action: string, node: TreeNode) => void;
+  databaseType: DatabaseType;
 }
 
-const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
-  node,
-  className,
-  style,
-  title,
-  key,
-  isLeaf,
-  isSelected,
-  onDatabaseSelect,
-  onTableSelect,
-  onRefresh
-}) => {
-  const { darkMode } = useTheme();
+const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({ node, onMenuSelect, databaseType }) => {
+  console.log('TreeNodeRenderer - 渲染节点', { node, databaseType });
+  
+  // 根据数据库类型渲染相应的专用渲染器
+  const renderDatabaseSpecificRenderer = () => {
+    const commonProps = {
+      node,
+      onMenuSelect
+    };
 
-  // 获取数据库对象的右键菜单
-  const getObjectMenu = () => {
-    const menuItems = [];
-    
-    // 根据节点类型添加不同的操作
-    if (node.type === 'database') {
-      menuItems.push(
-        {
-          key: 'refresh',
-          label: '刷新',
-          icon: <RestOutlined />,
-          onClick: () => {
-            console.log('右键菜单 - 刷新数据库:', node.title);
-            onRefresh();
-          }
-        },
-        {
-          key: 'new-query',
-          label: '新建查询',
-          onClick: () => {
-            console.log('右键菜单 - 新建查询:', node.title);
-          }
-        }
-      );
-    } else if (node.type === 'table') {
-      menuItems.push(
-        {
-          key: 'view-data',
-          label: '查看数据',
-          onClick: () => {
-            const dbName = node.parent?.parent?.title;
-            if (dbName) {
-              console.log('右键菜单 - 查看表数据:', node.title, '数据库:', dbName);
-              onDatabaseSelect(dbName);
-              onTableSelect(node.title);
-            }
-          }
-        },
-        {
-          key: 'design-table',
-          label: '设计表',
-          onClick: () => {
-            console.log('右键菜单 - 设计表:', node.title);
-          }
-        },
-        {
-          key: 'new-query',
-          label: '新建查询',
-          onClick: () => {
-            console.log('右键菜单 - 针对表新建查询:', node.title);
-          }
-        }
-      );
-    } else if (node.type === 'view' || node.type === 'procedure' || node.type === 'function') {
-      menuItems.push(
-        {
-          key: 'edit',
-          label: '编辑',
-          onClick: () => {
-            console.log('右键菜单 - 编辑对象:', node.title);
-          }
-        },
-        {
-          key: 'execute',
-          label: '执行',
-          onClick: () => {
-            console.log('右键菜单 - 执行对象:', node.title);
-          }
-        }
-      );
+    switch (databaseType) {
+      case DatabaseType.MySQL:
+        console.log('TreeNodeRenderer - 渲染MySQL节点');
+        return <MySqlTreeNodeRenderer {...commonProps} />;
+      
+      case DatabaseType.PostgreSQL:
+        console.log('TreeNodeRenderer - 渲染PostgreSQL节点');
+        return <PostgreSqlTreeNodeRenderer {...commonProps} />;
+      
+      default:
+        console.log('TreeNodeRenderer - 渲染默认节点');
+        // 默认渲染
+        return (
+          <span className="tree-node">
+            <span className="tree-node-title">{node.title || 'Unknown'}</span>
+          </span>
+        );
     }
-    
-    return { items: menuItems };
   };
 
-  console.log('TREE NODE RENDERER - 渲染节点:', { key, title, type: node.type, isSelected });
-
-  return (
-    <Dropdown menu={getObjectMenu()} trigger={['contextMenu']}>
-      <span 
-        className={`${className} custom-tree-node ${darkMode ? 'dark' : ''} ${isSelected ? 'selected' : ''}`}
-        style={{ ...style, whiteSpace: 'nowrap' }}
-      >
-        {node.icon}
-        <span className="node-title">{title}</span>
-      </span>
-    </Dropdown>
-  );
+  return renderDatabaseSpecificRenderer();
 };
 
 export default TreeNodeRenderer;

@@ -19,7 +19,7 @@ interface TreeNode {
   icon?: React.ReactNode;
   children?: TreeNode[];
   isLeaf?: boolean;
-  type?: 'database' | 'table' | 'view' | 'procedure' | 'function' | 'query' | 'backup';
+  type?: 'database' | 'table' | 'view' | 'materialized-view' | 'procedure' | 'function' | 'query' | 'backup' | 'schema';
 }
 
 interface DatabasePanelProps {
@@ -132,6 +132,47 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         onTableSelect('');
         setActiveOtherObject('');
       }
+    }
+  };
+  
+  // 处理节点双击事件
+  const handleNodeDoubleClick = (node: TreeNode) => {
+    console.log('DATABASE PANEL - 节点双击:', node.key, node.title, node.type);
+    
+    // 特别处理schema类型节点
+    if (node.type === 'schema') {
+      // 对于schema节点，双击时打开详情页面
+      const schemaName = node.title?.toString().split(' (')[0] || ''; // 从标题中提取模式名
+      console.log('DATABASE PANEL - 双击模式节点:', schemaName);
+      // 设置模式名作为数据库名参数，打开详情页面
+      onDatabaseSelect(schemaName);
+      onTableSelect('');
+      setActiveOtherObject('');
+      return;
+    }
+    
+    // 处理PostgreSQL的模式节点双击（兼容旧逻辑）
+    if ((connection?.type === DbType.POSTGRESQL || connection?.type === DbType.GAUSSDB) && 
+        node.type !== 'database' && node.type !== 'table' && 
+        node.type !== 'view' && node.type !== 'materialized-view' && 
+        node.type !== 'procedure' && node.type !== 'function') {
+      // 对于PostgreSQL，除了已知类型外的节点（模式节点），双击时打开详情页面
+      const schemaName = node.title?.toString().split(' (')[0] || '';
+      console.log('DATABASE PANEL - 双击PostgreSQL模式(兼容):', schemaName);
+      // 设置模式名作为数据库名参数，打开详情页面
+      onDatabaseSelect(schemaName);
+      onTableSelect('');
+      setActiveOtherObject('');
+    }
+    // 对于其他数据库类型，保持原有的数据库节点双击行为
+    else if (node.type === 'database' && 
+             connection?.type !== DbType.POSTGRESQL && 
+             connection?.type !== DbType.GAUSSDB) {
+      const dbName = node.title as string;
+      console.log('DATABASE PANEL - 双击其他数据库:', dbName);
+      onDatabaseSelect(dbName);
+      onTableSelect('');
+      setActiveOtherObject('');
     }
   };
 
@@ -300,15 +341,16 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
           </div>
         ) : (
           <DatabaseTree
-            treeData={treeData}
-            expandedKeys={expandedKeys}
-            selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
-            onNodeSelect={handleNodeSelect}
-            onMenuSelect={handleMenuSelect}
-            onExpand={handleNodeExpand}
-            loading={loading}
-            darkMode={darkMode}
-          />
+          treeData={treeData}
+          expandedKeys={expandedKeys}
+          selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
+          onNodeSelect={handleNodeSelect}
+          onNodeDoubleClick={handleNodeDoubleClick}
+          onMenuSelect={handleMenuSelect}
+          onExpand={handleNodeExpand}
+          loading={loading}
+          darkMode={darkMode}
+        />
         )}
       </div>
 

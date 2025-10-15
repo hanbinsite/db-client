@@ -8,15 +8,13 @@ import {
   TableOutlined, ScanOutlined, EyeOutlined, ExportOutlined,
   AlignLeftOutlined
 } from '@ant-design/icons';
-import ConnectionPanel from './components/ConnectionPanel';
-import DatabasePanel from './components/DatabasePanel';
-import QueryPanel from './components/QueryPanel';
-import DataPanel from './components/DataPanel';
-import DatabaseTabPanel from './components/DatabaseTabPanel';
-import TableDataPanel from './components/TableDataPanel';
-import TableStructurePanel from './components/TableStructurePanel';
+import { ConnectionPanel, DatabasePanel, useTheme, ThemeProvider, AddDatabaseModal, AddSchemaModal } from './components/common';
+import { QueryPanel } from './components/sql-query';
+import { DatabaseTabPanel, MySqlDatabaseTabPanel, PostgreSqlDatabaseTabPanel } from './components/database-detail';
+import { TableDataPanel, MySqlDataPanel, PostgreSqlDataPanel } from './components/data-view';
+import { TableStructurePanel } from './components/table-design';
+import { DatabaseTree, TreeNodeRenderer } from './components/database-list';
 import { DatabaseConnection, DatabaseType } from './types';
-import { ThemeProvider, useTheme } from './components/ThemeContext';
 import './App.css';
 
 const { Sider, Content, Header, Footer } = Layout;
@@ -719,14 +717,35 @@ const AppContent: React.FC = () => {
                   closable={true}
                 >
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <DatabaseTabPanel
-                      connection={tab.connection}
-                      database={tab.database}
-                      type={tab.type}
-                      darkMode={darkMode}
-                      onTableSelect={handleTableSelect}
-                      onTableDesign={handleTableDesign}
-                    />
+                    {/* 根据数据库类型渲染不同的面板组件 */}
+                    {tab.type === 'mysql' ? (
+                      <MySqlDatabaseTabPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        type={tab.type}
+                        darkMode={darkMode}
+                        onTableSelect={handleTableSelect}
+                        onTableDesign={handleTableDesign}
+                      />
+                    ) : tab.type === 'postgresql' || tab.type === 'gaussdb' ? (
+                      <PostgreSqlDatabaseTabPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        type={tab.type}
+                        darkMode={darkMode}
+                        onTableSelect={handleTableSelect}
+                        onTableDesign={handleTableDesign}
+                      />
+                    ) : (
+                      <DatabaseTabPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        type={tab.type}
+                        darkMode={darkMode}
+                        onTableSelect={handleTableSelect}
+                        onTableDesign={handleTableDesign}
+                      />
+                    )}
                   </div>
                 </TabPane>
               ))}
@@ -754,12 +773,29 @@ const AppContent: React.FC = () => {
                   closable={true}
                 >
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <TableDataPanel
-                      connection={tab.connection}
-                      database={tab.database}
-                      tableName={tab.tableName}
-                      darkMode={darkMode}
-                    />
+                    {/* 根据数据库类型渲染不同的数据面板组件 */}
+                    {tab.type === 'mysql' ? (
+                      <MySqlDataPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        tableName={tab.tableName}
+                        darkMode={darkMode}
+                      />
+                    ) : tab.type === 'postgresql' || tab.type === 'gaussdb' ? (
+                      <PostgreSqlDataPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        tableName={tab.tableName}
+                        darkMode={darkMode}
+                      />
+                    ) : (
+                      <TableDataPanel
+                        connection={tab.connection}
+                        database={tab.database}
+                        tableName={tab.tableName}
+                        darkMode={darkMode}
+                      />
+                    )}
                   </div>
                 </TabPane>
               ))}

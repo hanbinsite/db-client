@@ -23,7 +23,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({
   // 根据节点类型生成对应的右键菜单
   const getMenuItems = (): MenuProps['items'] => {
     const items = [];
-    const nodeType = node.type || 'unknown';
+    const nodeType = node.type as string || 'unknown';
 
     // 通用菜单项
     items.push({
@@ -118,8 +118,8 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({
       );
     }
 
-    // 视图节点菜单项
-    if (nodeType === 'view') {
+    // 视图和实体化视图节点菜单项
+    if (nodeType === 'view' || nodeType === 'materialized-view') {
       items.push(
         {
           key: 'view-data',

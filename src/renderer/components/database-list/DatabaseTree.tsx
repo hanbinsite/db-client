@@ -13,7 +13,7 @@ export interface TreeNode {
   icon?: React.ReactNode;
   children?: TreeNode[];
   isLeaf?: boolean;
-  type?: 'database' | 'table' | 'view' | 'procedure' | 'function' | 'query' | 'backup';
+  type?: 'database' | 'table' | 'view' | 'materialized-view' | 'procedure' | 'function' | 'query' | 'backup' | 'schema';
   disabled?: boolean;
 }
 
@@ -22,6 +22,7 @@ export interface DatabaseTreeProps {
   expandedKeys: Key[];
   selectedKeys: Key[];
   onNodeSelect: (node: TreeNode) => void;
+  onNodeDoubleClick?: (node: TreeNode) => void;
   onMenuSelect?: (action: string, node: TreeNode) => void;
   onExpand?: (expandedKeys: Key[]) => void;
   loading: boolean;
@@ -33,6 +34,7 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
   expandedKeys,
   selectedKeys,
   onNodeSelect,
+  onNodeDoubleClick,
   onMenuSelect,
   onExpand,
   loading,
@@ -43,6 +45,7 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
     database: <DatabaseOutlined />,
     table: <TableOutlined />,
     view: <IeOutlined />,
+    'materialized-view': <IeOutlined />,
     procedure: <CodeOutlined />,
     function: <FunctionOutlined />
   };
@@ -110,6 +113,25 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
     }
   };
 
+  // 处理节点双击事件
+  const handleDoubleClick = (info: any) => {
+    console.log('DATABASE TREE - 节点双击事件:', info);
+    try {
+      // 从info中获取节点数据
+      if (info && info.node && info.node.props && info.node.props.dataRef) {
+        const clickedNode = info.node.props.dataRef;
+        console.log('DATABASE TREE - 双击节点:', clickedNode.key, clickedNode.title);
+        // 调用父组件传入的onNodeDoubleClick回调函数
+        if (onNodeDoubleClick) {
+          onNodeDoubleClick(clickedNode);
+          console.log('DATABASE TREE - 节点双击事件已传递给父组件');
+        }
+      }
+    } catch (error) {
+      console.error('DATABASE TREE - 处理节点双击时发生错误:', error);
+    }
+  };
+
   // 渲染树节点
   const renderTreeNode = (node: any) => {
     // 安全地获取节点数据
@@ -143,6 +165,7 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
       selectedKeys={selectedKeys}
       onSelect={handleSelect}
       onExpand={handleExpand}
+      onDoubleClick={handleDoubleClick}
       showIcon={false}
       defaultExpandAll={false}
       titleRender={renderTreeNode}

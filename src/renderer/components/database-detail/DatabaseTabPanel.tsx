@@ -237,94 +237,63 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
     try {
       if (!connection || !connection.isConnected || !window.electronAPI) {
         console.warn('数据库未连接或Electron API不可用，无法加载表列表');
-        // 连接断开时清空列表，而不是显示模拟数据
+        // 连接断开时清空列表
         setTableList([]);
         return;
       }
 
       const poolId = connection.connectionId || connection.id;
-      let tablesQuery = '';
-        let queryParams: any[] = [];
+      let tableQuery = '';
+      let queryParams = [];
 
-      switch (connection.type) {
-        case 'mysql':
-          // 增强MySQL查询，使用参数化查询防止SQL注入
-          tablesQuery = `SELECT table_name, table_name AS name, table_comment AS comment, engine, table_rows AS \`rows\`, 
-            ROUND((data_length + index_length) / 1024 / 1024, 2) AS size_mb, 
-            create_time AS created 
-            FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?`;
-          queryParams = [database];
-          break;
-        case 'postgresql':
-        case 'gaussdb':
-          tablesQuery = `SELECT table_name AS name, 
-            (SELECT description FROM pg_description WHERE objoid = c.oid AND objsubid = 0) AS comment, 
-            'PostgreSQL' AS engine, 
-            0 AS rows, 
-            pg_size_pretty(pg_relation_size('"' || ? || '".' || quote_ident(table_name))) AS size, 
-            to_char(created, 'YYYY-MM-DD') AS created 
-            FROM information_schema.tables c WHERE table_schema = 'public' AND table_catalog = ?`;
-          queryParams = [database, database];
-          break;
-        case 'oracle':
-          tablesQuery = `SELECT table_name AS name, comments AS comment, 'Oracle' AS engine, 
-            num_rows AS rows, 'N/A' AS size, 
-            to_char(created, 'YYYY-MM-DD') AS created 
-            FROM all_tables WHERE owner = ?`;
-          queryParams = [database.toUpperCase()];
-          break;
-        case 'sqlite':
-          // SQLite不支持在子查询中引用外部表名，简化查询
-          tablesQuery = `SELECT name, 'N/A' AS comment, 'SQLite' AS engine, 
-            0 AS rows, 'N/A' AS size, 
-            'N/A' AS created 
-            FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`;
-          queryParams = [];
-          break;
-        default:
-          tablesQuery = 'SELECT NULL AS name, NULL AS comment, NULL AS engine, 0 AS rows, NULL AS size, NULL AS created LIMIT 0';
-          queryParams = [];
+      // 根据数据库类型选择不同的查询语句
+      if (connection?.type === 'mysql') {
+        // MySQL查询
+        tableQuery = `SELECT table_name, table_rows, data_length, index_length, create_time, table_comment 
+          FROM information_schema.TABLES 
+          WHERE table_schema = ? AND table_type = 'BASE TABLE'`;
+        queryParams = [database];
+      } else if (connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
+        // PostgreSQL和GaussDB查询 - 注意：对于PostgreSQL，传入的database参数实际上是schema名称
+        const schemaName = database; // 对于PostgreSQL，传入的database参数是schema名称
+        
+        tableQuery = `SELECT 
+          c.relname AS table_name,
+          pg_size_pretty(pg_total_relation_size(c.oid)) AS size,
+          (SELECT reltuples::bigint FROM pg_class WHERE oid = c.oid) AS table_rows,
+          pg_get_userbyid(c.relowner) AS table_owner,
+          (SELECT description FROM pg_description WHERE objoid = c.oid AND objsubid = 0) AS table_comment
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind = 'r' AND n.nspname = ?
+          ORDER BY c.relname`;
+        queryParams = [schemaName];
+      } else {
+        // 其他数据库类型使用通用查询
+        tableQuery = `SELECT table_name 
+          FROM information_schema.TABLES 
+          WHERE table_schema = ? AND table_type = 'BASE TABLE'`;
+        queryParams = [database];
       }
-
-      console.log('执行的表列表查询:', tablesQuery, '数据库:', database);
-      const result = await window.electronAPI.executeQuery(poolId, tablesQuery, queryParams);
-      console.log('表列表查询结果:', JSON.stringify(result, null, 2));
+      
+      console.log('执行表列表查询:', tableQuery, '数据库类型:', connection?.type, '数据库/模式:', database);
+      const result = await window.electronAPI.executeQuery(poolId, tableQuery, queryParams);
       
       if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
-        // 处理大小格式，确保所有表都有size字段
-        const processedTables = result.data.map((table: any) => {
-          // 增强表名处理逻辑，确保能够正确提取表名
-          console.log('原始表数据:', JSON.stringify(table));
-          
-          // 支持更多可能的表名字段格式
-          const tableName = 
-            table.name || 
-            table.table_name || 
-            table.TABLE_NAME || 
-            table.tableName || 
-            table['table-name'] || 
-            table['TABLE-NAME'] ||
-            (typeof table === 'object' && Object.values(table)[0]) || // 作为最后的备选，尝试获取第一个值
-            '未知表'; // 最差情况下使用默认名称
-          
-          console.log('处理后表名:', tableName);
-          
-          return {
-            ...table,
-            name: tableName,
-            size: table.size || (table.size_mb ? `${table.size_mb} MB` : '0 MB'),
-            rows: table.rows || table.TABLE_ROWS || table.table_rows || 0,
-            comment: table.comment || table.table_comment || table.TABLE_COMMENT || '',
-            created: table.created || table.CREATE_TIME || table.create_time || 'N/A',
-            engine: table.engine || table.ENGINE || 'N/A'
-          };
-        });
-        
+        // 处理真实数据
+        const processedTables = result.data.map((table: any) => ({
+          name: table.table_name || '未知表',
+          rows: table.table_rows || 0,
+          size: table.size || formatSize(0),
+          createTime: table.create_time || 'N/A',
+          comment: table.table_comment || table.description || '',
+          owner: table.table_owner || ''
+        }));
         console.log('成功加载表列表，共', processedTables.length, '个表');
         setTableList(processedTables);
       } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
         // 查询成功但没有数据
-        console.log('当前数据库没有表');
+        console.log('当前数据库/模式没有表');
         setTableList([]);
       } else {
         console.error('表列表查询返回非预期结果:', JSON.stringify(result, null, 2));
@@ -332,7 +301,7 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       }
     } catch (error) {
       console.error('加载表列表失败:', error);
-      // 出错时清空列表，而不是显示模拟数据
+      // 出错时清空列表
       setTableList([]);
     }
   };
@@ -377,12 +346,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
 
   // 加载视图列表
   const loadViewList = async () => {
-    // 只有在MySQL连接时才尝试加载视图
-    if (connection?.type !== 'mysql') {
-      setViewList([]);
-      return;
-    }
-
     try {
       if (!connection || !connection.isConnected || !window.electronAPI) {
         console.warn('数据库未连接或Electron API不可用，无法加载视图列表');
@@ -392,29 +355,54 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       }
 
       const poolId = connection.connectionId || connection.id;
-      // 修正：在MySQL中，视图的注释信息存储在information_schema.TABLES表中
-      // 使用LEFT JOIN连接VIEWS和TABLES表来获取完整信息
-      const viewQuery = `SELECT v.table_name, v.view_definition, t.table_comment, v.create_time 
-        FROM information_schema.VIEWS v
-        LEFT JOIN information_schema.TABLES t ON v.table_schema = t.table_schema AND v.table_name = t.table_name
-        WHERE v.TABLE_SCHEMA = ?`;
+      let viewQuery = '';
+      let queryParams = [];
+
+      // 根据数据库类型选择不同的查询语句
+      if (connection?.type === 'mysql') {
+        // MySQL查询
+        viewQuery = `SELECT v.table_name, v.view_definition, t.table_comment, v.create_time 
+          FROM information_schema.VIEWS v
+          LEFT JOIN information_schema.TABLES t ON v.table_schema = t.table_schema AND v.table_name = t.table_name
+          WHERE v.TABLE_SCHEMA = ?`;
+        queryParams = [database];
+      } else if (connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
+        // PostgreSQL和GaussDB查询 - 注意：对于PostgreSQL，传入的database参数实际上是schema名称
+        const schemaName = database; // 对于PostgreSQL，传入的database参数是schema名称
+        
+        viewQuery = `SELECT table_name, view_definition, 
+          (SELECT description FROM pg_description pd 
+           JOIN pg_class c ON pd.objoid = c.oid 
+           JOIN pg_namespace n ON c.relnamespace = n.oid 
+           WHERE n.nspname = ? AND c.relname = table_name AND pd.objsubid = 0) as comment,
+          viewowner, 
+          pg_get_userbyid(viewowner::regrole) as owner_name
+          FROM information_schema.views 
+          WHERE table_schema = ?`;
+        queryParams = [schemaName, schemaName];
+      } else {
+        // 不支持的数据库类型
+        setViewList([]);
+        return;
+      }
       
-      console.log('执行视图列表查询:', viewQuery, '数据库:', database);
-      const result = await window.electronAPI.executeQuery(poolId, viewQuery, [database]);
+      console.log('执行视图列表查询:', viewQuery, '数据库类型:', connection?.type, '数据库/模式:', database);
+      const result = await window.electronAPI.executeQuery(poolId, viewQuery, queryParams);
       
       if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
         // 处理真实数据
         const processedViews = result.data.map((view: any) => ({
           name: view.table_name || view.name || '未知视图',
           definition: view.view_definition || '',
-          comment: view.table_comment || '',
-          created: view.create_time ? new Date(view.create_time).toLocaleDateString() : 'N/A'
+          comment: view.comment || '',
+          created: view.create_time ? new Date(view.create_time).toLocaleDateString() : 'N/A',
+          owner: view.owner_name || view.viewowner || ''
         }));
         console.log('成功加载视图列表，共', processedViews.length, '个视图');
         setViewList(processedViews);
       } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
         // 查询成功但没有数据
-        console.log('当前数据库没有视图');
+        console.log('当前数据库/模式没有视图');
         setViewList([]);
       } else {
         console.error('视图列表查询返回非预期结果:', JSON.stringify(result, null, 2));
@@ -429,12 +417,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
 
   // 加载存储过程列表
   const loadProcedureList = async () => {
-    // 只有在MySQL连接时才尝试加载存储过程
-    if (connection?.type !== 'mysql') {
-      setProcedureList([]);
-      return;
-    }
-
     try {
       if (!connection || !connection.isConnected || !window.electronAPI) {
         console.warn('数据库未连接或Electron API不可用，无法加载存储过程列表');
@@ -444,26 +426,62 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       }
 
       const poolId = connection.connectionId || connection.id;
-      const procedureQuery = `SELECT routine_name, routine_definition, routine_comment, created 
-        FROM information_schema.ROUTINES 
-        WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'`;
+      let procedureQuery = '';
+      let queryParams = [];
+
+      // 根据数据库类型选择不同的查询语句
+      if (connection?.type === 'mysql') {
+        // MySQL查询
+        procedureQuery = `SELECT routine_name, routine_definition, routine_comment, created 
+          FROM information_schema.ROUTINES 
+          WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'`;
+        queryParams = [database];
+      } else if (connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
+        // PostgreSQL和GaussDB查询（在PostgreSQL中，存储过程通常也被视为函数，但使用PROCEDURE作为procostype）
+        // 注意：对于PostgreSQL，传入的database参数实际上是schema名称
+        const schemaName = database; // 对于PostgreSQL，传入的database参数是schema名称
+        
+        procedureQuery = `SELECT n.nspname AS schema_name,
+          p.proname AS routine_name,
+          pg_get_functiondef(p.oid) AS routine_definition,
+          d.description AS routine_comment,
+          p.proowner::regrole AS routine_owner,
+          pg_get_userbyid(p.proowner) AS owner_name,
+          p.prolang::regproc AS language,
+          p.procost AS cost,
+          p.prorows AS rows,
+          pg_get_userbyid(p.proowner) AS owner
+          FROM pg_proc p
+          JOIN pg_namespace n ON p.pronamespace = n.oid
+          LEFT JOIN pg_description d ON p.oid = d.objoid AND d.objsubid = 0
+          WHERE n.nspname = ?
+          AND p.prokind = 'p'  -- 'p'表示存储过程
+          ORDER BY p.proname`;
+        queryParams = [schemaName];
+      } else {
+        // 不支持的数据库类型
+        setProcedureList([]);
+        return;
+      }
       
-      console.log('执行存储过程列表查询:', procedureQuery, '数据库:', database);
-      const result = await window.electronAPI.executeQuery(poolId, procedureQuery, [database]);
+      console.log('执行存储过程列表查询:', procedureQuery, '数据库类型:', connection?.type, '数据库/模式:', database);
+      const result = await window.electronAPI.executeQuery(poolId, procedureQuery, queryParams);
       
       if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
         // 处理真实数据
         const processedProcedures = result.data.map((procedure: any) => ({
-          name: procedure.routine_name || procedure.name || '未知存储过程',
+          name: procedure.routine_name || procedure.proname || '未知存储过程',
           definition: procedure.routine_definition || '',
-          comment: procedure.routine_comment || '',
-          created: procedure.created ? new Date(procedure.created).toLocaleDateString() : 'N/A'
+          comment: procedure.routine_comment || procedure.description || '',
+          created: procedure.created ? new Date(procedure.created).toLocaleDateString() : 'N/A',
+          language: procedure.language || 'sql',
+          owner: procedure.owner_name || procedure.owner || ''
         }));
         console.log('成功加载存储过程列表，共', processedProcedures.length, '个存储过程');
         setProcedureList(processedProcedures);
       } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
         // 查询成功但没有数据
-        console.log('当前数据库没有存储过程');
+        console.log('当前数据库/模式没有存储过程');
         setProcedureList([]);
       } else {
         console.error('存储过程列表查询返回非预期结果:', JSON.stringify(result, null, 2));
@@ -478,12 +496,6 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
 
   // 加载函数列表
   const loadFunctionList = async () => {
-    // 只有在MySQL连接时才尝试加载函数
-    if (connection?.type !== 'mysql') {
-      setFunctionList([]);
-      return;
-    }
-
     try {
       if (!connection || !connection.isConnected || !window.electronAPI) {
         console.warn('数据库未连接或Electron API不可用，无法加载函数列表');
@@ -493,26 +505,66 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
       }
 
       const poolId = connection.connectionId || connection.id;
-      const functionQuery = `SELECT routine_name, routine_definition, routine_comment, created 
-        FROM information_schema.ROUTINES 
-        WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'`;
+      let functionQuery = '';
+      let queryParams = [];
+
+      // 根据数据库类型选择不同的查询语句
+      if (connection?.type === 'mysql') {
+        // MySQL查询
+        functionQuery = `SELECT routine_name, routine_definition, routine_comment, created 
+          FROM information_schema.ROUTINES 
+          WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'`;
+        queryParams = [database];
+      } else if (connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
+        // PostgreSQL和GaussDB查询
+        // 注意：对于PostgreSQL，传入的database参数实际上是schema名称
+        const schemaName = database; // 对于PostgreSQL，传入的database参数是schema名称
+        
+        functionQuery = `SELECT n.nspname AS schema_name,
+          p.proname AS routine_name,
+          pg_get_functiondef(p.oid) AS routine_definition,
+          d.description AS routine_comment,
+          p.proowner::regrole AS routine_owner,
+          pg_get_userbyid(p.proowner) AS owner_name,
+          p.prolang::regproc AS language,
+          p.procost AS cost,
+          p.prorows AS rows,
+          pg_get_userbyid(p.proowner) AS owner,
+          pg_get_function_arguments(p.oid) AS arguments,
+          pg_get_function_result(p.oid) AS return_type
+          FROM pg_proc p
+          JOIN pg_namespace n ON p.pronamespace = n.oid
+          LEFT JOIN pg_description d ON p.oid = d.objoid AND d.objsubid = 0
+          WHERE n.nspname = ?
+          AND p.prokind = 'f'  -- 'f'表示函数
+          ORDER BY p.proname`;
+        queryParams = [schemaName];
+      } else {
+        // 不支持的数据库类型
+        setFunctionList([]);
+        return;
+      }
       
-      console.log('执行函数列表查询:', functionQuery, '数据库:', database);
-      const result = await window.electronAPI.executeQuery(poolId, functionQuery, [database]);
+      console.log('执行函数列表查询:', functionQuery, '数据库类型:', connection?.type, '数据库/模式:', database);
+      const result = await window.electronAPI.executeQuery(poolId, functionQuery, queryParams);
       
       if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
         // 处理真实数据
         const processedFunctions = result.data.map((func: any) => ({
-          name: func.routine_name || func.name || '未知函数',
+          name: func.routine_name || func.proname || '未知函数',
           definition: func.routine_definition || '',
-          comment: func.routine_comment || '',
-          created: func.created ? new Date(func.created).toLocaleDateString() : 'N/A'
+          comment: func.routine_comment || func.description || '',
+          created: func.created ? new Date(func.created).toLocaleDateString() : 'N/A',
+          language: func.language || 'sql',
+          owner: func.owner_name || func.owner || '',
+          arguments: func.arguments || '',
+          returnType: func.return_type || ''
         }));
         console.log('成功加载函数列表，共', processedFunctions.length, '个函数');
         setFunctionList(processedFunctions);
       } else if (result && result.success && Array.isArray(result.data) && result.data.length === 0) {
         // 查询成功但没有数据
-        console.log('当前数据库没有函数');
+        console.log('当前数据库/模式没有函数');
         setFunctionList([]);
       } else {
         console.error('函数列表查询返回非预期结果:', JSON.stringify(result, null, 2));
@@ -535,14 +587,18 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
         loadRecentQueries()
       ];
 
-      // 对于MySQL数据库，额外加载视图、存储过程和函数
-      if (connection?.type === 'mysql') {
+      // 对于MySQL、PostgreSQL和GaussDB数据库，额外加载视图、存储过程和函数
+      if (connection?.type === 'mysql' || connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
         promises.push(loadViewList());
         promises.push(loadProcedureList());
         promises.push(loadFunctionList());
       }
 
       await Promise.all(promises);
+      
+      // 日志输出所有加载结果的数量
+      console.log('数据加载完成 - 表:', tableList.length, ' 视图:', viewList.length, 
+                 ' 存储过程:', procedureList.length, ' 函数:', functionList.length);
     } catch (error) {
       console.error('加载数据失败:', error);
     } finally {

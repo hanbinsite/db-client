@@ -19,7 +19,7 @@ interface TreeNode {
   icon?: React.ReactNode;
   children?: TreeNode[];
   isLeaf?: boolean;
-  type?: 'database' | 'table' | 'view' | 'procedure' | 'function' | 'query' | 'backup';
+  type?: 'database' | 'table' | 'view' | 'materialized-view' | 'procedure' | 'function' | 'query' | 'backup' | 'schema';
 }
 
 interface DatabaseDataLoaderProps {
@@ -145,48 +145,82 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
         if (window.electronAPI && connection.id && connection.isConnected) {
           try {
             // 根据数据库类型采取不同的策略
-            if (connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB) {
-              // 对于PostgreSQL和GaussDB，获取schema列表
-              const schemaList = await getSchemaList(connection, dbName);
-              
-              if (schemaList && schemaList.length > 0) {
-                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 有 ${schemaList.length} 个模式`);
-                // 为每个schema获取表、视图等信息
-                const schemaPromises = schemaList.map(async (schemaName: string) => {
-                  try {
-                    // 使用新的getAllDatabaseObjects方法获取当前schema的所有对象
-                    const schemaObjects = await getAllDatabaseObjects(connection, dbName, schemaName);
+              if (connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB) {
+                // 对于PostgreSQL和GaussDB，获取schema列表
+                const schemaList = await getSchemaList(connection, dbName);
+                  
+                if (schemaList && schemaList.length > 0) {
+                  console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 有 ${schemaList.length} 个模式`);
+                  // 为每个schema获取表、视图、实体化视图、函数等信息
+                  const schemaPromises = schemaList.map(async (schemaName: string) => {
+                    try {
+                      // 使用getAllDatabaseObjects方法获取当前schema的基本对象
+                      const schemaObjects = await getAllDatabaseObjects(connection, schemaName, schemaName);
+                        
+                      // 额外获取实体化视图
+                      let materializedViews: string[] = [];
+                      if (connection.type === DbType.POSTGRESQL) {
+                        try {
+                          const mViewQuery = "SELECT matviewname FROM pg_matviews WHERE schemaname = ?";
+                          const mViewResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, mViewQuery, [schemaName]);
+                          if (mViewResult && mViewResult.success && Array.isArray(mViewResult.data)) {
+                            materializedViews = mViewResult.data.map((row: any) => row.matviewname);
+                          }
+                        } catch (error) {
+                          console.warn(`获取模式 ${schemaName} 的实体化视图失败:`, error);
+                          materializedViews = [];
+                        }
+                      }
+                       
+                      // 额外查询获取函数（为了兼容不同版本，使用更通用的查询）
+                      let functions: string[] = [];
+                      try {
+                        const funcQuery = "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = ? AND p.prokind = 'f'";
+                        const functionResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, funcQuery, [schemaName]);
+                        if (functionResult && functionResult.success && Array.isArray(functionResult.data)) {
+                          functions = functionResult.data.map((row: any) => row.proname);
+                        }
+                      } catch (error) {
+                        console.warn(`获取模式 ${schemaName} 的函数失败:`, error);
+                        functions = schemaObjects.functions || [];
+                      }
+                        
+                      // 确保所有字段都有默认值
+                      const tables = schemaObjects.tables || [];
+                      const views = schemaObjects.views || [];
+                      const procedures = schemaObjects.procedures || [];
+                        
+                      // 累加统计总数
+                      totalTables += tables.length;
+                      totalViews += views.length;
+                      totalProcedures += procedures.length;
+                      totalFunctions += functions.length;
+                        
+                      console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的对象数量: 表 ${tables.length}, 视图 ${views.length}, 实体化视图 ${materializedViews.length}, 存储过程 ${procedures.length}, 函数 ${functions.length}`);
+                        
+                      return {
+                        name: schemaName,
+                        tables: tables,
+                        views: views,
+                        materializedViews: materializedViews,
+                        procedures: procedures,
+                        functions: functions
+                      };
+                    } catch (schemaError) {
+                      console.warn(`DATABASE DATA LOADER - 获取模式 ${schemaName} 的对象信息失败`, schemaError);
+                      return {
+                        name: schemaName,
+                        tables: [],
+                        views: [],
+                        materializedViews: [],
+                        procedures: [],
+                        functions: []
+                      };
+                    }
+                  });
                     
-                    // 累加统计总数
-                    totalTables += schemaObjects.tables.length;
-                    totalViews += schemaObjects.views.length;
-                    totalProcedures += schemaObjects.procedures.length;
-                    totalFunctions += schemaObjects.functions.length;
-                    
-                    console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的对象数量: 表 ${schemaObjects.tables.length}, 视图 ${schemaObjects.views.length}, 存储过程 ${schemaObjects.procedures.length}, 函数 ${schemaObjects.functions.length}`);
-                    console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的表列表: ${JSON.stringify(schemaObjects.tables)}`);
-                    
-                    return {
-                      name: schemaName,
-                      tables: schemaObjects.tables,
-                      views: schemaObjects.views,
-                      procedures: schemaObjects.procedures,
-                      functions: schemaObjects.functions
-                    };
-                  } catch (schemaError) {
-                    console.warn(`DATABASE DATA LOADER - 获取模式 ${schemaName} 的对象信息失败`, schemaError);
-                    return {
-                      name: schemaName,
-                      tables: [],
-                      views: [],
-                      procedures: [],
-                      functions: []
-                    };
-                  }
-                });
-                
-                schemas = await Promise.all(schemaPromises);
-              }
+                  schemas = await Promise.all(schemaPromises);
+                }
             } else {
               // 对于其他数据库类型，直接获取所有对象
               const dbObjects = await getAllDatabaseObjects(connection, dbName);
@@ -264,70 +298,79 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           
           console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的schema列表:`, schemas.map(s => s.name));
           
-          dbNode.children = schemas.map((schema: any) => ({
-              key: `schema-${dbName}-${schema.name}`,
-              title: schema.name,
-              children: [
-                // 在schema下展示表、视图、函数、存储过程
-                schema.tables && schema.tables.length > 0 ? {
-                  key: `tables-${dbName}-${schema.name}`,
-                  title: `表 (${schema.tables.length})`,
-                  children: schema.tables.map((table: string) => ({
-                    key: `table-${dbName}-${schema.name}-${table}`,
-                    title: table,
-                    isLeaf: true,
-                    type: 'table' as const
-                  }))
-                } : {
-                  key: `tables-${dbName}-${schema.name}`,
-                  title: `表 (0)`,
-                  children: []
-                },
-                // 其他对象类型（视图、存储过程、函数）的处理类似
-                schema.views && schema.views.length > 0 ? {
-                  key: `views-${dbName}-${schema.name}`,
-                  title: `视图 (${schema.views.length})`,
-                  children: schema.views.map((view: string) => ({
-                    key: `view-${dbName}-${schema.name}-${view}`,
-                    title: view,
-                    isLeaf: true,
-                    type: 'view' as const
-                  }))
-                } : {
-                  key: `views-${dbName}-${schema.name}`,
-                  title: `视图 (0)`,
-                  children: []
-                },
-                schema.procedures && schema.procedures.length > 0 ? {
-                  key: `procedures-${dbName}-${schema.name}`,
-                  title: `存储过程 (${schema.procedures.length})`,
-                  children: schema.procedures.map((procedure: string) => ({
-                    key: `procedure-${dbName}-${schema.name}-${procedure}`,
-                    title: procedure,
-                    isLeaf: true,
-                    type: 'procedure' as const
-                  }))
-                } : {
-                  key: `procedures-${dbName}-${schema.name}`,
-                  title: `存储过程 (0)`,
-                  children: []
-                },
-                schema.functions && schema.functions.length > 0 ? {
-                  key: `functions-${dbName}-${schema.name}`,
-                  title: `函数 (${schema.functions.length})`,
-                  children: schema.functions.map((func: string) => ({
-                    key: `function-${dbName}-${schema.name}-${func}`,
-                    title: func,
-                    isLeaf: true,
-                    type: 'function' as const
-                  }))
-                } : {
-                  key: `functions-${dbName}-${schema.name}`,
-                  title: `函数 (0)`,
-                  children: []
-                }
-              ].filter(Boolean) as TreeNode[]
-            }));
+          dbNode.children = schemas.map((schema: any) => {
+              console.log(`处理schema: ${schema.name} - 表数量: ${schema.tables?.length || 0}, 视图数量: ${schema.views?.length || 0}, 实体化视图数量: ${schema.materializedViews?.length || 0}, 存储过程数量: ${schema.procedures?.length || 0}, 函数数量: ${schema.functions?.length || 0}`);
+              
+              // 计算总数用于显示
+              const totalCount = (schema.tables?.length || 0) + 
+                                (schema.views?.length || 0) + 
+                                (schema.materializedViews?.length || 0) + 
+                                (schema.procedures?.length || 0) + 
+                                (schema.functions?.length || 0);
+              
+              return {
+                key: `schema-${dbName}-${schema.name}`,
+                title: `${schema.name} (${totalCount})`, // 更新标题显示总数
+                type: 'schema' as const,
+                children: [
+                  // 表节点 - 总是显示
+                  {
+                    key: `tables-${dbName}-${schema.name}`,
+                    title: `表 (${schema.tables?.length || 0})`,
+                    children: (schema.tables && schema.tables.length > 0) ? 
+                      schema.tables.map((table: string) => ({
+                        key: `table-${dbName}-${schema.name}-${table}`,
+                        title: table,
+                        isLeaf: true,
+                        type: 'table' as const
+                      })) : []
+                  },
+                  // 视图节点 - 总是显示
+                  {
+                    key: `views-${dbName}-${schema.name}`,
+                    title: `视图 (${schema.views?.length || 0})`,
+                    children: (schema.views && schema.views.length > 0) ? 
+                      schema.views.map((view: string) => ({
+                        key: `view-${dbName}-${schema.name}-${view}`,
+                        title: view,
+                        isLeaf: true,
+                        type: 'view' as const
+                      })) : []
+                  },
+                  // 实体化视图节点 - 总是显示
+                  {
+                    key: `materialized-views-${dbName}-${schema.name}`,
+                    title: `实体化视图 (${schema.materializedViews?.length || 0})`,
+                    children: (schema.materializedViews && schema.materializedViews.length > 0) ? 
+                      schema.materializedViews.map((view: string) => ({
+                        key: `materialized-view-${dbName}-${schema.name}-${view}`,
+                        title: view,
+                        isLeaf: true,
+                        type: 'materialized-view' as const
+                      })) : []
+                  },
+                  // 函数节点 - 总是显示，合并存储过程和函数
+                  {
+                    key: `functions-${dbName}-${schema.name}`,
+                    title: `函数 (${(schema.functions?.length || 0) + (schema.procedures?.length || 0)})`,
+                    children: [
+                      ...(schema.functions || []).map((func: string) => ({
+                        key: `function-${dbName}-${schema.name}-${func}`,
+                        title: func,
+                        isLeaf: true,
+                        type: 'function' as const
+                      })),
+                      ...(schema.procedures || []).map((proc: string) => ({
+                        key: `procedure-${dbName}-${schema.name}-${proc}`,
+                        title: proc,
+                        isLeaf: true,
+                        type: 'function' as const
+                      }))
+                    ]
+                  }
+                ].filter(Boolean) as TreeNode[]
+              };
+            });
           } else {
             // 对于非PostgreSQL数据库，保持原有结构
             dbNode.children = [

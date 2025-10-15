@@ -1,7 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { Button, List, Modal, Form, Input, Select, Switch, message, Tooltip, Dropdown, Empty, Row, Col, Card } from 'antd';
 import { PlusOutlined, DatabaseOutlined, DatabaseFilled, CheckCircleOutlined, CloseCircleOutlined, EditOutlined, DeleteOutlined, CopyOutlined, MoreOutlined, RestOutlined, ArrowRightOutlined, ArrowLeftOutlined } from '@ant-design/icons';
-import { DatabaseConnection, DatabaseType } from '../types';
+import { DatabaseConnection, DatabaseType } from '../../types';
 import { useTheme } from './ThemeContext';
 import './ConnectionPanel.css';
 

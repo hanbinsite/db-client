@@ -13,8 +13,8 @@ import {
   ColumnWidthOutlined,
   RestOutlined
 } from '@ant-design/icons';
-import { DatabaseConnection } from '../types';
-import { useTheme } from './ThemeContext';
+import { DatabaseConnection } from '../../types';
+// ThemeContext导入已移除，因为该模块不存在
 import './DataPanel.css';
 
 const { Option } = Select;
@@ -209,10 +209,10 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
       setData([]);
       setColumns([]);
     }
-  }, [connection, database, table, currentPage, pageSize]);
+  }, [connection, database, tableName, currentPage, pageSize]);
 
   const loadTableData = async () => {
-    if (!connection || !database || !table) return;
+    if (!connection || !database || !tableName) return;
 
     setLoading(true);
     try {
@@ -413,7 +413,7 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
           const updateValues = Object.entries(values)
             .filter(([key]) => key !== primaryKey)
             .map(([_, value]) => value);
-          updateValues.push(record[primaryKey]);
+          updateValues.push(editingRecord[primaryKey]);
           
           const updateQuery = `UPDATE "${database}"."${tableName}" SET ${updateFields} WHERE "${primaryKey}" = $${updateValues.length}`;
           const updateResult = await window.electronAPI.executeQuery(poolId, updateQuery, updateValues);
@@ -552,7 +552,7 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
     );
   }
 
-  if (!database || !table) {
+  if (!database || !tableName) {
     return (
       <div className="data-panel">
         <div className="empty-state">
@@ -655,7 +655,7 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
   };
 
   return (
-    <div className={`data-panel ${darkMode ? 'dark' : ''}`}>
+    <div className="data-panel">
       {/* 工具栏 */}
       <div className="data-toolbar">
         <Space>
@@ -791,13 +791,13 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
             scroll={{ x: true, y: 'calc(100vh - 380px)' }}
             bordered
             rowKey="id"
-            className={darkMode ?? useTheme().darkMode ? 'dark-table' : ''}
+            className={darkMode ? 'dark-table' : ''}
             // 自定义表头样式
             components={{
               header: {
                 cell: ({ className, children, ...props }: any) => (
                   <th 
-                    className={`${className} ${(darkMode ?? useTheme().darkMode) ? 'dark-table-header' : ''}`} 
+                    className={`${className} ${darkMode ? 'dark-table-header' : ''}`} 
                     {...props}
                   >
                     {children}

@@ -3,7 +3,7 @@ import { Card, Table, Pagination, Spin, Empty, Select, Space, Button, Input, Inp
 import { DatePicker, TimePicker } from 'antd';
 const { RangePicker } = DatePicker;
 import { ReloadOutlined, DatabaseOutlined, ColumnHeightOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, FilterOutlined, DownloadOutlined, UploadOutlined, SwapRightOutlined, DatabaseFilled, EditOutlined, TableOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { DatabaseConnection, TableColumn, DataEditOperation, TransactionConfig } from '../types';
+import { DatabaseConnection, TableColumn, DataEditOperation, TransactionConfig } from '../../types';
 import RecordDetailModal from './RecordDetailModal';
 
 const { Option } = Select;

@@ -1,21 +1,14 @@
 import React from 'react';
-import { Tree, Spin } from 'antd';
-import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, IeOutlined } from '@ant-design/icons';
+import { Tree, Spin, Dropdown, Menu } from 'antd';
+import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, IeOutlined, EditOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, MoreOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
+import { TreeNode } from './DatabaseTree';
 import DatabaseContextMenu from './DatabaseContextMenu';
 import { useTheme } from '../common/ThemeContext';
 import { DatabaseType } from '../../types';
 
 const { DirectoryTree } = Tree;
 
-export interface TreeNode {
-  key: string;
-  title: string;
-  icon?: React.ReactNode;
-  children?: TreeNode[];
-  isLeaf?: boolean;
-  type?: 'database' | 'table' | 'view' | 'materialized-view' | 'procedure' | 'function' | 'query' | 'backup' | 'schema';
-  disabled?: boolean;
-}
+
 
 export interface PostgreSqlDatabaseTreeProps {
   treeData: TreeNode[];
@@ -146,18 +139,84 @@ const PostgreSqlDatabaseTree: React.FC<PostgreSqlDatabaseTreeProps> = ({
     const { title, type, key } = nodeData;
     const icon = type ? objectTypeIcons[type] || <FolderOutlined /> : <FolderOutlined />;
     
-    // 包装节点以提供右键菜单，传递PostgreSQL数据库类型
+    // 创建包含图标和标题的自定义内容
+    const nodeContent = (
+      <span className={`tree-node ${darkMode ? 'dark-mode' : ''}`}>
+        <span className="tree-node-icon">{icon}</span>
+        <span className="tree-node-title">{title || 'Unknown'}</span>
+      </span>
+    );
+    
+    // 使用Dropdown组件直接实现右键菜单功能
     return (
-      <DatabaseContextMenu 
-        node={nodeData} 
-        onMenuSelect={onMenuSelect || (() => {})}
-        databaseType={DatabaseType.PostgreSQL}
+      <Dropdown
+        overlay={
+          <Menu
+            items={[
+              // 数据库节点菜单
+              ...(nodeData.type === 'database' ? [
+                { key: 'new-query', label: '新建查询', icon: <CodeOutlined /> },
+                { key: 'new-table', label: '新建表', icon: <PlusOutlined /> },
+                { key: 'refresh', label: '刷新', icon: <ReloadOutlined /> },
+                { key: 'properties', label: '属性', icon: <MoreOutlined /> },
+                // PostgreSQL特有菜单项
+                { key: 'new-schema', label: '新建架构', icon: <PlusOutlined /> }
+              ] : []),
+              // 架构节点菜单
+              ...(nodeData.type === 'schema' ? [
+                { key: 'refresh', label: '刷新', icon: <ReloadOutlined /> },
+                { key: 'create-table', label: '创建表', icon: <PlusOutlined /> },
+                { key: 'create-view', label: '创建视图', icon: <IeOutlined /> }
+              ] : []),
+              // 表节点菜单
+              ...(nodeData.type === 'table' ? [
+                { key: 'select', label: '查询数据', icon: <EyeOutlined /> },
+                { key: 'insert', label: '插入数据', icon: <PlusOutlined /> },
+                { key: 'edit', label: '编辑表', icon: <EditOutlined /> },
+                { key: 'copy', label: '复制表', icon: <CopyOutlined /> },
+                { key: 'delete', label: '删除表', icon: <DeleteOutlined /> },
+                // PostgreSQL特有菜单项
+                { key: 'manage-indexes', label: '管理索引', icon: <CodeOutlined /> },
+                { key: 'manage-constraints', label: '管理约束', icon: <CodeOutlined /> }
+              ] : []),
+              // 视图节点菜单
+              ...(nodeData.type === 'view' || nodeData.type === 'materialized-view' ? [
+                { key: 'select', label: '查询数据', icon: <EyeOutlined /> },
+                { key: 'edit', label: '编辑视图', icon: <EditOutlined /> },
+                { key: 'refresh', label: '刷新视图', icon: <ReloadOutlined /> },
+                { key: 'delete', label: '删除视图', icon: <DeleteOutlined /> }
+              ] : []),
+              // 存储过程和函数菜单
+              ...(nodeData.type === 'procedure' || nodeData.type === 'function' ? [
+                { key: 'execute', label: '执行', icon: <CodeOutlined /> },
+                { key: 'edit', label: '编辑', icon: <EditOutlined /> },
+                { key: 'delete', label: '删除', icon: <DeleteOutlined /> }
+              ] : []),
+              // PostgreSQL特有对象菜单
+              ...(['sequence'].includes(nodeData.type as string) ? [
+                { key: 'view', label: '查看序列', icon: <EyeOutlined /> },
+                { key: 'edit', label: '编辑序列', icon: <EditOutlined /> },
+                { key: 'delete', label: '删除序列', icon: <DeleteOutlined /> }
+              ] : []),
+              ...(['type', 'domain'].includes(nodeData.type as string) ? [
+                { key: 'edit', label: '编辑类型', icon: <EditOutlined /> },
+                { key: 'delete', label: '删除类型', icon: <DeleteOutlined /> }
+              ] : [])
+            ]}
+            onClick={({ key }: { key: string }) => {
+              if (onMenuSelect) {
+                console.log('PostgreSQL右键菜单选择:', key, nodeData);
+                onMenuSelect(key, nodeData);
+              }
+            }}
+          />
+        }
+        trigger={['contextMenu']}
       >
-        <span className={`tree-node ${darkMode ? 'dark-mode' : ''}`}>
-          <span className="tree-node-icon">{icon}</span>
-          <span className="tree-node-title">{title || 'Unknown'}</span>
-        </span>
-      </DatabaseContextMenu>
+        <div style={{ userSelect: 'none', display: 'inline-block' }}>
+          {nodeContent}
+        </div>
+      </Dropdown>
     );
   };
 

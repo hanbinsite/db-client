@@ -8,7 +8,8 @@ import {
   TableOutlined, ScanOutlined, EyeOutlined, ExportOutlined,
   AlignLeftOutlined
 } from '@ant-design/icons';
-import { ConnectionPanel, DatabasePanel, useTheme, ThemeProvider, AddDatabaseModal, AddSchemaModal } from './components/common';
+import { ConnectionPanel, DatabasePanel, useTheme, AddDatabaseModal, AddSchemaModal } from './components/common';
+import { ThemeProvider } from './components/common/ThemeContext';
 import { QueryPanel } from './components/sql-query';
 import { DatabaseTabPanel, MySqlDatabaseTabPanel, PostgreSqlDatabaseTabPanel } from './components/database-detail';
 import { TableDataPanel, MySqlDataPanel, PostgreSqlDataPanel } from './components/data-view';
@@ -431,14 +432,21 @@ const AppContent: React.FC = () => {
   };
 
   // 创建新查询标签页
-  const handleNewQuery = () => {
+  const handleNewQuery = (databaseName?: string) => {
     const tabKey = `query-${Date.now()}`;
+    // 使用传入的数据库名称或当前活动数据库
+    const targetDatabase = databaseName || activeDatabase;
+    // 生成基本查询语句，如果有数据库名则包含数据库前缀
+    let defaultQuery = '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n';
+    if (targetDatabase) {
+      defaultQuery = `-- 输入SQL查询语句\n-- 例如: SELECT * FROM \`${targetDatabase}\`\`.table_name LIMIT 100;\n\n`;
+    }
     const newTab: QueryTab = {
       key: tabKey,
       label: '查询 ' + (queryTabs.length + 1),
-      query: '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n',
+      query: defaultQuery,
       connection: activeConnection || undefined,
-      database: activeDatabase
+      database: targetDatabase
     };
     
     setQueryTabs(prev => [...prev, newTab]);
@@ -538,7 +546,7 @@ const AppContent: React.FC = () => {
           
           <Button 
             icon={<DatabaseOutlined />}
-            onClick={handleNewQuery}
+            onClick={() => handleNewQuery()}
             style={{ marginRight: 8 }}
           >
             新建查询
@@ -693,6 +701,7 @@ const AppContent: React.FC = () => {
                 console.log('数据库结构已加载完成，准备自动选择第一个数据库');
                 // 无需额外操作，DatabasePanel内部已经处理了自动选择第一个数据库
               }}
+              onNewQuery={handleNewQuery}
               key={activeConnection ? `database-panel-${activeConnection.id}-${activeConnection.isConnected ? 'connected' : 'disconnected'}` : 'database-panel-empty'}
             />
           </Sider>

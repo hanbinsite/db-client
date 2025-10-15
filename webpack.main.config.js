@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 
 module.exports = {
   entry: {
@@ -23,6 +24,12 @@ module.exports = {
   resolve: {
     extensions: ['.ts', '.js']
   },
+  plugins: [
+    // 忽略pg-native模块，这是一个可选依赖
+    new webpack.IgnorePlugin({
+      resourceRegExp: /pg-native/
+    })
+  ],
   node: {
     __dirname: false,
     __filename: false

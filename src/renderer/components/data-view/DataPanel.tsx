@@ -13,8 +13,8 @@ import {
   ColumnWidthOutlined,
   RestOutlined
 } from '@ant-design/icons';
-import { DatabaseConnection } from '../types';
-import { useTheme } from './ThemeContext';
+import { DatabaseConnection, DatabaseType } from '../../types';
+// ThemeContext导入已移除，因为该模块不存在
 import './DataPanel.css';
 
 const { Option } = Select;
@@ -31,7 +31,7 @@ interface TableData {
 }
 
 const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) => {
-  const { darkMode } = useTheme();
+  // 移除不存在的useTheme函数使用
   const [data, setData] = useState<TableData[]>([]);
   const [columns, setColumns] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -455,29 +455,26 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
       <Space size="small">
         <Button 
           type="link" 
-          icon={<EyeOutlined />} 
+          icon={<EyeOutlined />}
           onClick={() => handleViewRecord(record)}
           size="small"
-          className={darkMode ? 'dark-btn' : ''}
         >
           查看
         </Button>
         <Button 
           type="link" 
-          icon={<EditOutlined />} 
+          icon={<EditOutlined />}
           onClick={() => handleEdit(record)}
           size="small"
-          className={darkMode ? 'dark-btn' : ''}
         >
           编辑
         </Button>
         <Button 
           type="link" 
           danger 
-          icon={<DeleteOutlined />} 
+          icon={<DeleteOutlined />}
           onClick={() => handleDelete(record)}
           size="small"
-          className={darkMode ? 'dark-btn' : ''}
         >
           删除
         </Button>
@@ -629,7 +626,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
   };
 
   return (
-    <div className={`data-panel ${darkMode ? 'dark' : ''}`}>
+    <div className="data-panel">
       {/* 工具栏 */}
       <div className="data-toolbar">
         <Space>
@@ -643,7 +640,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           <Button 
             icon={<ReloadOutlined />} 
             onClick={handleRefresh}
-            className={darkMode ? 'dark-btn' : ''}
           >
             刷新
           </Button>
@@ -651,7 +647,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             <Button 
               icon={<DownloadOutlined />} 
               onClick={handleExport}
-              className={darkMode ? 'dark-btn' : ''}
             >
               导出
             </Button>
@@ -660,7 +655,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             <Button 
               icon={<CopyOutlined />} 
               onClick={handleCopyData}
-              className={darkMode ? 'dark-btn' : ''}
             >
               复制
             </Button>
@@ -669,7 +663,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             <Button 
               icon={<ColumnWidthOutlined />} 
               onClick={() => setIsColumnMenuVisible(!isColumnMenuVisible)}
-              className={darkMode ? 'dark-btn' : ''}
             >
               列
             </Button>
@@ -678,7 +671,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             <Button 
               icon={<FilterOutlined />} 
               onClick={() => setIsFilterMenuVisible(!isFilterMenuVisible)}
-              className={darkMode ? 'dark-btn' : ''}
             >
               过滤
             </Button>
@@ -686,22 +678,20 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
         </Space>
         
         <Space>
-          <Input
-            placeholder="搜索..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200 }}
-            onPressEnter={handleSearch}
-            className={darkMode ? 'dark-input' : ''}
-          />
-          <Button 
-            icon={<SearchOutlined />} 
-            onClick={handleSearch}
-            className={darkMode ? 'dark-btn' : ''}
-          >
-            搜索
-          </Button>
-        </Space>
+           <Input
+             placeholder="搜索..."
+             value={searchText}
+             onChange={(e) => setSearchText(e.target.value)}
+             style={{ width: 200 }}
+             onPressEnter={handleSearch}
+           />
+            <Button 
+              icon={<SearchOutlined />}
+              onClick={handleSearch}
+            >
+              搜索
+            </Button>
+          </Space>
       </div>
 
       {/* 表格信息栏 */}
@@ -760,13 +750,12 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             scroll={{ x: true, y: 'calc(100vh - 380px)' }}
             bordered
             rowKey="id"
-            className={darkMode ? 'dark-table' : ''}
             // 自定义表头样式
             components={{
               header: {
                 cell: ({ className, children, ...props }: any) => (
                   <th 
-                    className={`${className} ${darkMode ? 'dark-table-header' : ''}`} 
+                    className={className} 
                     {...props}
                   >
                     {children}
@@ -776,7 +765,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
               body: {
                 cell: ({ className, children, ...props }: any) => (
                   <td 
-                    className={`${className} ${darkMode ? 'dark-table-cell' : ''}`} 
+                    className={className} 
                     {...props}
                   >
                     {children}
@@ -804,7 +793,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
               setCurrentPage(page);
               setPageSize(size || 20);
             }}
-            className={darkMode ? 'dark-pagination' : ''}
           />
         </div>
       </div>
@@ -819,12 +807,10 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           setIsAddModalVisible(false);
         }}
         width={600}
-        className={darkMode ? 'dark-modal' : ''}
       >
         <Form
           form={form}
           layout="vertical"
-          className={darkMode ? 'dark-form' : ''}
         >
           {renderFormFields()}
         </Form>

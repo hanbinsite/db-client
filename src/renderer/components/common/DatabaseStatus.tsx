@@ -1,5 +1,5 @@
 import React from 'react';
-import { DatabaseConnection } from '../types';
+import { DatabaseConnection } from '../../types';
 import './DatabasePanel.css';
 
 interface DatabaseStatusProps {

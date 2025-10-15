@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, Form, Input, message } from 'antd';
-import { DatabaseConnection } from '../types';
+import { DatabaseConnection } from '../../types';
 
 interface AddSchemaModalProps {
   visible: boolean;

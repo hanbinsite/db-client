@@ -59,25 +59,23 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
       loading
     };
 
-    switch (databaseType) {
-      case DatabaseType.MySQL:
-        console.log('DATABASE TREE - 渲染MySQL数据库树');
-        return <MySqlDatabaseTree {...commonProps} />;
-      
-      case DatabaseType.PostgreSQL:
-        console.log('DATABASE TREE - 渲染PostgreSQL数据库树');
-        return <PostgreSqlDatabaseTree {...commonProps} />;
-      
-      default:
-        console.log('DATABASE TREE - 渲染默认数据库树');
-        // 默认情况下显示加载状态
-        return (
-          <div className="loading-container">
-            <div style={{ textAlign: 'center', padding: '20px', color: darkMode ? '#fff' : '#333' }}>
-              不支持的数据库类型: {databaseType}
-            </div>
+    // 直接比较字符串值，使用小写形式匹配types.ts中的定义
+    if (databaseType === 'mysql') {
+      console.log('DATABASE TREE - 渲染MySQL数据库树');
+      return <MySqlDatabaseTree {...commonProps} />;
+    } else if (databaseType === 'postgresql') {
+      console.log('DATABASE TREE - 渲染PostgreSQL数据库树');
+      return <PostgreSqlDatabaseTree {...commonProps} />;
+    } else {
+      console.log('DATABASE TREE - 渲染默认数据库树');
+      // 默认情况下显示加载状态
+      return (
+        <div className="loading-container">
+          <div style={{ textAlign: 'center', padding: '20px', color: darkMode ? '#fff' : '#333' }}>
+            不支持的数据库类型: {databaseType}
           </div>
-        );
+        </div>
+      );
     }
   };
 

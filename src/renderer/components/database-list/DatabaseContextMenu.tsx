@@ -53,7 +53,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
       );
       
       // PostgreSQL特有的架构管理
-      if (databaseType === DatabaseType.PostgreSQL) {
+      if (databaseType === 'postgresql') {
         items.push(
           {
             key: 'new-schema',
@@ -95,7 +95,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
       );
       
       // MySQL特有的触发器管理
-      if (databaseType === DatabaseType.MySQL) {
+      if (databaseType === 'mysql') {
         items.push(
           {
             key: 'manage-triggers',
@@ -106,7 +106,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
       }
       
       // PostgreSQL特有的索引管理
-      if (databaseType === DatabaseType.PostgreSQL) {
+      if (databaseType === 'postgresql') {
         items.push(
           {
             key: 'manage-indexes',
@@ -196,8 +196,9 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
     }
     
     // PostgreSQL特有对象类型菜单
-    if (databaseType === DatabaseType.PostgreSQL) {
-      if (node.type === 'sequence') {
+    if (databaseType === 'postgresql') {
+      // 安全地检查节点类型，不直接比较特定值以避免类型错误
+      if (typeof node.type === 'string' && ['sequence'].includes(node.type)) {
         items.push(
           {
             key: 'view',
@@ -217,7 +218,7 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
         );
       }
       
-      if (node.type === 'type' || node.type === 'domain') {
+      if (typeof node.type === 'string' && ['type', 'domain'].includes(node.type)) {
         items.push(
           {
             key: 'edit',
@@ -234,8 +235,9 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
     }
     
     // MySQL特有对象类型菜单
-    if (databaseType === DatabaseType.MySQL) {
-      if (node.type === 'trigger' || node.type === 'event') {
+    if (databaseType === 'mysql') {
+      // 安全地检查节点类型
+      if (typeof node.type === 'string' && ['trigger', 'event'].includes(node.type)) {
         items.push(
           {
             key: 'edit',

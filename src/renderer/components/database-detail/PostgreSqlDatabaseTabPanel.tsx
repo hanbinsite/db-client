@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Card, Input, Row, Col, Statistic, Space, Spin, Tag, Table, Tabs, Modal, message, Dropdown, Menu } from 'antd';
 import { DatabaseOutlined, TableOutlined, EyeOutlined, PlayCircleOutlined, FunctionOutlined, BarChartOutlined } from '@ant-design/icons';
-import type { DatabaseType, DatabaseConnection } from '../types';
+import type { DatabaseType, DatabaseConnection } from '../../types';
 
 interface Props {
   connection: DatabaseConnection;

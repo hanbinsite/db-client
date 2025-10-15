@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { TreeNode } from './DatabaseTree';
+import { TreeNode } from '../database-list/DatabaseTree';
 import './DatabasePanel.css';
 
 interface DatabaseContextMenuProps {

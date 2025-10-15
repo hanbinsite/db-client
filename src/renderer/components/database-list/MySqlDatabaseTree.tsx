@@ -1,21 +1,14 @@
 import React from 'react';
-import { Tree, Spin } from 'antd';
-import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, IeOutlined, ThunderboltOutlined, CalendarOutlined } from '@ant-design/icons';
+import { Tree, Spin, Dropdown, Menu } from 'antd';
+import { DatabaseOutlined, TableOutlined, FolderOutlined, CodeOutlined, FunctionOutlined, IeOutlined, ThunderboltOutlined, CalendarOutlined, EditOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, MoreOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
+import { TreeNode } from './DatabaseTree';
 import DatabaseContextMenu from './DatabaseContextMenu';
 import { useTheme } from '../common/ThemeContext';
 import { DatabaseType } from '../../types';
 
 const { DirectoryTree } = Tree;
 
-export interface TreeNode {
-  key: string;
-  title: string;
-  icon?: React.ReactNode;
-  children?: TreeNode[];
-  isLeaf?: boolean;
-  type?: 'database' | 'table' | 'view' | 'materialized-view' | 'procedure' | 'function' | 'query' | 'backup' | 'schema';
-  disabled?: boolean;
-}
+
 
 export interface MySqlDatabaseTreeProps {
   treeData: TreeNode[];
@@ -143,14 +136,63 @@ const MySqlDatabaseTree: React.FC<MySqlDatabaseTreeProps> = ({
     
     console.log('MYSQL DATABASE TREE - 渲染节点:', { title, type, key });
     
-    // 包装节点以提供右键菜单，传递databaseType参数
+    // 创建包含图标和标题的自定义内容
+    const nodeContent = (
+      <span className="mysql-tree-node">
+        <span className="mysql-tree-node-icon">{icon}</span>
+        <span className="mysql-tree-node-title">{title || 'Unknown'}</span>
+      </span>
+    );
+    
+    // 使用Dropdown组件直接实现右键菜单功能
     return (
-      <DatabaseContextMenu node={nodeData} onMenuSelect={onMenuSelect || (() => {})} databaseType={DatabaseType.MySQL}>
-        <span className="mysql-tree-node">
-          <span className="mysql-tree-node-icon">{icon}</span>
-          <span className="mysql-tree-node-title">{title || 'Unknown'}</span>
-        </span>
-      </DatabaseContextMenu>
+      <Dropdown
+        overlay={
+          <Menu
+            items={[
+              // 数据库节点菜单
+              ...(nodeData.type === 'database' ? [
+                { key: 'new-query', label: '新建查询', icon: <CodeOutlined /> },
+                { key: 'new-table', label: '新建表', icon: <PlusOutlined /> },
+                { key: 'refresh', label: '刷新', icon: <ReloadOutlined /> },
+                { key: 'properties', label: '属性', icon: <MoreOutlined /> }
+              ] : []),
+              // 表节点菜单
+              ...(nodeData.type === 'table' ? [
+                { key: 'select', label: '查询数据', icon: <EyeOutlined /> },
+                { key: 'insert', label: '插入数据', icon: <PlusOutlined /> },
+                { key: 'edit', label: '编辑表', icon: <EditOutlined /> },
+                { key: 'copy', label: '复制表', icon: <CopyOutlined /> },
+                { key: 'delete', label: '删除表', icon: <DeleteOutlined /> },
+                // MySQL特有菜单项
+                { key: 'manage-triggers', label: '管理触发器', icon: <CodeOutlined /> }
+              ] : []),
+              // 其他节点类型的通用菜单
+              ...(nodeData.type === 'view' || nodeData.type === 'procedure' || nodeData.type === 'function' ? [
+                { key: 'select', label: '查看数据', icon: <EyeOutlined /> },
+                { key: 'edit', label: '编辑', icon: <EditOutlined /> },
+                { key: 'delete', label: '删除', icon: <DeleteOutlined /> }
+              ] : [])
+            ]}
+            onClick={({ key }: { key: string }) => {
+              if (onMenuSelect) {
+                console.log('MySQL右键菜单选择:', key, nodeData);
+                // 对于新建查询操作，确保传递数据库名称
+                if (key === 'new-query' && nodeData.type === 'database') {
+                  onMenuSelect(key, nodeData);
+                } else {
+                  onMenuSelect(key, nodeData);
+                }
+              }
+            }}
+          />
+        }
+        trigger={['contextMenu']}
+      >
+        <div style={{ userSelect: 'none', display: 'inline-block' }}>
+          {nodeContent}
+        </div>
+      </Dropdown>
     );
   };
 

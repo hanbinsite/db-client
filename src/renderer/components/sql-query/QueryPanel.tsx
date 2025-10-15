@@ -12,8 +12,8 @@ import {
   CodeOutlined,
   FileSearchOutlined
 } from '@ant-design/icons';
-import { DatabaseConnection, QueryResult } from '../types';
-import { useTheme } from './ThemeContext';
+import { DatabaseConnection, QueryResult } from '../../types';
+import { useTheme } from '../common/ThemeContext';
 import './QueryPanel.css';
 
 const { TextArea } = Input;
@@ -150,7 +150,7 @@ const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, o
     }
     // 简单的CSV导出实现
     const headers = (results.columns || []).join(',');
-    const rows = results.data.map(row => 
+    const rows = results.data.map((row: Record<string, any>) => 
       Object.values(row).map(val => `"${val}"`).join(',')
     ).join('\n');
     const csv = `${headers}\n${rows}`;
@@ -177,7 +177,7 @@ const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, o
       return;
     }
     // 将结果复制到剪贴板
-    const text = results.data.map(row => 
+    const text = results.data.map((row: Record<string, any>) => 
       Object.values(row).join('\t')
     ).join('\n');
     navigator.clipboard.writeText(text).then(() => {
@@ -222,7 +222,7 @@ const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, o
     }
 
     if (results.data && results.columns) {
-      const columns = results.columns.map(col => ({
+      const columns = results.columns.map((col: string) => ({
         title: col,
         dataIndex: col,
         key: col,

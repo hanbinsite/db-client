@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { DatabaseConnection } from '../types';
+import { DatabaseConnection } from '../../types';
 import type { Key } from 'react';
 import { useTheme } from './ThemeContext';
-import { DbType } from '../utils/database-utils';
-import DatabaseTree from './DatabaseTree';
+// import { DbType } from '../utils/database-utils';
+import DatabaseTree from '../database-list/DatabaseTree';
 import DatabaseHeader from './DatabaseHeader';
 import DatabaseDataLoader from './DatabaseDataLoader';
 import DatabaseStatus from './DatabaseStatus';
 import DatabaseContextMenu from './DatabaseContextMenu';
-import TreeNodeRenderer from './TreeNodeRenderer';
+import TreeNodeRenderer from '../database-list/TreeNodeRenderer';
 import AddDatabaseModal from './AddDatabaseModal';
 import AddSchemaModal from './AddSchemaModal';
 import './DatabasePanel.css';
@@ -30,6 +30,7 @@ interface DatabasePanelProps {
   activeTable: string;
   darkMode: boolean;
   onDataLoaded?: () => void;
+  onNewQuery?: (database?: string) => void;
 }
 
 const DatabasePanel: React.FC<DatabasePanelProps> = ({
@@ -38,7 +39,8 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   onTableSelect,
   activeDatabase,
   activeTable,
-  onDataLoaded
+  onDataLoaded,
+  onNewQuery
 }) => {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -70,111 +72,110 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
   }, [darkMode]);
 
   // 处理数据加载完成回调
-  const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
-    console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', data.length, '个数据库');
-    
-    // 检查数据库类型，如果是PostgreSQL则保留完整的树状结构
-    // 从连接信息中获取数据库类型
-    let treeDataToSet = data;
-    if (connection?.type !== DbType.POSTGRESQL && connection?.type !== DbType.GAUSSDB) {
-      // 对于非PostgreSQL数据库，简化树数据，只保留数据库节点，移除子节点
-      treeDataToSet = data.map(dbNode => ({
-        ...dbNode,
-        children: [] // 清空子节点，只显示数据库列表
-      }));
-    }
-    
-    setTreeData(treeDataToSet);
-    setExpandedKeys([]); // 初始不展开任何节点
-    setLoading(false);
-    
-    // 注释掉自动选择第一个数据库的逻辑，避免自动打开数据浏览tab
-    // if (data.length > 0 && onDatabaseSelect) {
-    //   const firstDbName = typeof data[0].title === 'string' ? data[0].title : '';
-    //   if (firstDbName) {
-    //     onDatabaseSelect(firstDbName);
-    //     console.log('DATABASE PANEL - 自动选择第一个数据库:', firstDbName);
-    //   }
-    // }
-    
-    // 通知父组件数据已加载完成
-    if (onDataLoaded) {
-      onDataLoaded();
-    }
-  };
+    const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
+      console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', data.length, '个数据库');
+      
+      // 检查数据库类型，如果是PostgreSQL则保留完整的树状结构
+      let treeDataToSet = data;
+      if (connection?.type !== 'postgresql' && connection?.type !== 'gaussdb') {
+        // 对于非PostgreSQL数据库，简化树数据，只保留数据库节点，移除子节点
+        treeDataToSet = data.map(dbNode => ({
+          ...dbNode,
+          children: [] // 清空子节点，只显示数据库列表
+        }));
+      }
+      
+      setTreeData(treeDataToSet);
+      setExpandedKeys([]); // 初始不展开任何节点
+      setLoading(false);
+      
+      // 注释掉自动选择第一个数据库的逻辑，避免自动打开数据浏览tab
+      // if (data.length > 0 && onDatabaseSelect) {
+      //   const firstDbName = typeof data[0].title === 'string' ? data[0].title : '';
+      //   if (firstDbName) {
+      //     onDatabaseSelect(firstDbName);
+      //     console.log('DATABASE PANEL - 自动选择第一个数据库:', firstDbName);
+      //   }
+      // }
+      
+      // 通知父组件数据已加载完成
+      if (onDataLoaded) {
+        onDataLoaded();
+      }
+    };
 
-  // 处理刷新操作
-  const handleRefresh = () => {
-    console.log('DATABASE PANEL - 手动触发刷新数据库结构');
-    setLoading(true);
-    
-    // 清除缓存
-    if (dataLoaderRef.current && dataLoaderRef.current.clearCache) {
-      console.log('DATABASE PANEL - 清除数据库列表缓存');
-      dataLoaderRef.current.clearCache();
-    }
-    
-    // 更新刷新触发器，强制重新加载数据
-    setRefreshTrigger(prev => prev + 1);
-  };
+    // 处理刷新操作
+    const handleRefresh = () => {
+      console.log('DATABASE PANEL - 手动触发刷新数据库结构');
+      setLoading(true);
+      
+      // 清除缓存
+      if (dataLoaderRef.current && dataLoaderRef.current.clearCache) {
+        console.log('DATABASE PANEL - 清除数据库列表缓存');
+        dataLoaderRef.current.clearCache();
+      }
+      
+      // 更新刷新触发器，强制重新加载数据
+      setRefreshTrigger(prev => prev + 1);
+    };
 
-  // 处理节点选择 - 区分数据库类型
-  const handleNodeSelect = (node: TreeNode) => {
-    console.log('DATABASE PANEL - 节点被选择:', node.key, node.title);
+    // 处理节点选择 - 区分数据库类型
+    const handleNodeSelect = (node: TreeNode) => {
+      console.log('DATABASE PANEL - 节点被选择:', node.key, node.title);
+      
+      if (node.type === 'database') {
+        // 对于PostgreSQL数据库，点击数据库名称只展开/折叠节点，不打开数据库详情
+        // 对于其他数据库类型，保持原有行为
+        if (connection?.type !== 'postgresql' && connection?.type !== 'gaussdb') {
+          const dbName = node.title as string;
+          console.log('DATABASE PANEL - 选择数据库:', dbName);
+          onDatabaseSelect(dbName);
+          onTableSelect('');
+          setActiveOtherObject('');
+        }
+      }
+    };
     
-    if (node.type === 'database') {
-      // 对于PostgreSQL数据库，点击数据库名称只展开/折叠节点，不打开数据库详情
-      // 对于其他数据库类型，保持原有行为
-      if (connection?.type !== DbType.POSTGRESQL && connection?.type !== DbType.GAUSSDB) {
+    // 处理节点双击事件
+    const handleNodeDoubleClick = (node: TreeNode) => {
+      console.log('DATABASE PANEL - 节点双击:', node.key, node.title, node.type);
+      
+      // 特别处理schema类型节点
+      if (node.type === 'schema') {
+        // 对于schema节点，双击时打开详情页面
+        const schemaName = node.title?.toString().split(' (')[0] || ''; // 从标题中提取模式名
+        console.log('DATABASE PANEL - 双击模式节点:', schemaName);
+        // 设置模式名作为数据库名参数，打开详情页面
+        onDatabaseSelect(schemaName);
+        onTableSelect('');
+        setActiveOtherObject('');
+        return;
+      }
+      
+      // 处理PostgreSQL的模式节点双击（兼容旧逻辑）
+      if ((connection?.type === 'postgresql' || connection?.type === 'gaussdb') && 
+          node.type !== 'database' && node.type !== 'table' && 
+          node.type !== 'view' && node.type !== 'materialized-view' && 
+          node.type !== 'procedure' && node.type !== 'function') {
+        // 对于PostgreSQL，除了已知类型外的节点（模式节点），双击时打开详情页面
+        const schemaName = node.title?.toString().split(' (')[0] || '';
+        console.log('DATABASE PANEL - 双击PostgreSQL模式(兼容):', schemaName);
+        // 设置模式名作为数据库名参数，打开详情页面
+        onDatabaseSelect(schemaName);
+        onTableSelect('');
+        setActiveOtherObject('');
+      }
+      // 对于其他数据库类型，保持原有的数据库节点双击行为
+      else if (node.type === 'database' && 
+              connection?.type !== 'postgresql' && 
+              connection?.type !== 'gaussdb') {
         const dbName = node.title as string;
-        console.log('DATABASE PANEL - 选择数据库:', dbName);
+        console.log('DATABASE PANEL - 双击其他数据库:', dbName);
         onDatabaseSelect(dbName);
         onTableSelect('');
         setActiveOtherObject('');
       }
-    }
-  };
-  
-  // 处理节点双击事件
-  const handleNodeDoubleClick = (node: TreeNode) => {
-    console.log('DATABASE PANEL - 节点双击:', node.key, node.title, node.type);
-    
-    // 特别处理schema类型节点
-    if (node.type === 'schema') {
-      // 对于schema节点，双击时打开详情页面
-      const schemaName = node.title?.toString().split(' (')[0] || ''; // 从标题中提取模式名
-      console.log('DATABASE PANEL - 双击模式节点:', schemaName);
-      // 设置模式名作为数据库名参数，打开详情页面
-      onDatabaseSelect(schemaName);
-      onTableSelect('');
-      setActiveOtherObject('');
-      return;
-    }
-    
-    // 处理PostgreSQL的模式节点双击（兼容旧逻辑）
-    if ((connection?.type === DbType.POSTGRESQL || connection?.type === DbType.GAUSSDB) && 
-        node.type !== 'database' && node.type !== 'table' && 
-        node.type !== 'view' && node.type !== 'materialized-view' && 
-        node.type !== 'procedure' && node.type !== 'function') {
-      // 对于PostgreSQL，除了已知类型外的节点（模式节点），双击时打开详情页面
-      const schemaName = node.title?.toString().split(' (')[0] || '';
-      console.log('DATABASE PANEL - 双击PostgreSQL模式(兼容):', schemaName);
-      // 设置模式名作为数据库名参数，打开详情页面
-      onDatabaseSelect(schemaName);
-      onTableSelect('');
-      setActiveOtherObject('');
-    }
-    // 对于其他数据库类型，保持原有的数据库节点双击行为
-    else if (node.type === 'database' && 
-             connection?.type !== DbType.POSTGRESQL && 
-             connection?.type !== DbType.GAUSSDB) {
-      const dbName = node.title as string;
-      console.log('DATABASE PANEL - 双击其他数据库:', dbName);
-      onDatabaseSelect(dbName);
-      onTableSelect('');
-      setActiveOtherObject('');
-    }
-  };
+    };
 
   // 处理节点展开/折叠
   const handleNodeExpand = (keys: Key[]) => {
@@ -258,6 +259,15 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         break;
       case 'new-query':
         console.log('DATABASE PANEL - 创建新查询');
+        if (onNewQuery) {
+          // 如果节点类型是database，传递数据库名称给新建查询函数
+          if (node.type === 'database' && typeof node.title === 'string') {
+            onNewQuery(node.title);
+          } else {
+            // 否则使用当前活动数据库
+            onNewQuery(activeDatabase || undefined);
+          }
+        }
         break;
       case 'run-sql-file':
         console.log('DATABASE PANEL - 运行SQL文件');
@@ -350,6 +360,7 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
           onExpand={handleNodeExpand}
           loading={loading}
           darkMode={darkMode}
+          databaseType={connection?.type || ''}
         />
         )}
       </div>

@@ -13,8 +13,8 @@ import {
   ColumnWidthOutlined,
   RestOutlined
 } from '@ant-design/icons';
-import { DatabaseConnection } from '../types';
-import { useTheme } from './ThemeContext';
+import { DatabaseConnection } from '../../types';
+// ThemeContext导入已移除，因为该模块不存在
 import './DataPanel.css';
 
 const { Option } = Select;
@@ -209,10 +209,10 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
       setData([]);
       setColumns([]);
     }
-  }, [connection, database, table, currentPage, pageSize]);
+  }, [connection, database, tableName, currentPage, pageSize]);
 
   const loadTableData = async () => {
-    if (!connection || !database || !table) return;
+    if (!connection || !database || !tableName) return;
 
     setLoading(true);
     try {
@@ -408,7 +408,7 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
           const updateValues = Object.entries(values)
             .filter(([key]) => key !== primaryKey)
             .map(([_, value]) => value);
-          updateValues.push(record[primaryKey]);
+          updateValues.push(editingRecord[primaryKey]);
           
           const updateQuery = `UPDATE \`${database}\`\.\`${tableName}\` SET ${updateFields} WHERE \`${primaryKey}\` = ?`;
           const updateResult = await window.electronAPI.executeQuery(poolId, updateQuery, updateValues);
@@ -547,7 +547,7 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
     );
   }
 
-  if (!database || !table) {
+  if (!database || !tableName) {
     return (
       <div className="data-panel">
         <div className="empty-state">
@@ -786,14 +786,14 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
             scroll={{ x: true, y: 'calc(100vh - 380px)' }}
             bordered
             rowKey="id"
-            className={darkMode ?? useTheme().darkMode ? 'dark-table' : ''}
+            className={darkMode ? 'dark-table' : ''}
             // 自定义表头样式
             components={{
               header: {
                 cell: ({ className, children, ...props }: any) => (
                   <th 
-                    className={`${className} ${(darkMode ?? useTheme().darkMode) ? 'dark-table-header' : ''}`} 
-                    {...props}
+                     className={`${className} ${darkMode ? 'dark-table-header' : ''}`} 
+                      {...props}
                   >
                     {children}
                   </th>

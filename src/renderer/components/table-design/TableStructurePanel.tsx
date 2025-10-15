@@ -16,7 +16,7 @@ import {
   ExclamationCircleOutlined,
   ReloadOutlined
 } from '@ant-design/icons';
-import { DatabaseConnection } from '../types';
+import { DatabaseConnection } from '../../types';
 import { 
   TableField, 
   TableIndex, 
@@ -31,7 +31,7 @@ import {
   TableStructureDataType,
   checkTableExists, 
   getDefaultField
-} from '../utils/table-structure-utils';
+} from '../../utils/table-structure-utils';
 
 interface TableStructurePanelProps {
   connection: DatabaseConnection | null;
@@ -376,7 +376,7 @@ const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, d
     
     // 更新加载状态
     if (partialLoadingStatus) {
-      setLoadingStatus(prev => ({ ...prev, ...partialLoadingStatus }));
+      setLoadingStatus((prev: TableStructureLoadingStatus) => ({ ...prev, ...partialLoadingStatus }));
     }
     
     // 无条件更新数据 - 这是修复索引数据不显示的关键
@@ -424,11 +424,11 @@ const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, d
       const errorDataTypeMatch = partialError.match(/处理(\w+)数据时出错/);
       if (errorDataTypeMatch && errorDataTypeMatch[1]) {
         const dataType = errorDataTypeMatch[1].toLowerCase() as TableStructureDataType;
-        setDataTypeErrors(prev => ({ ...prev, [dataType]: partialError }));
+        setDataTypeErrors((prev: Record<TableStructureDataType, string | null>) => ({ ...prev, [dataType]: partialError }));
       } else if (completedTypes && completedTypes.length > 0) {
         // 如果没有明确的错误类型，但有完成的类型，使用最后一个完成的类型
         const lastCompletedType = completedTypes[completedTypes.length - 1];
-        setDataTypeErrors(prev => ({ ...prev, [lastCompletedType]: partialError }));
+        setDataTypeErrors((prev: Record<TableStructureDataType, string | null>) => ({ ...prev, [lastCompletedType]: partialError }));
       } else {
         // 显示通用错误消息但不覆盖已加载的数据
         console.error('表结构数据加载错误:', partialError);
@@ -1005,9 +1005,9 @@ const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, d
     }
 
     // 设置指定类型的加载状态为true
-    setLoadingStatus(prev => ({ ...prev, [dataType]: true }));
+    setLoadingStatus((prev: TableStructureLoadingStatus) => ({ ...prev, [dataType]: true }));
     // 清除对应类型的错误信息
-    setDataTypeErrors(prev => ({ ...prev, [dataType]: null }));
+    setDataTypeErrors((prev: Record<TableStructureDataType, string | null>) => ({ ...prev, [dataType]: null }));
 
     try {
       // 使用渐进式加载函数，但只请求特定类型的数据
@@ -1020,13 +1020,13 @@ const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, d
       );
     } catch (error) {
       console.error(`刷新${dataType}数据失败:`, error);
-      setDataTypeErrors(prev => ({
+      setDataTypeErrors((prev: Record<TableStructureDataType, string | null>) => ({
         ...prev,
         [dataType]: `刷新${dataType}数据失败: ${(error as Error).message}`
       }));
     } finally {
       // 设置指定类型的加载状态为false
-      setLoadingStatus(prev => ({ ...prev, [dataType]: false }));
+      setLoadingStatus((prev: TableStructureLoadingStatus) => ({ ...prev, [dataType]: false }));
     }
   };
 

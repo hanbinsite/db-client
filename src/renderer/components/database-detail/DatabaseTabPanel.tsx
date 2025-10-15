@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Tabs, Card, Row, Col, Statistic, Table, Space, Button, Tag, Spin, Input, Dropdown, Menu, Modal, message } from 'antd';
 import { DatabaseOutlined, TableOutlined, BarChartOutlined, CodeOutlined, EyeOutlined, PlayCircleOutlined, FunctionOutlined } from '@ant-design/icons';
-import { DatabaseConnection, DatabaseType } from '../types';
-import QueryPanel from './QueryPanel';
-import TableStructurePanel from './TableStructurePanel';
+import { DatabaseConnection, DatabaseType } from '../../types';
+import QueryPanel from '../sql-query/QueryPanel';
+import TableStructurePanel from '../table-design/TableStructurePanel';
 import './DatabaseTabPanel.css';
 
 const { TabPane } = Tabs;

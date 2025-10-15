@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal, Form, Input, InputNumber, Checkbox, DatePicker, message, Button } from 'antd';
-import { TableColumn, DataEditOperation } from '../types';
+import { TableColumn, DataEditOperation } from '../../types';
 
 interface RecordDetailModalProps {
   visible: boolean;

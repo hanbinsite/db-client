@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, Form, Input, Select, Button, message } from 'antd';
-import type { DatabaseConnection } from '../types';
+import { DatabaseConnection } from '../../types';
 
 type AddDatabaseModalProps = {
   visible: boolean;

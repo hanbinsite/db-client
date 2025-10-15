@@ -1,6 +1,6 @@
 import React, { useState, forwardRef, useImperativeHandle, useEffect, useRef } from 'react';
-import { DatabaseConnection } from '../types';
-import { getDatabaseList, getDefaultDatabases, DbType, getAllDatabaseObjects, getSchemaList, DatabaseItem } from '../utils/database-utils';
+import { DatabaseConnection } from '../../types';
+import { getDatabaseList, getDefaultDatabases, DbType, getAllDatabaseObjects, getSchemaList, DatabaseItem } from '../../utils/database-utils';
 
 // 数据库列表缓存
 const databaseListCache: Record<string, { databases: DatabaseItem[], timestamp: number }> = {};

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Table, Space, Modal, Form, Input, InputNumber, Select, message, Card, Pagination, Spin, Tooltip, Empty, Badge, Radio } from 'antd';
+import { Button, Table, Space, Modal, Form, Input, InputNumber, Select, message, Card, Pagination, Spin, Tooltip, Empty, Badge, Radio, Switch, DatePicker, TimePicker, Checkbox } from 'antd';
+import type { Dayjs } from 'dayjs';
+import DbFieldFormItem from './DbFieldFormItem';
 import {
   EditOutlined,
   DeleteOutlined,
@@ -444,34 +446,43 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
         // 不再获取总记录数，避免千万行表查询卡死
 
         // 动态生成列配置
-          if (realData.length > 0) {
-            const firstRow = realData[0];
-            const realColumns = Object.keys(firstRow).map(key => {
-              // 尝试从已有的columns中获取dbType信息
-              const existingColumn = columns.find(col => col.key === key);
-              return {
-                title: key === 'key' ? '索引' : key,
-                dataIndex: key,
-                key: key,
-                type: typeof firstRow[key] === 'number' ? 'number' : 'string',
-                dbType: existingColumn?.dbType, // 保留已有的数据库类型信息
-                editable: key !== 'key' && key.toLowerCase() !== 'id' && key.toLowerCase().indexOf('created_at') === -1
-              };
-            }).filter(col => col.key !== 'key'); // 移除key列
+        if (realData.length > 0) {
+          const firstRow = realData[0];
+          const realColumns = Object.keys(firstRow).map(key => {
+            // 尝试从已有的columns中获取dbType信息
+            const existingColumn = columns.find(col => col.key === key);
+            return {
+              title: key === 'key' ? '索引' : key,
+              dataIndex: key,
+              key: key,
+              type: typeof firstRow[key] === 'number' ? 'number' : 'string',
+              dbType: existingColumn?.dbType, // 保留已有的数据库类型信息
+              editable: key !== 'key' && key.toLowerCase() !== 'id' && key.toLowerCase().indexOf('created_at') === -1
+            };
+          }).filter(col => col.key !== 'key'); // 移除key列
 
-            // 初始化可见列
-            if (realColumns.length && visibleColumns.size === 0) {
-              setVisibleColumns(new Set(realColumns.map(col => col.key)));
-            }
-
-            setColumns(realColumns);
+          // 初始化可见列
+          if (realColumns.length && visibleColumns.size === 0) {
+            setVisibleColumns(new Set(realColumns.map(col => col.key)));
           }
+
+          setColumns(realColumns);
+        } else if (columns.length === 0) {
+          // 如果没有数据且没有列定义，尝试获取表结构
+          console.log('查询返回空结果，尝试获取表结构以显示表头');
+          await getTableSchema(poolId);
+        }
 
         setData(realData);
       } else {
         console.warn('MySQL未获取到数据或查询失败');
         setData([]);
-        setColumns([]);
+        // 不再清空columns，保留表头显示
+        if (columns.length === 0) {
+          // 如果没有列定义，尝试获取表结构
+          console.log('查询失败，尝试获取表结构以显示表头');
+          await getTableSchema(poolId);
+        }
       }
     } catch (error) {
       message.error('MySQL加载数据失败');
@@ -663,31 +674,17 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
     )
   };
 
+  // 使用通用数据库字段表单组件渲染表单字段
   const renderFormFields = () => {
     const editableColumns = columns.filter(col => col.editable !== false);
     
-    return editableColumns.map(col => {
-      let inputComponent = <Input />;
-      
-      if (col.type === 'number') {
-        inputComponent = <InputNumber style={{ width: '100%' }} />;
-      } else if (col.dataIndex === 'email') {
-        inputComponent = <Input type="email" />;
-      }
-      
-      return (
-        <Form.Item
-          key={col.dataIndex}
-          label={col.title}
-          name={col.dataIndex}
-          rules={[
-            { required: true, message: `请输入${col.title}` }
-          ]}
-        >
-          {inputComponent}
-        </Form.Item>
-      );
-    });
+    return editableColumns.map(col => (
+      <DbFieldFormItem 
+        key={col.dataIndex} 
+        column={col} 
+        databaseType="mysql" 
+      />
+    ));
   };
 
   if (!connection || !connection.isConnected) {

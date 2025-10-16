@@ -36,8 +36,8 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
   const [columns, setColumns] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [total, setTotal] = useState(0);
+  const [pageSize, setPageSize] = useState(200);
+  // 移除total状态，因为不再需要获取总行数
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editingRecord, setEditingRecord] = useState<TableData | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -48,6 +48,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
   const [isFilterMenuVisible, setIsFilterMenuVisible] = useState(false);
   const [filterConfig, setFilterConfig] = useState<{[key: string]: string}>({});
   const [sortConfig, setSortConfig] = useState<{column: string; direction: 'asc' | 'desc'} | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   // 表格统计信息
   const getColumnStats = (columnName: string) => {
@@ -191,22 +192,20 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
       // 使用真实数据库连接获取数据
       if (!window.electronAPI || !connection.isConnected) {
         message.error('数据库连接不可用');
-        console.error('数据库连接不可用');
-        setData([]);
-        setColumns([]);
-        setTotal(0);
-        return;
+          console.error('数据库连接不可用');
+          setData([]);
+          setColumns([]);
+          return;
       }
 
       // 使用连接池ID
       const poolId = connection.connectionId || connection.id;
       if (!poolId) {
         message.error('连接池ID不存在');
-        console.error('连接池ID不存在');
-        setData([]);
-        setColumns([]);
-        setTotal(0);
-        return;
+          console.error('连接池ID不存在');
+          setData([]);
+          setColumns([]);
+          return;
       }
 
       console.log('尝试从真实数据库获取数据:', { connectionId: poolId, database, table });
@@ -251,33 +250,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           ...row
         }));
 
-        // 获取总记录数用于分页
-      let totalCount = 1; // 默认至少有一条记录
-      if (connection.type !== 'redis') {
-        let countQuery = '';
-        switch (connection.type) {
-          case 'mysql':
-            countQuery = `SELECT COUNT(*) AS total FROM \`${database}\`.\`${table}\``;
-            break;
-          case 'postgresql':
-          case 'gaussdb':
-            countQuery = `SELECT COUNT(*) AS total FROM "${database}"."${table}"`;
-            break;
-          case 'oracle':
-            countQuery = `SELECT COUNT(*) AS total FROM "${database}"."${table}"`;
-            break;
-          case 'sqlite':
-            countQuery = `SELECT COUNT(*) AS total FROM "${table}"`;
-            break;
-          default:
-            countQuery = `SELECT COUNT(*) AS total FROM "${table}"`;
-        }
-
-        const countResult = await window.electronAPI.executeQuery(poolId, countQuery);
-        totalCount = countResult && countResult.success && countResult.data.length > 0 
-          ? countResult.data[0].total 
-          : realData.length;
-      }
+        // 不再获取总记录数，避免千万行表查询卡死
 
         // 动态生成列配置
         if (realData.length > 0) {
@@ -357,23 +330,27 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             setColumns(realColumns);
           }
         } else {
-          setColumns([]);
+          // 即使没有数据，也保持列定义，以便显示表头
+          // 如果columns已经有值，保持不变
+          // 否则，如果是第一次加载且没有数据，尝试获取表结构
+          if (columns.length === 0 && connection.type !== 'redis') {
+            console.log('没有数据，尝试获取表结构以显示表头');
+            // 这里可以根据需要添加获取表结构的逻辑
+            // 暂时保持columns为空
+          }
         }
 
         setData(realData);
-        setTotal(totalCount);
       } else {
         console.warn('未获取到数据或查询失败');
         setData([]);
-        setColumns([]);
-        setTotal(0);
+          setColumns([]);
       }
     } catch (error) {
       message.error('加载数据失败');
       console.error('加载数据失败:', error);
       setData([]);
       setColumns([]);
-      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -547,6 +524,13 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
         // 添加排序功能
         sorter: true,
         sortDirections: ['asc', 'desc'] as const,
+        // 自定义表头为两行：第一行字段名，第二行字段类型
+        title: (
+          <div className="table-header-cell">
+            <div className="header-title">{col.title}</div>
+            <div className="header-type">#{col.type || 'unknown'}</div>
+          </div>
+        ),
         onHeaderCell: (column: any) => ({
           onClick: () => {
             const currentDirection = sortConfig && sortConfig.column === column.dataIndex
@@ -569,7 +553,18 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
         })
       }));
     
-    return [...visibleCols, actionColumn];
+    // 为操作列也设置两行表头
+    const enhancedActionColumn = {
+      ...actionColumn,
+      title: (
+        <div className="table-header-cell">
+          <div className="header-title">操作</div>
+          <div className="header-type">#action</div>
+        </div>
+      )
+    };
+    
+    return [...visibleCols, enhancedActionColumn];
   };
 
   // 获取列菜单
@@ -699,7 +694,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
         <div className="table-name-info">
           <strong>{database}.{table}</strong>
           <span className="table-stats">
-            ({total} 条记录, {columns.length} 列)
+            ({columns.length} 列)
           </span>
         </div>
         {sortConfig && (
@@ -743,19 +738,31 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           </div>
         ) : (
           <Table
-            dataSource={data}
+            dataSource={data.length > 0 ? data : [{ key: 'empty-row' }]}
             columns={getVisibleColumns()}
             size="small"
             pagination={false}
-            scroll={{ x: true, y: 'calc(100vh - 380px)' }}
+            scroll={{ x: true, y: 'calc(100vh - 380px)', scrollToFirstRowOnChange: true }}
             bordered
-            rowKey="id"
+            rowKey="key"
+            // 添加行选中功能
+            rowSelection={{
+              type: 'radio',
+              selectedRowKeys,
+              onChange: (newSelectedRowKeys) => {
+                setSelectedRowKeys(newSelectedRowKeys);
+              },
+              // 当没有数据时禁用选择
+              getCheckboxProps: () => ({
+                disabled: data.length === 0
+              })
+            }}
             // 自定义表头样式
             components={{
               header: {
                 cell: ({ className, children, ...props }: any) => (
                   <th 
-                    className={className} 
+                    className={`${className} table-header-th`} 
                     {...props}
                   >
                     {children}
@@ -775,25 +782,33 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
             }}
             // 设置当前排序状态
             sortDirections={['ascend', 'descend'] as const}
+            // 自定义行样式，为选中行添加背景色
+            rowClassName={(record) => {
+              // 为无数据时的空行添加特殊样式
+              if (data.length === 0) return 'empty-data-row';
+              return selectedRowKeys.includes(record.key) ? 'selected-row' : '';
+            }}
           />
         )}
         
         {/* 分页 */}
         <div className="pagination-container">
           <Pagination
-            current={currentPage}
-            pageSize={pageSize}
-            total={total}
-            showSizeChanger
-            showQuickJumper
-            showTotal={(total, range) => 
-              `第 ${range[0]}-${range[1]} 条，共 ${total} 条`
-            }
-            onChange={(page, size) => {
-              setCurrentPage(page);
-              setPageSize(size || 20);
-            }}
-          />
+              current={currentPage}
+              pageSize={pageSize}
+              showSizeChanger
+              showQuickJumper={false}
+              showTotal={() => ''}
+              pageSizeOptions={['200', '300', '500', '1000']}
+              onChange={(page, size) => {
+                setCurrentPage(page);
+                setPageSize(size || 200);
+              }}
+              onShowSizeChange={(current, size) => {
+                setCurrentPage(1);
+                setPageSize(size);
+              }}
+            />
         </div>
       </div>
 

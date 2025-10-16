@@ -97,8 +97,129 @@
 .data-table-container {
   flex: 1;
   overflow: hidden;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  background-color: #fff;
+}
+
+/* 表头样式 - 两行表头 */
+.double-header {
+  height: auto !important;
+  padding: 6px 16px !important;
+  background-color: #fafafa;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.table-header-wrapper {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+}
+
+/* 排序图标样式 */
+.sort-icons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-left: 6px;
+  line-height: 1;
+  width: 12px;
+}
+
+.sort-icon {
+  opacity: 0.5;
+  transition: all 0.2s;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 0;
+}
+
+.sort-icon:hover {
+  opacity: 0.8;
+}
+
+.sort-icon.active {
+  opacity: 1;
+  color: #1890ff;
+  font-weight: bold;
+}
+
+.data-panel.dark .sort-icon.active {
+  color: #40a9ff;
+}
+
+.header-field-name {
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.header-field-type {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  font-weight: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 选中行样式 */
+.selected-row {
+  background-color: #e6f7ff !important;
+  cursor: pointer;
+}
+
+.selected-row:hover {
+  background-color: #bae7ff !important;
+}
+
+/* 表格行悬停样式 */
+.ant-table-tbody > tr:hover {
+  background-color: #f5f5f5;
+  cursor: pointer;
+}
+
+.data-panel.dark .ant-table-tbody > tr:hover {
+  background-color: #252526;
+}
+
+/* 无数据时的空行样式 */
+.empty-data-row {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.empty-data-row td {
+  text-align: center;
+  color: #999;
+  height: 100px;
+}
+
+/* 暗黑模式下的表头样式 */
+.data-panel.dark .double-header {
+  background-color: #2d2d2d !important;
+}
+
+.data-panel.dark .header-field-name {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.data-panel.dark .header-field-type {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* 暗黑模式下的选中行样式 */
+.data-panel.dark .selected-row {
+  background-color: rgba(0, 122, 204, 0.2) !important;
 }
 
 /* 加载容器 */

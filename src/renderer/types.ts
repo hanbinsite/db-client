@@ -11,6 +11,7 @@ export interface DatabaseConnection {
   username: string;
   password: string;
   database?: string;
+  schema?: string; // PostgreSQL模式
   ssl?: boolean;
   timeout?: number;
   isConnected: boolean;

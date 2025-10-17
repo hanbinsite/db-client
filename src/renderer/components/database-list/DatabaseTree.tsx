@@ -2,6 +2,7 @@ import React from 'react';
 import { DatabaseType } from '../../types';
 import MySqlDatabaseTree from './MySqlDatabaseTree';
 import PostgreSqlDatabaseTree from './PostgreSqlDatabaseTree';
+import RedisDatabaseTree from './RedisDatabaseTree';
 
 export interface TreeNode {
   key: string;
@@ -66,6 +67,9 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
     } else if (databaseType === 'postgresql') {
       console.log('DATABASE TREE - 渲染PostgreSQL数据库树');
       return <PostgreSqlDatabaseTree {...commonProps} />;
+    } else if (databaseType === 'redis') {
+      console.log('DATABASE TREE - 渲染Redis数据库树');
+      return <RedisDatabaseTree {...commonProps} darkMode={darkMode} />;
     } else {
       console.log('DATABASE TREE - 渲染默认数据库树');
       // 默认情况下显示加载状态

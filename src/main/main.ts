@@ -509,6 +509,7 @@ class DBClientApp {
 
   private async handleTestConnection(config: any): Promise<any> {
     let poolId: string | undefined;
+    let testResult: any = null;
     // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
     const databaseName = config.database || 
       (config.type === 'postgresql' ? 'postgres' : 
@@ -554,11 +555,12 @@ class DBClientApp {
       const result = await this.databaseService.executeQuery(poolId, testQuery);
 
       console.log('连接测试成功，查询结果:', result);
-      return { 
+      testResult = { 
         success: true, 
         message: '连接测试成功',
         data: result
       };
+      return testResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : '';
@@ -578,20 +580,25 @@ class DBClientApp {
         detailedMessage = '连接池已存在：正在清理残留连接，请稍后重试。';
       }
       
-      return { 
+      testResult = { 
         success: false, 
         error: detailedMessage 
       };
+      return testResult;
     } finally {
-      // 无论成功与否，都尝试断开连接池
-      try {
-        console.log('正在清理测试连接池...');
-        // 优先使用实际创建的poolId，如果没有则使用生成的poolId
-        await this.databaseService.disconnect(poolId || generatedPoolId);
-        console.log('测试连接池清理完成');
-      } catch (disconnectError) {
-        console.debug('断开测试连接池失败:', disconnectError);
-        // 静默忽略断开错误，不影响测试结果
+      // 只在测试失败时断开连接池，测试成功时保留连接池以便应用程序使用
+      if (!testResult || !testResult.success) {
+        try {
+          console.log('测试失败，正在清理测试连接池...');
+          // 优先使用实际创建的poolId，如果没有则使用生成的poolId
+          await this.databaseService.disconnect(poolId || generatedPoolId);
+          console.log('测试连接池清理完成');
+        } catch (disconnectError) {
+          console.debug('断开测试连接池失败:', disconnectError);
+          // 静默忽略断开错误，不影响测试结果
+        }
+      } else {
+        console.log('测试成功，保留连接池以便应用程序使用');
       }
     }
   }

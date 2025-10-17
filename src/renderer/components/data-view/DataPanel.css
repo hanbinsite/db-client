@@ -345,15 +345,21 @@
   color: #d4d4d4;
 }
 
-/* 过滤菜单 */
+/* 过滤菜单样式 */
 .filter-menu-container {
   top: 80px;
   right: 140px;
-  min-width: 250px;
+  min-width: 400px;
 }
 
 .filter-menu {
-  padding: 12px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  padding: 16px;
+  min-width: 400px;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .menu-title {
@@ -370,13 +376,15 @@
 }
 
 .filter-item {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .filter-label {
   display: block;
   font-size: 12px;
   margin-bottom: 4px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.85);
 }
 
 .data-panel.dark .filter-label {
@@ -386,6 +394,13 @@
 .filter-input {
   width: 100%;
   font-size: 12px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .filter-actions {
@@ -399,6 +414,78 @@
 
 .data-panel.dark .filter-actions {
   border-top-color: #464646;
+}
+
+.filter-mode-switch {
+  margin-bottom: 16px;
+}
+
+.text-filter-container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 完整内容样式 */
+.full-text-content {
+  max-height: 500px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: 'Courier New', Courier, monospace;
+  background: #f5f5f5;
+  padding: 12px;
+  border-radius: 4px;
+  margin: 0;
+}
+
+.data-panel.dark .full-text-content {
+  background: #2c2c2c;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* 截断文本样式 */
+.truncated-text {
+  color: #1890ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+/* 记录详情样式 */
+.record-detail {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.detail-row {
+  margin-bottom: 8px;
+  display: flex;
+}
+
+.detail-label {
+  font-weight: 500;
+  width: 120px;
+  flex-shrink: 0;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.data-panel.dark .detail-label {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.detail-value {
+  flex: 1;
+  word-break: break-word;
+}
+
+.data-panel.dark .detail-value {
+  color: rgba(255, 255, 255, 0.65);
 }
 
 /* 模态框样式 */

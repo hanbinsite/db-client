@@ -9,21 +9,27 @@ interface DbFieldFormItemProps {
     dataIndex: string;
     key: string;
     type?: string;
-    dbType: string;
+    dbType?: string;
     editable?: boolean;
   };
   databaseType: 'mysql' | 'postgresql' | 'sqlite' | 'oracle' | 'mssql';
+  disabled?: boolean;
 }
 
 /**
  * 根据数据库类型和字段类型渲染不同的表单控件组件
  */
-const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType }) => {
-  const { title, dataIndex, dbType } = column;
+const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType, disabled = false }) => {
+  // 添加安全检查，防止column为undefined或null
+  if (!column) {
+    return null;
+  }
+  
+  const { title, dataIndex, dbType = 'varchar' } = column;
   
   // 根据数据库类型和字段类型获取合适的表单控件和验证规则
   const getFormControl = () => {
-    let inputComponent = <Input />;
+    let inputComponent = <Input disabled={disabled} />;
     let rules: Rule[] = [];
     
     // 根据数据库类型和字段类型选择合适的输入控件
@@ -32,39 +38,39 @@ const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType 
     if (dbType.includes('int') || dbType.includes('decimal') || 
         dbType.includes('float') || dbType.includes('double') || 
         dbType.includes('numeric') || dbType.includes('real')) {
-      inputComponent = <InputNumber style={{ width: '100%' }} placeholder="请输入数字" />;
+      inputComponent = <InputNumber style={{ width: '100%' }} placeholder="请输入数字" disabled={disabled} />;
       rules = [{ required: false, message: `请输入有效的数字` }];
     }
     // 文本类型 (长文本)
     else if (dbType.includes('text') || dbType.includes('blob') || 
              dbType.includes('clob') || dbType.includes('ntext')) {
-      inputComponent = <Input.TextArea rows={4} placeholder="请输入文本内容" />;
+      inputComponent = <Input.TextArea rows={4} placeholder="请输入文本内容" disabled={disabled} />;
       rules = [{ required: false, message: `请输入${title}` }];
     }
     // 日期类型
     else if (dbType.includes('date')) {
-      inputComponent = <DatePicker style={{ width: '100%' }} placeholder="请选择日期" />;
+      inputComponent = <DatePicker style={{ width: '100%' }} placeholder="请选择日期" disabled={disabled} />;
       rules = [{ required: false, message: `请选择日期` }];
     }
     // 日期时间类型
     else if (dbType.includes('datetime') || dbType.includes('timestamp') || 
              dbType.includes('smalldatetime')) {
-      inputComponent = <DatePicker showTime style={{ width: '100%' }} placeholder="请选择日期时间" />;
+      inputComponent = <DatePicker showTime style={{ width: '100%' }} placeholder="请选择日期时间" disabled={disabled} />;
       rules = [{ required: false, message: `请选择日期时间` }];
     }
     // 布尔类型
     else if (dbType.includes('bool') || dbType.includes('boolean')) {
-      inputComponent = <Switch checkedChildren="是" unCheckedChildren="否" />;
+      inputComponent = <Switch checkedChildren="是" unCheckedChildren="否" disabled={disabled} />;
       rules = [];
     }
     // 时间类型
     else if (dbType.includes('time')) {
-      inputComponent = <TimePicker style={{ width: '100%' }} placeholder="请选择时间" />;
+      inputComponent = <TimePicker style={{ width: '100%' }} placeholder="请选择时间" disabled={disabled} />;
       rules = [{ required: false, message: `请选择时间` }];
     }
     // 邮箱类型（特殊处理）
     else if (dataIndex?.toLowerCase() === 'email') {
-      inputComponent = <Input type="email" placeholder="请输入邮箱地址" />;
+      inputComponent = <Input type="email" placeholder="请输入邮箱地址" disabled={disabled} />;
       rules = [{ required: false, type: 'email', message: `请输入有效的邮箱地址` }];
     }
     // 枚举类型处理 (MySQL和PostgreSQL有不同的枚举语法)
@@ -86,7 +92,7 @@ const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType 
       
       if (enumValues.length > 0) {
         inputComponent = (
-          <Select placeholder={`请选择${title}`}>
+          <Select placeholder={`请选择${title}`} disabled={disabled}>
             {enumValues.map(value => (
               <Select.Option key={value} value={value}>{value}</Select.Option>
             ))}
@@ -94,13 +100,13 @@ const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType 
         );
       } else {
         // 如果无法提取枚举值，使用普通文本框
-        inputComponent = <Input placeholder={`请输入${title}`} />;
+        inputComponent = <Input placeholder={`请输入${title}`} disabled={disabled} />;
       }
       rules = [{ required: false, message: `请选择${title}` }];
     }
     // 默认文本框（如varchar, char等）
     else {
-      inputComponent = <Input placeholder={`请输入${title}`} />;
+      inputComponent = <Input placeholder={`请输入${title}`} disabled={disabled} />;
       rules = [{ required: false, message: `请输入${title}` }];
     }
     
@@ -111,7 +117,6 @@ const DbFieldFormItem: React.FC<DbFieldFormItemProps> = ({ column, databaseType 
   
   return (
     <Form.Item
-      key={dataIndex}
       label={title}
       name={dataIndex}
       rules={rules}

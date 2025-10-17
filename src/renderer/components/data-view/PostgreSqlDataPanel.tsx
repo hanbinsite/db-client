@@ -47,9 +47,21 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set());
   const [isColumnMenuVisible, setIsColumnMenuVisible] = useState(false);
   const [isFilterMenuVisible, setIsFilterMenuVisible] = useState(false);
-  const [filterConfig, setFilterConfig] = useState<{[key: string]: string}>({});
+  // 定义过滤条件类型
+  interface FilterCondition {
+    operator: string;
+    value?: string;
+    value2?: string;
+  }
+  
+  const [filterConfig, setFilterConfig] = useState<Record<string, FilterCondition>>({});
   const [sortConfig, setSortConfig] = useState<{column: string; direction: 'asc' | 'desc'} | null>(null);
   const [tableInfo, setTableInfo] = useState<{owner?: string; tablespace?: string; size?: string}>({});
+  const [fullTextModalVisible, setFullTextModalVisible] = useState(false);
+  const [fullTextContent, setFullTextContent] = useState('');
+  const [fullTextTitle, setFullTextTitle] = useState('');
+  const [filterMode, setFilterMode] = useState<'builder' | 'text'>('builder');
+  const [customWhereClause, setCustomWhereClause] = useState('');
 
   // 获取PostgreSQL表信息
   const loadTableInfo = async () => {
@@ -138,16 +150,37 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
       return;
     }
     
-    // 复制为制表符分隔的文本
-    const headers = columns.map(col => col.title).join('\t');
+    // 构建CSV格式的数据
+    const headers = columns.map(col => col.title).join(',');
     const rows = data.map(row => 
-      columns.map(col => row[col.dataIndex]).join('\t')
+      columns.map(col => {
+        const value = row[col.dataIndex];
+        if (value === null || value === undefined) return '';
+        return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+      }).join(',')
     ).join('\n');
     
-    const text = `${headers}\n${rows}`;
-    navigator.clipboard.writeText(text).then(() => {
-      message.success('数据已复制到剪贴板');
-    });
+    const csv = `${headers}\n${rows}`;
+    
+    // 复制到剪贴板
+    navigator.clipboard.writeText(csv)
+      .then(() => message.success('数据已复制到剪贴板'))
+      .catch(err => {
+        console.error('复制失败:', err);
+        message.error('复制失败');
+        // 降级方案：使用传统的execCommand方法
+        try {
+          const textArea = document.createElement('textarea');
+          textArea.value = csv;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          message.success('数据已复制到剪贴板');
+        } catch (fallbackError) {
+          console.error('降级复制也失败:', fallbackError);
+        }
+      });
   };
 
   // 查看记录详情
@@ -190,10 +223,25 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
   // 清除过滤
   const clearFilter = () => {
     setFilterConfig({});
+    setCustomWhereClause('');
     setCurrentPage(1);
     loadTableData();
+  }
+  
+  // 更新单个过滤条件
+  const updateFilterCondition = (column: string, field: 'operator' | 'value' | 'value2', value: string) => {
+    setFilterConfig(prev => {
+      // 确保当前配置是FilterCondition类型
+      const currentConfig: FilterCondition = prev[column] || { operator: '=', value: '', value2: '' };
+      return {
+        ...prev,
+        [column]: {
+          ...currentConfig,
+          [field]: value
+        }
+      };
+    });
   };
-
   // 排序处理
   const handleSort = (column: string, direction: 'asc' | 'desc') => {
     setSortConfig({ column, direction });
@@ -210,6 +258,63 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
       setColumns([]);
     }
   }, [connection, database, tableName, currentPage, pageSize]);
+
+  // 获取表结构
+  const getTableSchema = async (poolId: string) => {
+    try {
+      // 在PostgreSQL中，我们通过查询pg_attribute表获取列信息
+      const schemaQuery = `SELECT a.attname as Field,
+                               pg_catalog.format_type(a.atttypid, a.atttypmod) as Type,
+                               (SELECT substring(pg_catalog.pg_get_expr(d.adbin, d.adrelid) for 128)
+                                FROM pg_catalog.pg_attrdef d
+                                WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) as Default,
+                               CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END as Null,
+                               CASE WHEN EXISTS(
+                                 SELECT 1
+                                 FROM pg_catalog.pg_index i
+                                 JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+                                 JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
+                                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                                 WHERE i.indrelid = a.attrelid
+                                   AND a.attnum = ANY(i.indkey)
+                                   AND i.indisprimary
+                               ) THEN 'PRI' ELSE '' END as Key
+                        FROM pg_catalog.pg_attribute a
+                        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                        WHERE c.relname = $1
+                          AND n.nspname = $2
+                          AND a.attnum > 0
+                          AND NOT a.attisdropped
+                        ORDER BY a.attnum;`;
+      
+      const schemaResult = await window.electronAPI.executeQuery(poolId, schemaQuery, [tableName, database]);
+      
+      if (schemaResult && schemaResult.success && Array.isArray(schemaResult.data)) {
+        // 构建schemaColumns，确保保存完整的数据库类型信息
+        const schemaColumns = schemaResult.data.map((col: any) => ({
+          title: col.Field,
+          dataIndex: col.Field,
+          key: col.Field,
+          type: col.Type.includes('int') || col.Type.includes('numeric') || 
+                col.Type.includes('float') || col.Type.includes('double precision') ||
+                col.Type.includes('decimal') ? 'number' : 'string',
+          dbType: col.Type, // 存储原始数据库字段类型
+          editable: col.Key !== 'PRI' && col.Field.toLowerCase().indexOf('created_at') === -1
+        }));
+
+        // 初始化可见列
+        if (schemaColumns.length && visibleColumns.size === 0) {
+          setVisibleColumns(new Set(schemaColumns.map((col: {key: string}) => col.key)));
+        }
+
+        // 总是设置列配置，确保使用完整的表结构信息
+        setColumns(schemaColumns);
+      }
+    } catch (error) {
+      console.error('获取表结构失败:', error);
+    }
+  };
 
   const loadTableData = async () => {
     if (!connection || !database || !tableName) return;
@@ -239,22 +344,89 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
 
       console.log('PostgreSQL数据面板 - 尝试从数据库获取数据:', { connectionId: poolId, database, tableName });
 
+      // 先获取表结构信息
+      await getTableSchema(poolId);
+
       // 构建查询条件
       let whereClause = '';
       let params: any[] = [];
-      let paramIndex = 1;
       
-      // 添加过滤条件
-      if (Object.keys(filterConfig).length > 0) {
-        const filterConditions = Object.entries(filterConfig)
-          .filter(([_, value]) => value)
-          .map(([key, value]) => {
-            params.push(`%${value}%`);
-            return `"${key}" ILIKE $${paramIndex++}`; // PostgreSQL使用ILIKE进行不区分大小写的模糊匹配
+      // 处理文本模式的WHERE子句
+      if (filterMode === 'text' && customWhereClause.trim()) {
+        whereClause = ` WHERE ${customWhereClause.trim()}`;
+      } 
+      // 处理构建器模式的过滤条件
+        else if (filterMode === 'builder' && Object.keys(filterConfig).length > 0) {
+          const filterConditions = Object.entries(filterConfig)
+            .map(([key, config]) => {
+              // 确保config是对象类型
+              if (typeof config !== 'object' || config === null) {
+                return null;
+              }
+              
+              const configObj = config as { operator: string; value?: string; value2?: string };
+              
+              if (!configObj.operator || (configObj.operator !== 'IS NULL' && configObj.operator !== 'IS NOT NULL' && !configObj.value)) {
+                return null;
+              }
+              
+              switch (configObj.operator) {
+                case '=':
+                case '<>':
+                case '>':
+                case '<':
+                case '>=':
+                case '<=':
+                  params.push(configObj.value);
+                  return `"${key}" ${configObj.operator} $${params.length}`;
+                  
+                case 'LIKE':
+                case 'NOT LIKE':
+                  params.push(`%${configObj.value}%`);
+                  return `"${key}" ${configObj.operator} $${params.length}`;
+                  
+                case 'STARTS WITH':
+                  params.push(`${configObj.value}%`);
+                  return `"${key}" LIKE $${params.length}`;
+                  
+                case 'ENDS WITH':
+                  params.push(`%${configObj.value}`);
+                  return `"${key}" LIKE $${params.length}`;
+                  
+                case 'IS NULL':
+                  return `"${key}" IS NULL`;
+                  
+                case 'IS NOT NULL':
+                  return `"${key}" IS NOT NULL`;
+                  
+                case 'BETWEEN':
+                  if (configObj.value && configObj.value2) {
+                    params.push(configObj.value, configObj.value2);
+                    return `"${key}" BETWEEN $${params.length - 1} AND $${params.length}`;
+                  }
+                  return null;
+                  
+                default:
+                  return null;
+              }
+            })
+            .filter(Boolean) as string[];
+          
+          if (filterConditions.length > 0) {
+            whereClause = ' WHERE ' + filterConditions.join(' AND ');
+          }
+        }
+      // 处理搜索文本
+      else if (searchText.trim()) {
+        const searchConditions = columns
+          .filter(col => col.type === 'string')
+          .map(col => {
+            params.push(`%${searchText}%`);
+            return `"${col.dataIndex}" ILIKE $${params.length}`;
           });
         
-        if (filterConditions.length > 0) {
-          whereClause = ' WHERE ' + filterConditions.join(' AND ');
+        if (searchConditions.length > 0) {
+          whereClause = ' WHERE ' + searchConditions.join(' OR ');
         }
       }
       
@@ -566,6 +738,13 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
     );
   }
 
+  // 打开显示完整内容的弹窗 - 合并实现，避免重复
+  const openFullTextModal = (content: string, title: string) => {
+    setFullTextContent(content);
+    setFullTextTitle(title);
+    setFullTextModalVisible(true);
+  };
+
   // 获取可见的列
   const getVisibleColumns = () => {
     // 确保操作列始终可见
@@ -595,7 +774,42 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
             
             handleSort(column.dataIndex, newDirection);
           }
-        })
+        }),
+        // 为长文本和对象内容添加点击显示完整内容的功能
+        render: (text: any) => {
+          // 为字符串类型的长内容添加点击显示完整内容的功能
+          if (typeof text === 'string' && text.length > 100) {
+            return (
+              <Tooltip title="点击查看完整内容">
+                <span 
+                  className="truncated-text cursor-pointer"
+                  onClick={() => openFullTextModal(text, col.title)}
+                >
+                  {text.substring(0, 100)}...
+                </span>
+              </Tooltip>
+            );
+          }
+          // 对于数组或对象类型，也添加点击显示完整内容的功能
+          else if (text !== null && text !== undefined && typeof text === 'object') {
+            try {
+              const jsonString = JSON.stringify(text, null, 2);
+              return (
+                <Tooltip title="点击查看完整内容">
+                  <span 
+                    className="truncated-text cursor-pointer"
+                    onClick={() => openFullTextModal(jsonString, col.title)}
+                  >
+                    [对象] {jsonString.length > 50 ? jsonString.substring(0, 50) + '...' : jsonString}
+                  </span>
+                </Tooltip>
+              );
+            } catch {
+              return '[对象]';
+            }
+          }
+          return text;
+        }
       }));
     
     return [...visibleCols, actionColumn];
@@ -631,15 +845,29 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
         {columns.map(col => (
           <div key={col.key} className="filter-item">
             <label className="filter-label">{col.title}</label>
-            <Input
-              value={filterConfig[col.key] || ''}
-              onChange={(e) => setFilterConfig(prev => ({
-                ...prev,
-                [col.key]: e.target.value
-              }))}
-              placeholder={`过滤 ${col.title}`}
-              className="filter-input"
-            />
+            <div className="filter-input-group">
+              <Select
+                value={filterConfig[col.key]?.operator || '='}
+                onChange={(value) => updateFilterCondition(col.key, 'operator', value)}
+                style={{ width: 80 }}
+                size="small"
+              >
+                <Option value="=">=</Option>
+                <Option value="!=">≠</Option>
+                <Option value=">">{'>'}</Option>
+                <Option value=">=">≥</Option>
+                <Option value="<">{'<'}</Option>
+                <Option value="<=">≤</Option>
+                <Option value="LIKE">包含</Option>
+                <Option value="NOT LIKE">不包含</Option>
+              </Select>
+              <Input
+                value={filterConfig[col.key]?.value || ''}
+                onChange={(e) => updateFilterCondition(col.key, 'value', e.target.value)}
+                placeholder={`过滤 ${col.title}`}
+                className="filter-input"
+              />
+            </div>
           </div>
         ))}
         <div className="filter-actions">
@@ -859,6 +1087,26 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
         >
           {renderFormFields()}
         </Form>
+      </Modal>
+      
+      {/* 完整内容显示模态框 */}
+      <Modal
+        title={`完整内容 - ${fullTextTitle}`}
+        open={fullTextModalVisible}
+        onCancel={() => setFullTextModalVisible(false)}
+        width={800}
+        footer={[
+          <Button 
+            key="close" 
+            onClick={() => setFullTextModalVisible(false)}
+            className={darkMode ? 'dark-btn' : ''}
+          >
+            关闭
+          </Button>
+        ]}
+        className={darkMode ? 'dark-modal' : ''}
+      >
+        <pre className="full-text-content">{fullTextContent}</pre>
       </Modal>
     </div>
   );

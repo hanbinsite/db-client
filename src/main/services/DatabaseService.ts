@@ -361,7 +361,8 @@ export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
       errors.push('端口号必须在1-65535之间');
     }
 
-    if (!config.username) {
+    // 对于Redis类型的数据库，用户名是可选的
+    if (!config.username && config.type !== 'redis') {
       errors.push('用户名不能为空');
     }
 

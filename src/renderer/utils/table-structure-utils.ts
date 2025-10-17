@@ -381,15 +381,40 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
         return { success: true, data: [] };
       }
       
-      const processedForeignKeys = rows.map((row: any) => ({
-        name: row.constraint_name,
-        columns: row.columns ? row.columns.split(', ') : [row.columns],
-        referencedTable: row.referenced_table_name,
-        referencedColumns: row.referenced_columns ? row.referenced_columns.split(', ') : [row.referenced_columns],
-        onDelete: row.on_delete || 'NO ACTION',
-        onUpdate: row.on_update || 'NO ACTION'
-      }));
+      // 查看原始行数据结构，帮助诊断字段名问题
+      if (rows.length > 0) {
+        console.log('MySQL外键原始行数据结构示例:', JSON.stringify(rows[0], null, 2));
+        console.log('MySQL外键行数据所有键:', Object.keys(rows[0]));
+        console.log('MySQL外键数据行数:', rows.length);
+      }
       
+      const processedForeignKeys = rows.map((row: any, index: number) => {
+        // 处理大小写敏感性问题，同时尝试大写和小写的字段名
+        const constraintName = row.constraint_name || row.CONSTRAINT_NAME || '';
+        const columnsStr = row.columns || row.COLUMNS || '';
+        const referencedTable = row.referenced_table_name || row.REFERENCED_TABLE_NAME || '';
+        const referencedColumnsStr = row.referenced_columns || row.REFERENCED_COLUMNS || '';
+        const onDelete = row.on_delete || row.ON_DELETE || 'NO ACTION';
+        const onUpdate = row.on_update || row.ON_UPDATE || 'NO ACTION';
+        
+        // 安全地处理columns和referencedColumns，避免null或undefined导致的问题
+        const columns = columnsStr ? columnsStr.split(', ').filter((col: string) => col) : [];
+        const referencedColumns = referencedColumnsStr ? referencedColumnsStr.split(', ').filter((col: string) => col) : [];
+        
+        const processedForeignKey = {
+          name: constraintName,
+          columns: columns,
+          referencedTable: referencedTable,
+          referencedColumns: referencedColumns,
+          onDelete: onDelete,
+          onUpdate: onUpdate
+        };
+        
+        console.log(`处理第${index+1}个外键的结果:`, processedForeignKey);
+        return processedForeignKey;
+      });
+      
+      console.log('MySQL外键数据处理完成:', JSON.stringify(processedForeignKeys, null, 2));
       return { success: true, data: processedForeignKeys };
     } catch (error) {
       console.error('MySQL获取表外键信息异常:', error);

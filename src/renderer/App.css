@@ -439,6 +439,64 @@
 .db-icon.oracle { background: #c74634; }
 .db-icon.sqlite { background: #003b57; }
 .db-icon.redis { background: #a41e11; }
+
+/* Redis数据库列表优化样式 */
+.redis-database-tree .ant-tree-node-content-wrapper {
+  transition: all 0.2s;
+}
+
+.redis-database-tree .ant-tree-node-content-wrapper:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+/* Redis数据库编号样式 - 添加不同颜色区分 */
+.redis-db-icon.db-0 { color: #ff6b6b; }
+.redis-db-icon.db-1 { color: #4ecdc4; }
+.redis-db-icon.db-2 { color: #45b7d1; }
+.redis-db-icon.db-3 { color: #f9ca24; }
+.redis-db-icon.db-4 { color: #f0932b; }
+.redis-db-icon.db-5 { color: #6c5ce7; }
+.redis-db-icon.db-6 { color: #a29bfe; }
+.redis-db-icon.db-7 { color: #00b894; }
+.redis-db-icon.db-8 { color: #fdcb6e; }
+.redis-db-icon.db-9 { color: #e17055; }
+.redis-db-icon.db-10 { color: #d63031; }
+.redis-db-icon.db-11 { color: #0984e3; }
+.redis-db-icon.db-12 { color: #00b894; }
+.redis-db-icon.db-13 { color: #6c5ce7; }
+.redis-db-icon.db-14 { color: #fd79a8; }
+.redis-db-icon.db-15 { color: #fdcb6e; }
+
+/* 默认样式 - 适用于未指定编号或编号超出范围的情况 */
+.redis-db-icon {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+/* Redis键样式 */
+.redis-key-icon {
+  color: #b2bec3;
+  font-size: 12px;
+}
+
+/* 优化Redis数据库节点在黑暗模式下的显示 */
+.database-tree.dark .redis-db-icon.db-0 { color: #ff7675; }
+.database-tree.dark .redis-db-icon.db-1 { color: #74b9ff; }
+.database-tree.dark .redis-db-icon.db-2 { color: #55efc4; }
+.database-tree.dark .redis-db-icon.db-3 { color: #ffeaa7; }
+.database-tree.dark .redis-db-icon.db-4 { color: #fab1a0; }
+.database-tree.dark .redis-db-icon.db-5 { color: #a29bfe; }
+.database-tree.dark .redis-db-icon.db-6 { color: #fd79a8; }
+.database-tree.dark .redis-db-icon.db-7 { color: #00b894; }
+.database-tree.dark .redis-db-icon.db-8 { color: #fdcb6e; }
+.database-tree.dark .redis-db-icon.db-9 { color: #e17055; }
+.database-tree.dark .redis-db-icon.db-10 { color: #ff7675; }
+.database-tree.dark .redis-db-icon.db-11 { color: #74b9ff; }
+.database-tree.dark .redis-db-icon.db-12 { color: #55efc4; }
+.database-tree.dark .redis-db-icon.db-13 { color: #a29bfe; }
+.database-tree.dark .redis-db-icon.db-14 { color: #fd79a8; }
+.database-tree.dark .redis-db-icon.db-15 { color: #ffeaa7; }
 .db-icon.gaussdb { background: #3498db; }
 
 .connection-details {

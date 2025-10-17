@@ -46,7 +46,7 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editingRecord, setEditingRecord] = useState<TableData | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
-  const [searchText, setSearchText] = useState('');
+
   const [form] = Form.useForm();
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set());
   const [isColumnMenuVisible, setIsColumnMenuVisible] = useState(false);
@@ -56,11 +56,11 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
   const [fullTextTitle, setFullTextTitle] = useState('');
   const [filterMode, setFilterMode] = useState<'builder' | 'text'>('builder'); // 'builder'创建工具模式，'text'文本模式
   const [customWhereClause, setCustomWhereClause] = useState(''); // 文本模式的自定义WHERE子句
-  
-  // 过滤条件配置，格式：{ columnName: { operator: string, value: string, value2?: string } }
+  const [isViewMode, setIsViewMode] = useState(false);
   const [filterConfig, setFilterConfig] = useState<{
     [key: string]: { operator: string; value: string; value2?: string }
-  }>({});
+  }>({}); // 过滤条件配置
+
   
   // 打开显示完整内容的弹窗
   const openFullTextModal = (content: string, title: string) => {
@@ -166,17 +166,21 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
   // 获取表结构
   const getTableSchema = async (poolId: string) => {
     try {
-      // 使用DESCRIBE获取表结构
-      const describeQuery = `DESCRIBE \`${database}\`\.\`${tableName}\``;
-      const schemaResult = await window.electronAPI.executeQuery(poolId, describeQuery, []);
+      // 使用SHOW COLUMNS获取更完整的表结构信息
+      const schemaQuery = `SHOW COLUMNS FROM \`${database}\`\.\`${tableName}\``;
+      const schemaResult = await window.electronAPI.executeQuery(poolId, schemaQuery);
       
-      if (schemaResult && schemaResult.success && schemaResult.data.length > 0) {
-        const schemaColumns = schemaResult.data.map((field: any) => ({
-          title: field.Field,
-          dataIndex: field.Field,
-          key: field.Field,
-          type: field.Type, // 保存字段类型
-          editable: field.Field.toLowerCase() !== 'id' && field.Field.toLowerCase().indexOf('created_at') === -1
+      if (schemaResult && schemaResult.success && Array.isArray(schemaResult.data)) {
+        // 构建schemaColumns，确保保存完整的数据库类型信息
+        const schemaColumns = schemaResult.data.map((col: any) => ({
+          title: col.Field,
+          dataIndex: col.Field,
+          key: col.Field,
+          type: col.Type.includes('int') || col.Type.includes('decimal') || 
+               col.Type.includes('float') || col.Type.includes('double') ? 'number' : 'string',
+          dbType: col.Type, // 存储原始数据库字段类型
+          editable: col.Key !== 'PRI' && col.Extra !== 'auto_increment' && 
+                   col.Field.toLowerCase().indexOf('created_at') === -1
         }));
 
         // 初始化可见列
@@ -184,10 +188,8 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
           setVisibleColumns(new Set(schemaColumns.map((col: {key: string}) => col.key)));
         }
 
-        // 只有当没有数据或当前没有列配置时，才设置列配置
-        if (columns.length === 0) {
-          setColumns(schemaColumns);
-        }
+        // 总是设置列配置，确保使用完整的表结构信息
+        setColumns(schemaColumns);
       }
     } catch (error) {
       console.error('获取表结构失败:', error);
@@ -222,31 +224,617 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
 
   // 导出数据
   const handleExport = () => {
-    if (!data.length) {
+    if (!data.length && !connection?.isConnected) {
       message.warning('没有可导出的数据');
       return;
     }
     
-    // 导出为CSV
-    const headers = columns.map(col => col.title).join(',');
+    // 第一步：选择导出范围
+    Modal.confirm({
+      title: '导出数据',
+      content: (
+        <div style={{ padding: '16px 0', lineHeight: '1.8' }}>
+          <p style={{ margin: '0 0 16px 0', fontSize: '14px' }}>请选择导出范围：</p>
+        </div>
+      ),
+      maskClosable: false,
+      footer: (
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button type="primary" onClick={() => {
+            Modal.destroyAll();
+            exportData('all');
+          }} style={{ minWidth: '100px' }}>
+            全部记录
+          </Button>
+          <Button onClick={() => {
+            Modal.destroyAll();
+            exportData('current');
+          }} style={{ minWidth: '120px' }}>
+            当前{data.length}条记录
+          </Button>
+          <Button onClick={() => {
+            Modal.destroyAll();
+          }} style={{ minWidth: '80px' }}>
+            取消
+          </Button>
+        </div>
+      )
+    });
+  };
+  
+  // 导出数据的核心函数
+  const exportData = async (scope: 'all' | 'current') => {
+    try {
+      let exportDataList;
+      
+      // 根据选择的范围获取数据
+      if (scope === 'all') {
+        // 获取所有记录
+        message.loading('正在获取所有记录，请稍候...', 0);
+        const poolId = connection?.connectionId || connection?.id;
+        if (!poolId) {
+          message.error('连接池ID不存在');
+          return;
+        }
+        
+        // 构建查询条件（如果有）
+        let whereClause = '';
+        let params: any[] = [];
+        
+        if (filterMode === 'text' && customWhereClause.trim()) {
+          whereClause = ` WHERE ${customWhereClause.trim()}`;
+        } else if (filterMode === 'builder' && Object.keys(filterConfig).length > 0) {
+          // 构建过滤条件
+          const filterConditions = Object.entries(filterConfig)
+            .map(([key, config]) => {
+              if (!config.operator || (config.operator !== 'IS NULL' && config.operator !== 'IS NOT NULL' && !config.value)) {
+                return null;
+              }
+              
+              switch (config.operator) {
+                case '=':
+                case '<>':
+                case '>':
+                case '<':
+                case '>=':
+                case '<=':
+                  params.push(config.value);
+                  return `\`${key}\` ${config.operator} ?`;
+                  
+                case 'LIKE':
+                case 'NOT LIKE':
+                  params.push(`%${config.value}%`);
+                  return `\`${key}\` ${config.operator} ?`;
+                  
+                case 'STARTS WITH':
+                  params.push(`${config.value}%`);
+                  return `\`${key}\` LIKE ?`;
+                  
+                case 'ENDS WITH':
+                  params.push(`%${config.value}`);
+                  return `\`${key}\` LIKE ?`;
+                  
+                case 'IS NULL':
+                  return `\`${key}\` IS NULL`;
+                  
+                case 'IS NOT NULL':
+                  return `\`${key}\` IS NOT NULL`;
+                  
+                case 'BETWEEN':
+                  if (config.value && config.value2) {
+                    params.push(config.value, config.value2);
+                    return `\`${key}\` BETWEEN ? AND ?`;
+                  }
+                  return null;
+                  
+                default:
+                  return null;
+              }
+            })
+            .filter(Boolean) as string[];
+          
+          if (filterConditions.length > 0) {
+            whereClause = ' WHERE ' + filterConditions.join(' AND ');
+          }
+        }
+        
+        // 添加排序（如果有）
+        let orderClause = '';
+        if (sortConfig) {
+          orderClause = ` ORDER BY \`${sortConfig.column}\` ${sortConfig.direction.toUpperCase()}`;
+        }
+        
+        // 查询所有记录（不使用LIMIT）
+        const query = `SELECT * FROM \`${database}\`\.\`${tableName}\` ${whereClause} ${orderClause}`;
+        const result = await window.electronAPI.executeQuery(poolId, query, params);
+        
+        message.destroy();
+        
+        if (result && result.success && Array.isArray(result.data)) {
+          exportDataList = result.data.map((row: any, index: number) => ({
+            key: index.toString(),
+            ...row
+          }));
+        } else {
+          message.error('获取全部记录失败');
+          return;
+        }
+      } else {
+        // 使用当前显示的记录
+        exportDataList = data;
+      }
+      
+      // 第二步：选择导出格式
+      // 使用局部变量而不是React Hook，因为这在函数内部
+      let selectedFormat = 'csv';
+      
+      Modal.confirm({
+        title: '选择导出格式',
+        content: (
+          <div style={{ padding: '16px 0', lineHeight: '1.8' }}>
+            <p style={{ margin: '0 0 16px 0', fontSize: '14px' }}>请选择导出文件格式：</p>
+            <Select 
+              defaultValue="csv" 
+              style={{ width: '100%', marginTop: '8px' }}
+              onChange={(value) => {
+                selectedFormat = value;
+                console.log('选择的格式:', value);
+              }}
+              showSearch
+              placeholder="请选择或搜索文件格式"
+              optionFilterProp="children"
+            >
+              <Select.Option value="txt">文本文件(*.txt)</Select.Option>
+              <Select.Option value="csv">CSV文件(*.csv)</Select.Option>
+              <Select.Option value="json">JSON文件(*.json)</Select.Option>
+              <Select.Option value="xml">XML文件(*.xml)</Select.Option>
+              <Select.Option value="sql">SQL脚本文件(*.sql)</Select.Option>
+              <Select.Option value="xls">Excel数据表(*.xls)</Select.Option>
+              <Select.Option value="xlsx">Excel文件（2007或更高版本）(*.xlsx)</Select.Option>
+            </Select>
+          </div>
+        ),
+        okText: '确定',
+        cancelText: '取消',
+        footer: (
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginRight: '10px' }}>
+            <Button type="primary" onClick={() => {
+              console.log('确认导出格式:', selectedFormat);
+              Modal.destroyAll();
+              // 对XLSX格式进行特殊处理，使用专门的导出函数
+              if (selectedFormat === 'xlsx') {
+                exportToXlsx(exportDataList);
+              } else {
+                generateExportFile(exportDataList, selectedFormat);
+              }
+            }} style={{ minWidth: '80px' }}>确定</Button>
+            <Button onClick={() => Modal.destroyAll()} style={{ minWidth: '80px' }}>取消</Button>
+          </div>
+        ),
+        maskClosable: false
+      });
+    } catch (error) {
+      console.error('导出数据失败:', error);
+      message.error('导出数据失败');
+    }
+  };
+  
+  // 生成并保存导出文件
+  const generateExportFile = async (exportData: any[], format: string) => {
+    try {
+      console.log('开始导出，数据量:', exportData.length, '格式:', format);
+      
+      // 检查必要数据
+      if (!Array.isArray(exportData)) {
+        console.error('导出数据格式错误:', exportData);
+        message.error('导出数据格式错误');
+        return;
+      }
+      
+      if (!Array.isArray(columns)) {
+        console.error('列配置错误:', columns);
+        message.error('列配置错误');
+        return;
+      }
+      
+      // 定义文件格式配置
+      const formatConfig: {[key: string]: {extension: string, mimeType: string, generator: (data: any[], cols: any[]) => string}} = {
+        txt: {
+          extension: 'txt',
+          mimeType: 'text/plain;charset=utf-8;',
+          generator: generateTxtContent
+        },
+        csv: {
+          extension: 'csv',
+          mimeType: 'text/csv;charset=utf-8;',
+          generator: generateCsvContent
+        },
+        json: {
+          extension: 'json',
+          mimeType: 'application/json;charset=utf-8;',
+          generator: generateJsonContent
+        },
+        xml: {
+          extension: 'xml',
+          mimeType: 'application/xml;charset=utf-8;',
+          generator: generateXmlContent
+        },
+        sql: {
+          extension: 'sql',
+          mimeType: 'text/plain;charset=utf-8;',
+          generator: generateSqlContent
+        },
+        // 修复XLS和XLSX格式的实现
+        xls: {
+          extension: 'xls',
+          mimeType: 'application/vnd.ms-excel;charset=utf-8;',
+          generator: generateXlsContent // 使用专门的XLS生成器
+        },
+        xlsx: {
+          extension: 'xlsx',
+          mimeType: 'application/vnd.ms-excel;charset=utf-8;',
+          generator: generateXlsxContent // 使用专门的XLSX生成器
+        }
+      };
+      
+      const config = formatConfig[format];
+      if (!config) {
+        console.error('不支持的导出格式:', format);
+        message.error('不支持的导出格式');
+        return;
+      }
+      
+      // 生成文件内容
+      try {
+        console.log('开始生成文件内容...');
+        const content = config.generator(exportData, columns);
+        console.log('文件内容生成成功，长度:', content.length);
+        
+        // 生成文件名
+        const timestamp = Date.now();
+        const fileName = `${tableName || 'export'}_data_${timestamp}.${config.extension}`;
+        
+        // 使用原生方式下载文件
+        console.log('开始创建下载链接...');
+        
+        // 直接将内容作为字符串传递给Blob构造函数
+        // 不再混合使用Uint8Array和字符串，这会导致文件格式错误
+        const blob = new Blob([content], { type: config.mimeType });
+        
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = fileName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        
+        // 触发下载
+        link.click();
+        
+        // 清理
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          console.log('下载链接清理完成');
+        }, 100);
+        
+        message.success(`文件已导出为${config.extension.toUpperCase()}格式`);
+      } catch (contentError) {
+        console.error('生成文件内容失败:', contentError);
+        message.error('生成文件内容失败: ' + (contentError as Error).message);
+      }
+    } catch (error) {
+      console.error('导出过程整体失败:', error);
+      message.error('导出记录失败: ' + (error as Error).message);
+    }
+  };
+  
+  // 生成不同格式的文件内容
+  const generateTxtContent = (data: any[], cols: any[]) => {
+    const headers = cols.map(col => col.title).join('\t');
     const rows = data.map(row => 
-      columns.map(col => {
-        const value = row[col.dataIndex];
-        return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+      cols.map(col => row[col.dataIndex] || '').join('\t')
+    ).join('\n');
+    return `${headers}\n${rows}`;
+  };
+  
+  const generateCsvContent = (data: any[], cols: any[]) => {
+    // 生成CSV头部
+    const headers = cols.map(col => {
+      const title = col.title || '';
+      return needsQuoting(title) ? `"${title.replace(/"/g, '""')}"` : title;
+    }).join(',');
+    
+    // 生成CSV行数据
+    const rows = data.map(row => 
+      cols.map(col => {
+        let value = row[col.dataIndex];
+        // 处理null/undefined
+        if (value === null || value === undefined) {
+          return '';
+        }
+        
+        // 处理对象/数组（JSON格式）
+        if (typeof value === 'object') {
+          value = JSON.stringify(value);
+        }
+        
+        // 转换为字符串
+        const strValue = String(value);
+        
+        // 判断是否需要引号包裹
+        return needsQuoting(strValue) ? `"${strValue.replace(/"/g, '""')}"` : strValue;
       }).join(',')
     ).join('\n');
     
-    const csv = `${headers}\n${rows}`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${tableName}_data_${Date.now()}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('数据已导出为CSV文件');
+    return `${headers}\n${rows}`;
+  };
+  
+  // 辅助函数：判断字符串是否需要引号包裹
+  const needsQuoting = (str: string): boolean => {
+    return str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r') || str.startsWith(' ') || str.endsWith(' ');
+  };
+  
+  // 生成XLS格式内容 - 使用HTML表格，Excel能更好地支持
+  const generateXlsContent = (data: any[], cols: any[]) => {
+    // HTML表格是Excel能很好识别的格式，比TSV更可靠
+    let html = '<!DOCTYPE html>\n<html>\n<head>\n';
+    html += '<meta charset="UTF-8">\n';
+    html += '</head>\n<body>\n';
+    html += '<table border="1">\n';
+    
+    // 添加表头
+    html += '<tr>\n';
+    cols.forEach(col => {
+      html += `<th>${escapeXml(col.title || '')}</th>\n`;
+    });
+    html += '</tr>\n';
+    
+    // 添加数据行
+    data.forEach(row => {
+      html += '<tr>\n';
+      cols.forEach(col => {
+        let value = row[col.dataIndex];
+        if (value === null || value === undefined) {
+          value = '';
+        } else if (typeof value === 'object') {
+          value = JSON.stringify(value);
+        } else {
+          value = String(value);
+        }
+        html += `<td>${escapeXml(value)}</td>\n`;
+      });
+      html += '</tr>\n';
+    });
+    
+    html += '</table>\n</body>\n</html>';
+    return html;
+  };
+  
+  // 专门的XLSX导出函数 - 使用Excel兼容的HTML表格格式
+  const exportToXlsx = (data: any[]) => {
+    try {
+      console.log('开始导出XLSX，数据量:', data.length);
+      
+      // 检查必要数据
+      if (!Array.isArray(data)) {
+        console.error('导出数据格式错误:', data);
+        message.error('导出数据格式错误');
+        return;
+      }
+      
+      if (!Array.isArray(columns)) {
+        console.error('列配置错误:', columns);
+        message.error('列配置错误');
+        return;
+      }
+      
+      // 使用完整的HTML表格格式，这是Excel能很好识别的格式
+      let html = '<!DOCTYPE html>\n<html>\n<head>\n';
+      html += '<meta charset="UTF-8">\n';
+      html += '<style>\ntable { border-collapse: collapse; font-family: Arial, sans-serif; }\nth, td { border: 1px solid #ddd; padding: 8px; }\nth { background-color: #f2f2f2; }\n</style>\n';
+      html += '</head>\n<body>\n';
+      html += '<table>\n';
+      
+      // 添加表头
+      html += '<tr>\n';
+      columns.forEach(col => {
+        html += `<th>${escapeXml(col.title || '')}</th>\n`;
+      });
+      html += '</tr>\n';
+      
+      // 添加数据行
+      data.forEach(row => {
+        html += '<tr>\n';
+        columns.forEach(col => {
+          let value = row[col.dataIndex];
+          if (value === null || value === undefined) {
+            value = '';
+          } else if (typeof value === 'object') {
+            value = JSON.stringify(value);
+          } else {
+            value = String(value);
+          }
+          html += `<td>${escapeXml(value)}</td>\n`;
+        });
+        html += '</tr>\n';
+      });
+      
+      html += '</table>\n</body>\n</html>';
+      
+      // 生成文件名 - 使用.xlsx扩展名
+      const timestamp = Date.now();
+      const fileName = `${tableName || 'export'}_data_${timestamp}.xlsx`;
+      
+      // 创建Blob时添加UTF-8 BOM并使用正确的MIME类型
+      // 注意：即使内容是HTML，Excel也能很好地打开它
+      const blob = new Blob(['\uFEFF' + html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      
+      // 创建下载链接
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.href = url;
+      link.download = fileName;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      
+      // 触发下载
+      link.click();
+      
+      // 清理
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        console.log('XLSX下载链接清理完成');
+      }, 100);
+      
+      message.success('文件已导出为Excel格式');
+    } catch (error) {
+      console.error('XLSX导出失败:', error);
+      message.error('导出Excel文件失败: ' + (error as Error).message);
+    }
+  };
+  
+  // 标准Excel导出函数 - 提供统一的Excel导出接口
+  // 这是一个更清晰的API，便于其他组件调用，统一处理Excel格式导出
+  const exportToExcel = async (exportData?: any[], format: 'xlsx' | 'xls' = 'xlsx') => {
+    try {
+      console.log(`开始标准Excel导出，格式: ${format}`);
+      
+      // 使用提供的数据或当前数据
+      const dataToExport = exportData || data;
+      
+      if (!dataToExport.length) {
+        message.warning('没有可导出的数据');
+        return;
+      }
+      
+      message.loading('正在准备导出Excel文件...', 0);
+      
+      // 根据格式选择导出方式
+      if (format === 'xlsx') {
+        // XLSX格式使用专门的导出函数
+        await exportToXlsx(dataToExport);
+      } else {
+        // XLS格式使用通用导出机制
+        generateExportFile(dataToExport, 'xls');
+      }
+      
+      message.destroy();
+    } catch (error) {
+      message.destroy();
+      console.error('Excel导出失败:', error);
+      message.error('导出Excel文件时发生错误: ' + (error as Error).message);
+    }
+  };
+
+  // 生成XLSX格式内容的函数 - 与exportToXlsx保持一致的实现
+  const generateXlsxContent = (data: any[], cols: any[]) => {
+    console.log('使用generateXlsxContent生成XLSX内容，数据量:', data.length);
+    
+    // 使用完整的HTML表格格式，确保与exportToXlsx函数保持一致
+    let html = '<!DOCTYPE html>\n<html>\n<head>\n';
+    html += '<meta charset="UTF-8">\n';
+    html += '<style>\ntable { border-collapse: collapse; font-family: Arial, sans-serif; }\nth, td { border: 1px solid #ddd; padding: 8px; }\nth { background-color: #f2f2f2; }\n</style>\n';
+    html += '</head>\n<body>\n';
+    html += '<table>\n';
+    
+    // 添加表头
+    html += '<tr>\n';
+    cols.forEach(col => {
+      html += `<th>${escapeXml(col.title || '')}</th>\n`;
+    });
+    html += '</tr>\n';
+    
+    // 添加数据行
+    data.forEach(row => {
+      html += '<tr>\n';
+      cols.forEach(col => {
+        let value = row[col.dataIndex];
+        if (value === null || value === undefined) {
+          value = '';
+        } else if (typeof value === 'object') {
+          value = JSON.stringify(value);
+        } else {
+          value = String(value);
+        }
+        html += `<td>${escapeXml(value)}</td>\n`;
+      });
+      html += '</tr>\n';
+    });
+    
+    html += '</table>\n</body>\n</html>';
+    
+    console.log('XLSX内容生成完成，长度:', html.length);
+    return html;
+  };
+  
+  // 辅助函数：转义XML特殊字符
+  const escapeXml = (str: string): string => {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+  
+  const generateJsonContent = (data: any[], cols: any[]) => {
+    const exportData = data.map(row => {
+      const record: any = {};
+      cols.forEach(col => {
+        record[col.title] = row[col.dataIndex] || null;
+      });
+      return record;
+    });
+    return JSON.stringify(exportData, null, 2);
+  };
+  
+  const generateXmlContent = (data: any[], cols: any[]) => {
+    let xml = '<?xml version="1.0" encoding="UTF-8"?>' + '\n';
+    xml += '<root>' + '\n';
+    xml += '  <table name="' + tableName + '">' + '\n';
+    
+    data.forEach((row, index) => {
+      xml += '    <record id="' + (index + 1) + '">' + '\n';
+      cols.forEach(col => {
+        const value = row[col.dataIndex] || '';
+        xml += '      <' + col.dataIndex + '><![CDATA[' + value + ']]></' + col.dataIndex + '>' + '\n';
+      });
+      xml += '    </record>' + '\n';
+    });
+    
+    xml += '  </table>' + '\n';
+    xml += '</root>';
+    return xml;
+  };
+  
+  const generateSqlContent = (data: any[], cols: any[]) => {
+    let sql = '-- MySQL导出脚本\n';
+    sql += '-- 表名: ' + database + '.' + tableName + '\n';
+    sql += '-- 导出时间: ' + new Date().toLocaleString() + '\n';
+    sql += '\n';
+    
+    // 生成INSERT语句
+    const columnNames = cols.map(col => '`' + col.dataIndex + '`').join(', ');
+    
+    data.forEach(row => {
+      const values = cols.map(col => {
+        const value = row[col.dataIndex];
+        if (value === null || value === undefined) {
+          return 'NULL';
+        } else if (typeof value === 'string') {
+          // 转义SQL中的单引号
+          return "'" + value.replace(/'/g, "''") + "'";
+        } else {
+          return value.toString();
+        }
+      }).join(', ');
+      
+      sql += 'INSERT INTO `' + database + '`.`' + tableName + '` (' + columnNames + ') VALUES (' + values + ');\n';
+    });
+    
+    return sql;
   };
 
   // 复制数据
@@ -268,23 +856,19 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
     });
   };
 
-  // 查看记录详情
+  // 查看记录详情 - 使用编辑页面但禁止编辑
   const handleViewRecord = (record: TableData) => {
-    // 这里可以实现显示记录详情的模态框
-    Modal.info({
-      title: '记录详情',
-      content: (
-        <div className="record-detail">
-          {columns.map(col => (
-            <div key={col.dataIndex} className="detail-row">
-              <span className="detail-label">{col.title}:</span>
-              <span className="detail-value">{record[col.dataIndex]}</span>
-            </div>
-          ))}
-        </div>
-      ),
-      width: 600
-    });
+    setEditingRecord(record);
+    setIsViewMode(true);
+    form.setFieldsValue(record);
+    setIsEditModalVisible(true);
+  };
+
+  // 复制记录
+  const handleCopyRecord = (record: TableData) => {
+    setEditingRecord(null); // 确保是新增模式
+    form.setFieldsValue(record); // 填充选中行的数据
+    setIsAddModalVisible(true); // 打开新增弹窗
   };
 
   // 切换列显示
@@ -445,32 +1029,16 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
 
         // 不再获取总记录数，避免千万行表查询卡死
 
-        // 动态生成列配置
-        if (realData.length > 0) {
-          const firstRow = realData[0];
-          const realColumns = Object.keys(firstRow).map(key => {
-            // 尝试从已有的columns中获取dbType信息
-            const existingColumn = columns.find(col => col.key === key);
-            return {
-              title: key === 'key' ? '索引' : key,
-              dataIndex: key,
-              key: key,
-              type: typeof firstRow[key] === 'number' ? 'number' : 'string',
-              dbType: existingColumn?.dbType, // 保留已有的数据库类型信息
-              editable: key !== 'key' && key.toLowerCase() !== 'id' && key.toLowerCase().indexOf('created_at') === -1
-            };
-          }).filter(col => col.key !== 'key'); // 移除key列
-
-          // 初始化可见列
-          if (realColumns.length && visibleColumns.size === 0) {
-            setVisibleColumns(new Set(realColumns.map(col => col.key)));
-          }
-
-          setColumns(realColumns);
-        } else if (columns.length === 0) {
-          // 如果没有数据且没有列定义，尝试获取表结构
-          console.log('查询返回空结果，尝试获取表结构以显示表头');
+        // 不再从查询结果动态生成列配置，而是使用getTableSchema获取的完整表结构
+        // 但如果还没有获取到表结构，则获取一次
+        if (columns.length === 0) {
+          console.log('尚未获取到表结构，正在获取完整表结构');
           await getTableSchema(poolId);
+        }
+        
+        // 初始化可见列
+        if (columns.length && visibleColumns.size === 0) {
+          setVisibleColumns(new Set(columns.map(col => col.key)));
         }
 
         setData(realData);
@@ -496,6 +1064,7 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
 
   const handleEdit = (record: TableData) => {
     setEditingRecord(record);
+    setIsViewMode(false);
     form.setFieldsValue(record);
     setIsEditModalVisible(true);
   };
@@ -552,6 +1121,10 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
   };
 
   const handleSave = async () => {
+    if (isViewMode) {
+      setIsEditModalVisible(false);
+      return;
+    }
     try {
       const values = await form.validateFields();
       const poolId = connection?.connectionId || connection?.id;
@@ -626,10 +1199,6 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
     }
   };
 
-  const handleSearch = () => {
-    setCurrentPage(1);
-    loadTableData();
-  };
 
   const handleRefresh = () => {
     loadTableData();
@@ -639,7 +1208,7 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
     title: '操作',
     key: 'action',
     fixed: 'right',
-    width: 160,
+    width: 220,
     render: (text: string, record: TableData) => (
       <Space size="small">
         <Button 
@@ -650,6 +1219,15 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
           className={darkMode ? 'dark-btn' : ''}
         >
           查看
+        </Button>
+        <Button 
+          type="link" 
+          icon={<CopyOutlined />} 
+          onClick={() => handleCopyRecord(record)}
+          size="small"
+          className={darkMode ? 'dark-btn' : ''}
+        >
+          复制
         </Button>
         <Button 
           type="link" 
@@ -676,13 +1254,24 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
 
   // 使用通用数据库字段表单组件渲染表单字段
   const renderFormFields = () => {
-    const editableColumns = columns.filter(col => col.editable !== false);
+    // 添加安全检查
+    if (!columns || columns.length === 0) {
+      return <div>正在加载表结构信息...</div>;
+    }
+    
+    const editableColumns = columns.filter(col => col.editable !== false && col);
+    
+    // 确保有可编辑列
+    if (editableColumns.length === 0) {
+      return <div>该表没有可编辑的字段</div>;
+    }
     
     return editableColumns.map(col => (
       <DbFieldFormItem 
         key={col.dataIndex} 
         column={col} 
         databaseType="mysql" 
+        disabled={isViewMode}
       />
     ));
   };
@@ -920,6 +1509,19 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
           >
             查看
           </Button>
+          <Tooltip title="复制数据">
+            <Button 
+              icon={<CopyOutlined />} 
+              onClick={() => {
+                const selectedRecord = data.find(record => record.key === selectedRowKey);
+                if (selectedRecord) handleCopyRecord(selectedRecord);
+              }}
+              disabled={!selectedRowKey}
+              className={darkMode ? 'dark-btn' : ''}
+            >
+              复制
+            </Button>
+          </Tooltip>
           <Button 
             icon={<EditOutlined />} 
             onClick={() => {
@@ -959,15 +1561,6 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
               导出
             </Button>
           </Tooltip>
-          <Tooltip title="复制数据">
-            <Button 
-              icon={<CopyOutlined />} 
-              onClick={handleCopyData}
-              className={darkMode ? 'dark-btn' : ''}
-            >
-              复制
-            </Button>
-          </Tooltip>
           <Tooltip title="列显示控制">
             <Button 
               icon={<ColumnWidthOutlined />} 
@@ -986,24 +1579,6 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
               过滤
             </Button>
           </Tooltip>
-        </Space>
-        
-        <Space>
-          <Input
-            placeholder="搜索..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200 }}
-            onPressEnter={handleSearch}
-            className={darkMode ? 'dark-input' : ''}
-          />
-          <Button 
-            icon={<SearchOutlined />} 
-            onClick={handleSearch}
-            className={darkMode ? 'dark-btn' : ''}
-          >
-            搜索
-          </Button>
         </Space>
       </div>
 
@@ -1174,13 +1749,22 @@ const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableN
 
       {/* 编辑模态框 */}
       <Modal
-        title={editingRecord ? '编辑记录' : '新增记录'}
+        title={isViewMode ? '查看记录' : (editingRecord ? '编辑记录' : '新增记录')}
         open={isEditModalVisible || isAddModalVisible}
         onOk={handleSave}
         onCancel={() => {
           setIsEditModalVisible(false);
           setIsAddModalVisible(false);
+          setIsViewMode(false);
         }}
+        footer={isViewMode ? [
+          <Button key="close" onClick={() => {
+            setIsEditModalVisible(false);
+            setIsViewMode(false);
+          }}>
+            关闭
+          </Button>
+        ] : undefined}
         width={600}
         className={darkMode ? 'dark-modal' : ''}
       >

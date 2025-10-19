@@ -671,8 +671,10 @@ class MySQLConnection extends BaseDatabaseConnection {
 
       const indexes = indexesResult.map((idx: any) => ({
         name: idx.Key_name,
-        column: idx.Column_name,
-        unique: idx.Non_unique === 0
+        type: idx.Type,
+        nullable: idx.Null === 'YES',
+        default: idx.Default,
+        key: idx.Key
       }));
 
       // 优化：对于超大表，不直接执行COUNT(*)，而是返回0
@@ -1068,7 +1070,7 @@ class RedisConnection extends BaseDatabaseConnection {
 
       // 如果有默认数据库，切换到该数据库
       if (this.selectedDb !== undefined) {
-        await this.client.select(this.selectedDb);
+        await this.client.select(String(this.selectedDb));
       }
 
       this.isConnecting = false;
@@ -1119,7 +1121,7 @@ class RedisConnection extends BaseDatabaseConnection {
           // 切换数据库
           if (params && params.length > 0) {
             this.selectedDb = Number(params[0]);
-            await this.client.select(this.selectedDb);
+            await this.client.select(String(this.selectedDb));
             result = 'OK';
           } else {
             throw new Error('Database index is required for SELECT command');
@@ -1157,10 +1159,65 @@ class RedisConnection extends BaseDatabaseConnection {
             throw new Error('Key name is required for DEL command');
           }
           break;
+        case 'type':
+          if (!params || params.length < 1) throw new Error('Key is required for TYPE');
+          result = await this.client.type(params[0]);
+          break;
+        case 'ttl':
+          if (!params || params.length < 1) throw new Error('Key is required for TTL');
+          result = await this.client.ttl(params[0]);
+          break;
+        case 'pttl':
+          if (!params || params.length < 1) throw new Error('Key is required for PTTL');
+          result = await this.client.pttl(params[0]);
+          break;
+        case 'exists':
+          if (!params || params.length < 1) throw new Error('Key is required for EXISTS');
+          result = await this.client.exists(params[0]);
+          break;
+        case 'scan': {
+          // 支持 SCAN cursor MATCH pattern COUNT n
+          if (!params || params.length < 1) throw new Error('Cursor is required for SCAN');
+          const cursor = String(params[0]);
+          let MATCH: string | undefined;
+          let COUNT: number | undefined;
+          if (params.length >= 3) {
+            // parse tokens
+            for (let i = 1; i < params.length; i += 2) {
+              const token = String(params[i]).toUpperCase();
+              const val = params[i + 1];
+              if (token === 'MATCH') MATCH = String(val);
+              if (token === 'COUNT') COUNT = Number(val);
+            }
+          }
+          result = await this.client.scan(cursor, { MATCH, COUNT });
+          break;
+        }
+        case 'lrange':
+          if (!params || params.length < 3) throw new Error('LRANGE requires key, start, stop');
+          result = await this.client.lRange(params[0], Number(params[1]), Number(params[2]));
+          break;
+        case 'smembers':
+          if (!params || params.length < 1) throw new Error('SMEMBERS requires key');
+          result = await this.client.sMembers(params[0]);
+          break;
+        case 'hgetall':
+          if (!params || params.length < 1) throw new Error('HGETALL requires key');
+          result = await this.client.hGetAll(params[0]);
+          break;
+        case 'zrange': {
+          if (!params || params.length < 3) throw new Error('ZRANGE requires key, start, stop');
+          const key = params[0];
+          const start = Number(params[1]);
+          const stop = Number(params[2]);
+          const withScores = params && params.some((p: any) => String(p).toLowerCase() === 'withscores');
+          result = withScores ? await this.client.zRange(key, start, stop, { WITHSCORES: true }) : await this.client.zRange(key, start, stop);
+          break;
+        }
         default:
-          // 尝试直接执行命令
-          if (typeof this.client[cmd] === 'function') {
-            result = await this.client[cmd](...(params || []));
+          // 尝试直接执行命令（仅当存在同名方法）
+          if (typeof (this.client as any)[cmd] === 'function') {
+            result = await (this.client as any)[cmd](...(params || []));
           } else {
             throw new Error(`Unsupported Redis command: ${cmd}`);
           }

@@ -28,6 +28,8 @@
     "css-loader": "^6.8.1",
     "electron": "^25.0.0",
     "html-webpack-plugin": "^5.5.3",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.4",
     "style-loader": "^3.3.3",
     "ts-loader": "^9.4.4",
     "ts-node": "^10.9.2",

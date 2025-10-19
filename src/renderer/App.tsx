@@ -17,6 +17,8 @@ import { TableStructurePanel } from './components/table-design';
 import { DatabaseTree, TreeNodeRenderer } from './components/database-list';
 import { DatabaseConnection, DatabaseType } from './types';
 import './App.css';
+import RedisDataBrowser from './components/data-view/RedisDataBrowser';
+import RedisActions from './components/redis/RedisActions';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -76,6 +78,7 @@ const AppContent: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [showDatabasePanel, setShowDatabasePanel] = useState<boolean>(true);
   const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
+
 
   // 初始化
   useEffect(() => {
@@ -530,6 +533,8 @@ const AppContent: React.FC = () => {
     );
   };
 
+
+
   // 渲染主工具栏
   const renderToolbar = () => {
     return (
@@ -580,6 +585,15 @@ const AppContent: React.FC = () => {
             />
           </div>
         </div>
+        
+        {/* 按数据库类型扩展的自定义功能区域 */}
+        {activeConnection?.type === 'redis' && (
+          <RedisActions 
+            connection={activeConnection}
+            activeDatabase={activeDatabase}
+            darkMode={darkMode}
+          />
+        )}
         
         <div className="toolbar-section" style={{ marginLeft: 'auto' }}>
           <Tooltip title={darkMode ? '切换为亮色模式' : '切换为暗色模式'}>
@@ -744,6 +758,12 @@ const AppContent: React.FC = () => {
                         darkMode={darkMode}
                         onTableSelect={handleTableSelect}
                         onTableDesign={handleTableDesign}
+                      />
+                    ) : tab.type === 'redis' ? (
+                      <RedisDataBrowser
+                        connection={tab.connection}
+                        database={tab.database}
+                        darkMode={darkMode}
                       />
                     ) : (
                       <DatabaseTabPanel

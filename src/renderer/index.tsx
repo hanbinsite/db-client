@@ -8,14 +8,51 @@ import zhCN from 'antd/locale/zh_CN';
 import App from './App';
 import './index.css';
 
+// 简易错误边界，避免渲染异常导致空白页
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error?: Error }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { error: undefined };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: any) {
+    console.error('Renderer ErrorBoundary 捕获到异常:', error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
+          <h2>页面渲染出现异常</h2>
+          <p style={{ color: '#a00' }}>{this.state.error.message}</p>
+          <pre style={{ background: '#f7f7f7', padding: 12 }}>
+            {this.state.error.stack}
+          </pre>
+          {!('electronAPI' in window) && (
+            <p style={{ marginTop: 12, color: '#666' }}>
+              提示：未检测到 <code>window.electronAPI</code>，请确认预加载脚本是否正常。
+            </p>
+          )}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 
 root.render(
   <React.StrictMode>
-    <ConfigProvider locale={zhCN}>
-      <App />
-    </ConfigProvider>
+    <ErrorBoundary>
+      <ConfigProvider locale={zhCN}>
+        <App />
+      </ConfigProvider>
+    </ErrorBoundary>
   </React.StrictMode>
 );
+
+console.log('Renderer root mounted');

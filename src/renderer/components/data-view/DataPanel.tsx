@@ -340,7 +340,10 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           }
         }
 
-        setData(realData);
+        // 仅在非Redis情况下设置原始realData，避免覆盖Redis的自定义数据结构
+        if (connection.type !== 'redis') {
+          setData(realData);
+        }
       } else {
         console.warn('未获取到数据或查询失败');
         setData([]);

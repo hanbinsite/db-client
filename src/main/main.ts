@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, nativeImage, ipcMain, dialog } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
 
@@ -22,10 +23,13 @@ class DBClientApp {
       app.setAppUserModelId('com.dbclient.app');
     }
     
-    // 确定图标路径并设置应用程序图标
-    const iconPath = path.join(process.cwd(), 'assets', 'database-icon.svg');
-    const icon = nativeImage.createFromPath(iconPath);
-    app.dock?.setIcon(icon); // macOS
+    // 确定图标路径并设置应用程序图标（按平台选择best格式）
+    const iconBase = path.join(process.cwd(), 'assets', 'database-icon');
+    const iconPath = process.platform === 'win32'
+      ? (fs.existsSync(iconBase + '.ico') ? iconBase + '.ico' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'))
+      : (fs.existsSync(iconBase + '.icns') ? iconBase + '.icns' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'));
+    const appIcon = nativeImage.createFromPath(iconPath);
+    app.dock?.setIcon(appIcon); // macOS
     
     app.whenReady().then(() => {
       this.createMainWindow();
@@ -46,10 +50,11 @@ class DBClientApp {
   }
 
   private createMainWindow(): void {
-    // 确定图标路径 - 使用绝对路径确保正确加载
-    const iconPath = path.join(process.cwd(), 'assets', 'database-icon.svg');
-    
-    // 使用nativeImage加载SVG图标
+    // 确定图标路径 - 使用绝对路径确保正确加载（按平台选择best格式）
+    const iconBase = path.join(process.cwd(), 'assets', 'database-icon');
+    const iconPath = process.platform === 'win32'
+      ? (fs.existsSync(iconBase + '.ico') ? iconBase + '.ico' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'))
+      : (fs.existsSync(iconBase + '.icns') ? iconBase + '.icns' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'));
     const icon = nativeImage.createFromPath(iconPath);
 
     this.mainWindow = new BrowserWindow({
@@ -64,7 +69,7 @@ class DBClientApp {
       },
       titleBarStyle: 'default',
       show: false,
-      title: 'DB-CLIENT',
+      title: 'db-client',
       icon: icon,
       fullscreenable: true,
       autoHideMenuBar: false
@@ -78,6 +83,15 @@ class DBClientApp {
       const indexPath = path.resolve(__dirname, '../dist/index.html');
       this.mainWindow.loadFile(indexPath);
     }
+
+    // 捕获加载失败，避免空白窗口无信息
+    this.mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.error('Renderer 加载失败:', { errorCode, errorDescription, validatedURL, isMainFrame });
+    });
+
+    this.mainWindow.webContents.on('did-finish-load', () => {
+      console.log('Renderer 加载完成');
+    });
 
     this.mainWindow.once('ready-to-show', () => {
       this.mainWindow?.maximize();

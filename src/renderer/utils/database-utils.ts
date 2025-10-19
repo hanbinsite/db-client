@@ -690,10 +690,55 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
       return [];
     }
     
-    // 使用正确的连接池ID生成逻辑，与DatabaseService保持一致
-    const databaseName = connection.database || '';
-    const poolId: string = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
-    console.log('使用正确格式的连接池ID:', poolId);
+    // 确保连接池已创建，优先使用返回的connectionId
+    let poolId: string | undefined = connection.connectionId;
+    if (!poolId) {
+      try {
+        const connectResult = await window.electronAPI.connectDatabase(connection);
+        if (connectResult && connectResult.success && connectResult.connectionId) {
+          poolId = connectResult.connectionId;
+          connection.connectionId = poolId;
+          connection.isConnected = true;
+          console.log('Redis连接池创建成功，ID:', poolId);
+        } else {
+          console.error('Redis连接池创建失败:', connectResult?.message);
+          const databaseName = connection.database || '';
+          poolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
+          console.warn('使用回退连接池ID:', poolId);
+        }
+      } catch (connectError) {
+        console.error('Redis连接建立异常:', connectError);
+        const databaseName = connection.database || '';
+        poolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
+        console.warn('使用回退连接池ID:', poolId);
+      }
+    }
+    console.log('Redis使用的连接池ID:', poolId);
+    
+    // 通用安全API调用封装，自动处理“连接池不存在”重连重试
+    const safeApiCall = async (apiCall: () => Promise<any>): Promise<any> => {
+      try {
+        return await apiCall();
+      } catch (error: any) {
+        console.error('Redis API调用异常:', error);
+        if ((typeof error === 'string' && error.includes('连接池不存在')) || error?.message?.includes('连接池不存在')) {
+          console.warn('连接池不存在，尝试重新建立连接...');
+          try {
+            const reconnect = await window.electronAPI.connectDatabase(connection);
+            if (reconnect && reconnect.success && reconnect.connectionId) {
+              poolId = reconnect.connectionId;
+              connection.connectionId = poolId;
+              connection.isConnected = true;
+              console.log('重新建立连接成功，新的连接池ID:', poolId);
+              return await apiCall();
+            }
+          } catch (reErr) {
+            console.error('重新建立连接失败:', reErr);
+          }
+        }
+        throw error;
+      }
+    };
     
     // 创建一个字典来存储实际有数据的数据库信息
     const existingDatabases: Record<string, number> = {};
@@ -703,16 +748,17 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     // 尝试获取实际的数据库信息
     try {
       console.log(`执行Redis INFO keyspace命令，poolId: ${poolId}`);
-      const result = await window.electronAPI.executeQuery(
-        poolId, 
-        "INFO keyspace"
-      );
+      const result = await safeApiCall(() => window.electronAPI.executeQuery(
+        poolId as string, 
+        "INFO",
+        ["keyspace"]
+      ));
       
       console.log('INFO keyspace命令执行结果:', JSON.stringify(result, null, 2));
       
       if (result && result.success && typeof result.data === 'string') {
         console.log('INFO keyspace返回的原始数据:', result.data);
-        const lines = result.data.split('\n');
+        const lines = result.data.split(/\r?\n/);
         lines.forEach((line: string) => {
           if (line.trim()) { // 确保不是空行
             console.log(`处理INFO行: "${line}"`);
@@ -743,19 +789,32 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     
     // 如果通过INFO keyspace没有获取到键数量，尝试为每个数据库单独执行DBSIZE命令
     // 特别是针对db0和db2，因为用户确认这两个数据库应该有数据
-    if (!existingDatabases['db0'] || !existingDatabases['db2']) {
+    if (existingDatabases['db0'] === undefined || existingDatabases['db2'] === undefined) {
       console.log('尝试使用DBSIZE命令单独获取db0和db2的键数量');
       
       // 为db0获取键数量
       try {
-        const db0SizeResult = await window.electronAPI.executeQuery(
-          poolId,
-          "SELECT 0 AS dbIndex; DBSIZE"
-        );
+
+        await safeApiCall(() => window.electronAPI.executeQuery(poolId as string, "SELECT", ["0"]));
+        const db0SizeResult = await safeApiCall(() => window.electronAPI.executeQuery(
+          poolId as string,
+          "DBSIZE"
+        ));
         console.log('db0 DBSIZE命令结果:', JSON.stringify(db0SizeResult, null, 2));
-        if (db0SizeResult && db0SizeResult.success && typeof db0SizeResult.data === 'number') {
-          existingDatabases['db0'] = db0SizeResult.data;
-          console.log(`通过DBSIZE获取到db0的键数量: ${existingDatabases['db0']}`);
+        if (db0SizeResult && db0SizeResult.success) {
+          let db0Size: number | undefined;
+          if (typeof db0SizeResult.data === 'number') {
+            db0Size = db0SizeResult.data;
+          } else if (Array.isArray(db0SizeResult.data) && db0SizeResult.data.length > 0) {
+            const first = db0SizeResult.data[0];
+            if (first && typeof first === 'object' && typeof first.value === 'number') {
+              db0Size = first.value;
+            }
+          }
+          if (typeof db0Size === 'number') {
+            existingDatabases['db0'] = db0Size;
+            console.log(`通过DBSIZE获取到db0的键数量: ${existingDatabases['db0']}`);
+          }
         }
       } catch (db0Error) {
         console.warn('获取db0键数量失败:', db0Error);
@@ -764,15 +823,27 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
       // 为db2获取键数量
       try {
         // 切换到db2，然后执行DBSIZE
-        await window.electronAPI.executeQuery(poolId, "SELECT 2 AS dbIndex;");
-        const db2SizeResult = await window.electronAPI.executeQuery(
-          poolId,
+
+        await safeApiCall(() => window.electronAPI.executeQuery(poolId as string, "SELECT", ["2"]));
+        const db2SizeResult = await safeApiCall(() => window.electronAPI.executeQuery(
+          poolId as string,
           "DBSIZE"
-        );
+        ));
         console.log('db2 DBSIZE命令结果:', JSON.stringify(db2SizeResult, null, 2));
-        if (db2SizeResult && db2SizeResult.success && typeof db2SizeResult.data === 'number') {
-          existingDatabases['db2'] = db2SizeResult.data;
-          console.log(`通过DBSIZE获取到db2的键数量: ${existingDatabases['db2']}`);
+        if (db2SizeResult && db2SizeResult.success) {
+          let db2Size: number | undefined;
+          if (typeof db2SizeResult.data === 'number') {
+            db2Size = db2SizeResult.data;
+          } else if (Array.isArray(db2SizeResult.data) && db2SizeResult.data.length > 0) {
+            const first = db2SizeResult.data[0];
+            if (first && typeof first === 'object' && typeof first.value === 'number') {
+              db2Size = first.value;
+            }
+          }
+          if (typeof db2Size === 'number') {
+            existingDatabases['db2'] = db2Size;
+            console.log(`通过DBSIZE获取到db2的键数量: ${existingDatabases['db2']}`);
+          }
         }
       } catch (db2Error) {
         console.warn('获取db2键数量失败:', db2Error);
@@ -780,7 +851,8 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
       
       // 切换回db0
       try {
-        await window.electronAPI.executeQuery(poolId, "SELECT 0 AS dbIndex;");
+
+        await safeApiCall(() => window.electronAPI.executeQuery(poolId as string, "SELECT", ["0"]));
       } catch (switchError) {
         // 忽略切换回db0的错误
       }
@@ -794,7 +866,7 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     // 先添加0-15号数据库
     for (let i = 0; i <= 15; i++) {
       const dbName = `db${i}`;
-      const keyCount = existingDatabases[dbName] || 0;
+      const keyCount = existingDatabases[dbName] ?? 0;
       console.log(`添加数据库 ${dbName}，键数量: ${keyCount}`);
       databases.push({
         name: dbName,
@@ -811,7 +883,7 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     
     // 添加额外的数据库（编号大于15的）
     for (const dbName in existingDatabases) {
-      if (existingDatabases.hasOwnProperty(dbName) && !processedDatabases.has(dbName)) {
+      if (Object.prototype.hasOwnProperty.call(existingDatabases, dbName) && !processedDatabases.has(dbName)) {
         // 检查是否是有效的数据库名称（以db开头且后面跟着数字）
         if (/^db\d+$/.test(dbName)) {
           databases.push({

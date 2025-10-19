@@ -263,20 +263,34 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                   schemas = await Promise.all(schemaPromises);
                 }
             } else {
-              // 对于其他数据库类型，直接获取所有对象
-              const dbObjects = await getAllDatabaseObjects(connection, dbName);
-              tables = dbObjects.tables;
-              views = dbObjects.views;
-              procedures = dbObjects.procedures;
-              functions = dbObjects.functions;
-              
-              totalTables = tables.length;
-              totalViews = views.length;
-              totalProcedures = procedures.length;
-              totalFunctions = functions.length;
-              
-              console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的对象数量: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
-              console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的表列表: ${JSON.stringify(tables)}`);
+              if ((connection as any).type === DbType.REDIS || (connection as any).type === 'redis') {
+                 tables = [];
+                 views = [];
+                 procedures = [];
+                 functions = [];
+                 
+                 totalTables = 0;
+                 totalViews = 0;
+                 totalProcedures = 0;
+                 totalFunctions = 0;
+                 
+                 console.log(`DATABASE DATA LOADER - 跳过Redis对象读取: ${dbName}`);
+               } else {
+                // 对于其他数据库类型，直接获取所有对象
+                const dbObjects = await getAllDatabaseObjects(connection, dbName);
+                tables = dbObjects.tables;
+                views = dbObjects.views;
+                procedures = dbObjects.procedures;
+                functions = dbObjects.functions;
+                
+                totalTables = tables.length;
+                totalViews = views.length;
+                totalProcedures = procedures.length;
+                totalFunctions = functions.length;
+                
+                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的对象数量: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
+                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的表列表: ${JSON.stringify(tables)}`);
+              }
             }
           } catch (error) {
             console.warn(`DATABASE DATA LOADER - 获取数据库${dbName}的对象信息失败`, error);
@@ -316,7 +330,9 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           totalTables = tables.length;
         }
         
-        console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 最终统计: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
+        if (!(((connection as any).type === DbType.REDIS) || ((connection as any).type === 'redis'))) {
+           console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 最终统计: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
+         }
         
         // 构建树节点
         const dbNode: TreeNode = {
@@ -420,68 +436,73 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
             });
           } else {
             // 对于非PostgreSQL数据库，保持原有结构
-            dbNode.children = [
-              // 第二层固定展示表、视图、函数、查询、备份等分类
-              // 确保表列表正确填充
-              tables.length > 0 ? {
-                key: `tables-${dbName}`,
-                title: `表 (${tables.length})`,
-                children: tables.map((table: string) => ({
-                  key: `table-${dbName}-${table}`,
-                  title: table,
-                  isLeaf: true,
-                  type: 'table' as const
-                }))
-              } : {
-                key: `tables-${dbName}`,
-                title: `表 (0)`,
-                children: []
-              },
-              views.length > 0 ? {
-                key: `views-${dbName}`,
-                title: `视图 (${views.length})`,
-                children: views.map((view: string) => ({
-                  key: `view-${dbName}-${view}`,
-                  title: view,
-                  isLeaf: true,
-                  type: 'view' as const
-                }))
-              } : {
-                key: `views-${dbName}`,
-                title: `视图 (0)`,
-                children: []
-              },
-              // 其他对象类型（存储过程、函数、查询、备份）的处理类似
-              procedures.length > 0 ? {
-                key: `procedures-${dbName}`,
-                title: `存储过程 (${procedures.length})`,
-                children: procedures.map((procedure: string) => ({
-                  key: `procedure-${dbName}-${procedure}`,
-                  title: procedure,
-                  isLeaf: true,
-                  type: 'procedure' as const
-                }))
-              } : {
-                key: `procedures-${dbName}`,
-                title: `存储过程 (0)`,
-                children: []
-              },
-              functions.length > 0 ? {
-                key: `functions-${dbName}`,
-                title: `函数 (${functions.length})`,
-                children: functions.map((func: string) => ({
-                  key: `function-${dbName}-${func}`,
-                  title: func,
-                  isLeaf: true,
-                  type: 'function' as const
-                }))
-              } : {
-                key: `functions-${dbName}`,
-                title: `函数 (0)`,
-                children: []
-              },
-
-            ].filter(Boolean) as TreeNode[];
+            if ((connection as any).type === DbType.REDIS || (connection as any).type === 'redis') {
+               // Redis 不展示表/视图/函数/存储过程分类
+               dbNode.children = [];
+             } else {
+              dbNode.children = [
+                // 第二层固定展示表、视图、函数、查询、备份等分类
+                // 确保表列表正确填充
+                tables.length > 0 ? {
+                  key: `tables-${dbName}`,
+                  title: `表 (${tables.length})`,
+                  children: tables.map((table: string) => ({
+                    key: `table-${dbName}-${table}`,
+                    title: table,
+                    isLeaf: true,
+                    type: 'table' as const
+                  }))
+                } : {
+                  key: `tables-${dbName}`,
+                  title: `表 (0)`,
+                  children: []
+                },
+                views.length > 0 ? {
+                  key: `views-${dbName}`,
+                  title: `视图 (${views.length})`,
+                  children: views.map((view: string) => ({
+                    key: `view-${dbName}-${view}`,
+                    title: view,
+                    isLeaf: true,
+                    type: 'view' as const
+                  }))
+                } : {
+                  key: `views-${dbName}`,
+                  title: `视图 (0)`,
+                  children: []
+                },
+                // 其他对象类型（存储过程、函数、查询、备份）的处理类似
+                procedures.length > 0 ? {
+                  key: `procedures-${dbName}`,
+                  title: `存储过程 (${procedures.length})`,
+                  children: procedures.map((procedure: string) => ({
+                    key: `procedure-${dbName}-${procedure}`,
+                    title: procedure,
+                    isLeaf: true,
+                    type: 'procedure' as const
+                  }))
+                } : {
+                  key: `procedures-${dbName}`,
+                  title: `存储过程 (0)`,
+                  children: []
+                },
+                functions.length > 0 ? {
+                  key: `functions-${dbName}`,
+                  title: `函数 (${functions.length})`,
+                  children: functions.map((func: string) => ({
+                    key: `function-${dbName}-${func}`,
+                    title: func,
+                    isLeaf: true,
+                    type: 'function' as const
+                  }))
+                } : {
+                  key: `functions-${dbName}`,
+                  title: `函数 (0)`,
+                  children: []
+                },
+  
+              ].filter(Boolean) as TreeNode[];
+            }
           }
           
           return dbNode;

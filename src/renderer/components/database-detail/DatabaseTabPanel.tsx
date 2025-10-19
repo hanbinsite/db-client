@@ -583,9 +583,13 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
     try {
       const promises = [
         loadDatabaseStats(),
-        loadTableList(),
         loadRecentQueries()
       ];
+
+      // Redis不支持关系型表结构查询，跳过表列表加载
+      if (connection?.type !== 'redis') {
+        promises.push(loadTableList());
+      }
 
       // 对于MySQL、PostgreSQL和GaussDB数据库，额外加载视图、存储过程和函数
       if (connection?.type === 'mysql' || connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
@@ -596,9 +600,11 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
 
       await Promise.all(promises);
       
-      // 日志输出所有加载结果的数量
-      console.log('数据加载完成 - 表:', tableList.length, ' 视图:', viewList.length, 
-                 ' 存储过程:', procedureList.length, ' 函数:', functionList.length);
+      // 日志输出所有加载结果的数量（Redis不输出关系型对象统计）
+      if (connection?.type !== 'redis') {
+        console.log('数据加载完成 - 表:', tableList.length, ' 视图:', viewList.length, 
+                   ' 存储过程:', procedureList.length, ' 函数:', functionList.length);
+      }
     } catch (error) {
       console.error('加载数据失败:', error);
     } finally {

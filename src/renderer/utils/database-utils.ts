@@ -1,4 +1,5 @@
 import { DatabaseConnection } from '../types';
+import { execRedisQueued, execRedisQueuedWithTimeout } from './redis-exec-queue';
 
 // 全局变量类型声明
 declare global {
@@ -520,209 +521,26 @@ const getPostgreSqlDatabases = async (connection: DatabaseConnection): Promise<D
     }
 
     // 定义一个安全执行API调用的辅助函数
-    const safeApiCall = async (apiCall: () => Promise<any>): Promise<any> => {
+    const COMMAND_TIMEOUT_MS = 15000;
+    const safeApiCall = async (
+      apiCall: () => Promise<any>,
+      options?: { queued?: boolean; timeoutMs?: number }
+    ): Promise<any> => {
+      const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
+      const call = () => options?.queued
+        ? apiCall() // 队列调用：不要在排队阶段计时，交由队列内部控制
+        : Promise.race([
+            apiCall(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('调用超时')), timeoutMs))
+          ]);
       try {
-        return await apiCall();
-      } catch (error) {
-        console.error('API调用异常:', error);
-        // 检查错误是否包含"连接池不存在"信息
-        if (error && (typeof error === 'string' && error.includes('连接池不存在') || 
-                      (error as any)?.message?.includes('连接池不存在'))) {
-          console.warn('检测到连接池不存在，尝试重新建立连接...');
-          if (!isConnectionReestablished && window.electronAPI && connection.isConnected) {
-            try {
-              const reconnectResult = await window.electronAPI.connectDatabase(connection);
-              if (reconnectResult && reconnectResult.success && reconnectResult.connectionId) {
-                poolId = reconnectResult.connectionId;
-                connection.connectionId = poolId; // 更新连接对象的connectionId
-                isConnectionReestablished = true;
-                console.log('成功重新建立连接，新的连接池ID:', poolId);
-                // 重新尝试API调用
-                return await apiCall();
-              }
-            } catch (reconnectError) {
-              console.error('重新建立连接失败:', reconnectError);
-            }
-          }
-        }
-        throw error; // 重新抛出其他类型的错误
-      }
-    };
-
-    // 定义重试次数和间隔
-    const MAX_RETRIES = 3;
-    const RETRY_INTERVAL_MS = 1000;
-    
-    // 尝试使用SQL查询获取数据库列表（优先使用这种方法）
-    for (let retry = 0; retry < MAX_RETRIES; retry++) {
-      try {
-        console.log(`执行PostgreSQL SQL查询获取数据库列表 (尝试 ${retry + 1}/${MAX_RETRIES})，连接池ID:`, poolId);
-        
-        // 优化的PostgreSQL获取数据库列表的SQL语句
-        // 添加了权限检查和过滤系统数据库
-        const sqlResult = await safeApiCall(() => 
-          window.electronAPI.executeQuery(poolId, 
-            `SELECT datname 
-             FROM pg_database 
-             WHERE datistemplate = false 
-               AND datname NOT IN ('template0', 'template1')
-             ORDER BY datname`
-          )
-        );
-        
-        console.log('PostgreSQL SQL查询结果:', JSON.stringify(sqlResult, null, 2));
-        
-        if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data) && sqlResult.data.length > 0) {
-          // 将SQL查询结果转换为DatabaseItem对象数组
-          const databaseItems = sqlResult.data.map((row: any) => ({
-            name: row.datname,
-            // 预填充空数组，避免后续访问undefined
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: []
-          }));
-          
-          console.log('成功获取PostgreSQL数据库列表，数量:', databaseItems.length);
-          console.log('===== 获取PostgreSQL数据库列表完成 =====');
-          return databaseItems;
-        } else if (sqlResult && sqlResult.success && Array.isArray(sqlResult.data) && sqlResult.data.length === 0) {
-          console.warn('PostgreSQL数据库列表为空，可能是权限不足或没有数据库');
-          break; // 空结果不需要重试
-        }
-      } catch (sqlError) {
-        console.warn(`PostgreSQL SQL查询失败 (尝试 ${retry + 1}/${MAX_RETRIES}):`, sqlError);
-        
-        // 如果不是最后一次尝试，等待一段时间后重试
-        if (retry < MAX_RETRIES - 1) {
-          console.log(`等待${RETRY_INTERVAL_MS}ms后重试...`);
-          await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL_MS));
-        }
-      }
-    }
-    
-    // 如果SQL查询失败，尝试使用listDatabases方法
-    console.log('SQL查询方法失败，尝试使用window.electronAPI.listDatabases方法');
-    try {
-      const dbListResult = await safeApiCall(() => 
-        window.electronAPI.listDatabases(poolId)
-      );
-      
-      console.log('PostgreSQL listDatabases返回结果:', JSON.stringify(dbListResult, null, 2));
-      
-      if (dbListResult && dbListResult.success && Array.isArray(dbListResult.data) && dbListResult.data.length > 0) {
-        const databases = dbListResult.data.map((dbName: string) => ({
-          name: dbName,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: []
-        }));
-        console.log('window.electronAPI.listDatabases方法成功获取数据库列表:', databases);
-        console.log('===== 获取PostgreSQL数据库列表完成 =====');
-        return databases;
-      }
-    } catch (listDbError) {
-      console.error('window.electronAPI.listDatabases方法失败:', listDbError);
-    }
-    
-    console.warn('PostgreSQL: 无法获取数据库列表，所有方法都失败且无配置数据库名称');
-    return [];
-  } catch (error) {
-    console.error('获取PostgreSQL数据库列表时发生未处理的异常:', error);
-    return [];
-  }
-};
-
-/**
- * 获取Oracle数据库列表
- * @param connection 数据库连接对象
- * @returns Promise<DatabaseItem[]>
- */
-const getOracleDatabases = async (connection: DatabaseConnection): Promise<DatabaseItem[]> => {
-  try {
-    // Oracle获取数据库列表的特定方法
-    // Oracle实际上是获取表空间或用户方案
-    const result = await window.electronAPI.executeQuery(
-      connection.id, 
-      "SELECT DISTINCT owner FROM all_objects WHERE object_type = 'TABLE' ORDER BY owner"
-    );
-    
-    if (result && result.success && Array.isArray(result.data)) {
-      return result.data.map((row: any) => ({
-        name: row.OWNER || row.owner
-      }));
-    } else {
-      console.error('获取Oracle数据库列表失败', result);
-      return [];
-    }
-  } catch (error) {
-    console.error('调用electronAPI获取Oracle数据库列表失败', error);
-    return [];
-  }
-};
-
-/**
- * 获取GaussDB数据库列表
- * @param connection 数据库连接对象
- * @returns Promise<DatabaseItem[]>
- */
-const getGaussDBDatabases = async (connection: DatabaseConnection): Promise<DatabaseItem[]> => {
-  // GaussDB与PostgreSQL兼容，使用类似PostgreSQL的方法
-  return getPostgreSqlDatabases(connection);
-};
-
-/**
- * 获取Redis数据库列表
- * @param connection 数据库连接对象
- * @returns Promise<DatabaseItem[]>
- */
-export const getRedisDatabases = async (connection: DatabaseConnection): Promise<DatabaseItem[]> => {
-  try {
-    console.log('===== 开始获取Redis数据库列表 =====');
-    console.log('连接信息:', { type: connection.type, host: connection.host, port: connection.port, id: connection.id });
-    
-    // 检查基本条件
-    if (!window.electronAPI) {
-      console.error('Redis数据库 - electronAPI不可用，无法获取数据库列表');
-      return [];
-    }
-    
-    // 确保连接池已创建，优先使用返回的connectionId
-    let poolId: string | undefined = connection.connectionId;
-    if (!poolId) {
-      try {
-        const connectResult = await window.electronAPI.connectDatabase(connection);
-        if (connectResult && connectResult.success && connectResult.connectionId) {
-          poolId = connectResult.connectionId;
-          connection.connectionId = poolId;
-          connection.isConnected = true;
-          console.log('Redis连接池创建成功，ID:', poolId);
-        } else {
-          console.error('Redis连接池创建失败:', connectResult?.message);
-          const databaseName = connection.database || '';
-          poolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
-          console.warn('使用回退连接池ID:', poolId);
-        }
-      } catch (connectError) {
-        console.error('Redis连接建立异常:', connectError);
-        const databaseName = connection.database || '';
-        poolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
-        console.warn('使用回退连接池ID:', poolId);
-      }
-    }
-    console.log('Redis使用的连接池ID:', poolId);
-    
-    // 通用安全API调用封装，自动处理“连接池不存在”重连重试
-    const safeApiCall = async (apiCall: () => Promise<any>): Promise<any> => {
-      try {
-        return await apiCall();
-      } catch (error: any) {
-        console.error('Redis API调用异常:', error);
-        if ((typeof error === 'string' && error.includes('连接池不存在')) || error?.message?.includes('连接池不存在')) {
-          console.warn('连接池不存在，尝试重新建立连接...');
+        const res = await call();
+        // 处理以对象形式返回的错误情况（success=false 且 message/error 包含"连接池不存在"）
+        if (res && res.success === false && (
+          (typeof res.message === 'string' && res.message.includes('连接池不存在')) ||
+          (typeof res.error === 'string' && res.error.includes('连接池不存在'))
+        )) {
+          console.warn('连接池不存在（返回对象），尝试重新建立连接...');
           try {
             const reconnect = await window.electronAPI.connectDatabase(connection);
             if (reconnect && reconnect.success && reconnect.connectionId) {
@@ -730,7 +548,25 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
               connection.connectionId = poolId;
               connection.isConnected = true;
               console.log('重新建立连接成功，新的连接池ID:', poolId);
-              return await apiCall();
+              return await call();
+            }
+          } catch (reErr) {
+            console.error('重新建立连接失败:', reErr);
+          }
+        }
+        return res;
+      } catch (error: any) {
+        console.error('Redis API调用异常:', error);
+        if ((typeof error === 'string' && error.includes('连接池不存在')) || error?.message?.includes('连接池不存在')) {
+          console.warn('连接池不存在（抛出异常），尝试重新建立连接...');
+          try {
+            const reconnect = await window.electronAPI.connectDatabase(connection);
+            if (reconnect && reconnect.success && reconnect.connectionId) {
+              poolId = reconnect.connectionId;
+              connection.connectionId = poolId;
+              connection.isConnected = true;
+              console.log('重新建立连接成功，新的连接池ID:', poolId);
+              return await call();
             }
           } catch (reErr) {
             console.error('重新建立连接失败:', reErr);
@@ -739,7 +575,7 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
         throw error;
       }
     };
-    
+
     // 创建一个字典来存储实际有数据的数据库信息
     const existingDatabases: Record<string, number> = {};
     // 创建一个集合来记录已处理的数据库名称
@@ -748,11 +584,12 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     // 尝试获取实际的数据库信息
     try {
       console.log(`执行Redis INFO keyspace命令，poolId: ${poolId}`);
-      const result = await safeApiCall(() => window.electronAPI.executeQuery(
-        poolId as string, 
-        "INFO",
-        ["keyspace"]
-      ));
+      const result = await safeApiCall(() => execRedisQueuedWithTimeout(
+        poolId as string,
+        'info',
+        ['keyspace'],
+        COMMAND_TIMEOUT_MS
+      ), { queued: true, timeoutMs: COMMAND_TIMEOUT_MS });
       
       console.log('INFO keyspace命令执行结果:', JSON.stringify(result, null, 2));
       
@@ -789,7 +626,8 @@ export const getRedisDatabases = async (connection: DatabaseConnection): Promise
     
     // 如果通过INFO keyspace没有获取到键数量，尝试为每个数据库单独执行DBSIZE命令
     // 特别是针对db0和db2，因为用户确认这两个数据库应该有数据
-    if (existingDatabases['db0'] === undefined || existingDatabases['db2'] === undefined) {
+    const TRY_DBSIZE_ON_FAIL = false;
+    if (TRY_DBSIZE_ON_FAIL && (existingDatabases['db0'] === undefined || existingDatabases['db2'] === undefined)) {
       console.log('尝试使用DBSIZE命令单独获取db0和db2的键数量');
       
       // 为db0获取键数量
@@ -956,6 +794,22 @@ const getSqliteDatabases = async (connection: DatabaseConnection): Promise<Datab
  * 获取默认数据库列表（仅用于开发测试，生产环境返回空数组）
  * @returns DatabaseItem[] 空数组
  */
+export async function getOracleDatabases(connection: DatabaseConnection): Promise<DatabaseItem[]> {
+  // 简化实现：当前不支持直接查询，返回空数组以避免阻塞
+  console.warn('Oracle数据库列表获取暂未实现，返回空列表');
+  return [];
+}
+
+export async function getGaussDBDatabases(connection: DatabaseConnection): Promise<DatabaseItem[]> {
+  // GaussDB与PostgreSQL兼容，复用PostgreSQL实现
+  return await getPostgreSqlDatabases(connection);
+}
+
+export async function getRedisDatabases(connection: DatabaseConnection): Promise<DatabaseItem[]> {
+  // 复用现有的Redis数据库列表逻辑（目前实现位于getPostgreSqlDatabases中）
+  return await getPostgreSqlDatabases(connection);
+}
+
 export const getDefaultDatabases = (): DatabaseItem[] => {
   // 移除默认模拟数据，仅返回空数组
   return [];

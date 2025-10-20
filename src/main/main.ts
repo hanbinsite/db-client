@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
+import { autoUpdater } from 'electron-updater';
 
 class DBClientApp {
   private mainWindow: BrowserWindow | null = null;
@@ -34,6 +35,7 @@ class DBClientApp {
     app.whenReady().then(() => {
       this.createMainWindow();
       this.createMenu();
+      this.initAutoUpdate();
     });
 
     app.on('window-all-closed', () => {
@@ -104,6 +106,37 @@ class DBClientApp {
     Menu.setApplicationMenu(null);
   }
 
+  private initAutoUpdate(): void {
+    try {
+      if (!app.isPackaged) {
+        return;
+      }
+      autoUpdater.autoDownload = true;
+      autoUpdater.on('checking-for-update', () => {
+        console.log('[AutoUpdate] 正在检查更新...');
+      });
+      autoUpdater.on('update-available', (info) => {
+        console.log('[AutoUpdate] 发现可用更新:', info.version);
+      });
+      autoUpdater.on('update-not-available', () => {
+        console.log('[AutoUpdate] 暂无更新');
+      });
+      autoUpdater.on('error', (err) => {
+        console.error('[AutoUpdate] 更新错误:', (err && (err as any).message) ? (err as any).message : err);
+      });
+      autoUpdater.on('download-progress', (progress) => {
+        console.log('[AutoUpdate] 下载进度:', Math.round(progress.percent), '%');
+      });
+      autoUpdater.on('update-downloaded', () => {
+        console.log('[AutoUpdate] 更新下载完成，准备安装');
+        autoUpdater.quitAndInstall();
+      });
+      autoUpdater.checkForUpdatesAndNotify();
+    } catch (e) {
+      console.error('[AutoUpdate] 初始化失败', e);
+    }
+  }
+
   private setupIpcHandlers(): void {
     // 文件保存对话框处理器
     ipcMain.handle('show-save-dialog', async (event, options) => {
@@ -152,6 +185,7 @@ class DBClientApp {
         // 确保目录存在
         const fs = require('fs');
         const path = require('path');
+        const dayjs = require('dayjs');
         const directory = path.dirname(filePath);
         
         if (!fs.existsSync(directory)) {
@@ -184,15 +218,164 @@ class DBClientApp {
             fs.writeFileSync(filePath, csvContent, 'utf8');
           }
         } else if (format === 'xlsx') {
-          // 使用xlsx库创建Excel文件
+          // 使用xlsx库创建Excel文件，增加类型推断与统一格式
           const XLSX = require('xlsx');
+          // dayjs 已在上方声明，可复用
           
           if (data && data.length > 0) {
-            // 创建工作簿
-            const workbook = XLSX.utils.book_new();
+            const headers = Object.keys(data[0]);
             
-            // 转换数据为工作表
-            const worksheet = XLSX.utils.json_to_sheet(data);
+            // 列类型推断：number/date/boolean/string
+            const inferColumnTypes = (rows: any[], headers: string[]) => {
+              const types: Record<string, { type: 'number'|'date'|'boolean'|'string', format?: string }> = {};
+              for (const header of headers) {
+                let isNumber = true;
+                let hasDecimal = false;
+                let isBoolean = true;
+                let isDate = true;
+                let sawNonNull = false;
+                let sawTime = false;
+                
+                for (let i = 0; i < Math.min(rows.length, 200); i++) {
+                  const raw = rows[i][header];
+                  if (raw === null || raw === undefined || raw === '') continue;
+                  sawNonNull = true;
+                  const valStr: any = typeof raw === 'string' ? raw.trim() : raw;
+                  
+                  // 先检查布尔
+                  const boolLike = typeof valStr === 'boolean' || (typeof valStr === 'string' && (valStr.toLowerCase() === 'true' || valStr.toLowerCase() === 'false'));
+                  if (!boolLike) isBoolean = false;
+                  
+                  // 数字检测
+                  const num = typeof valStr === 'number' ? valStr : parseFloat(valStr);
+                  const numOk = typeof num === 'number' && isFinite(num) && !(typeof valStr === 'string' && valStr === '');
+                  if (!numOk) {
+                    isNumber = false;
+                  } else {
+                    if (String(valStr).includes('.')) hasDecimal = true;
+                  }
+                  
+                  // 日期检测：常见格式用 dayjs 解析
+                  let dateOk = false;
+                  if ((valStr as any) instanceof Date) {
+                    dateOk = true;
+                    if (valStr.getHours() || valStr.getMinutes() || valStr.getSeconds()) sawTime = true;
+                  } else if (typeof valStr === 'string') {
+                    const candidates = [
+                      'YYYY-MM-DD',
+                      'YYYY/MM/DD',
+                      'YYYY-MM-DD HH:mm:ss',
+                      'YYYY/MM/DD HH:mm:ss'
+                    ];
+                    // 宽松：允许 dayjs 自动解析 ISO/UTC
+                    const d = dayjs(valStr);
+                    if (d.isValid()) {
+                      dateOk = true;
+                      if (!(valStr.length <= 10)) sawTime = true; // 粗略判断是否包含时间
+                    } else {
+                      // 尝试指定格式
+                      for (const fmt of candidates) {
+                        const dd = dayjs(valStr, fmt, true);
+                        if (dd.isValid()) { dateOk = true; if (fmt.includes('HH')) sawTime = true; break; }
+                      }
+                    }
+                  } else if (typeof valStr === 'number') {
+                    // Excel序列或时间戳（毫秒级）不强行当日期
+                    dateOk = false;
+                  }
+                  if (!dateOk) isDate = false;
+                  
+                  // 早停优化
+                  if (!isNumber && !isBoolean && !isDate) break;
+                }
+                
+                if (!sawNonNull) {
+                  types[header] = { type: 'string' };
+                } else if (isBoolean) {
+                  types[header] = { type: 'boolean' };
+                } else if (isDate) {
+                  types[header] = { type: 'date', format: sawTime ? 'yyyy-mm-dd hh:mm:ss' : 'yyyy-mm-dd' };
+                } else if (isNumber) {
+                  types[header] = { type: 'number', format: hasDecimal ? '0.00' : '0' };
+                } else {
+                  types[header] = { type: 'string' };
+                }
+              }
+              return types;
+            };
+            
+            const columnTypes = inferColumnTypes(data, headers);
+            
+            // 构建 AOA（数组的数组）：首行表头，其后数据行
+            const aoa: any[][] = [headers];
+            for (const row of data) {
+              const line = headers.map(h => row[h]);
+              aoa.push(line);
+            }
+            
+            // 创建工作簿与工作表
+            const workbook = XLSX.utils.book_new();
+            const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+            
+            // 应用每列的类型和格式
+            for (let c = 0; c < headers.length; c++) {
+              const header = headers[c];
+              const colType = columnTypes[header];
+              for (let r = 1; r < aoa.length; r++) { // 从第2行开始是数据
+                const addr = XLSX.utils.encode_cell({ c, r });
+                const cell = worksheet[addr];
+                if (!cell) continue; // 空单元格
+                const raw: any = aoa[r][c];
+                
+                if (colType.type === 'date') {
+                  // 将可解析日期转为 Date 并设置格式
+                  let d: Date | null = null;
+                  if ((raw as any) instanceof Date) {
+                    d = raw as Date;
+                  } else if (typeof raw === 'string') {
+                    const parsed = dayjs(raw);
+                    d = parsed.isValid() ? parsed.toDate() : null;
+                  }
+                  if (d) {
+                    cell.v = d;
+                    cell.t = 'd';
+                    cell.z = colType.format || 'yyyy-mm-dd hh:mm:ss';
+                  } else {
+                    // 保留为字符串
+                    cell.v = raw == null ? '' : String(raw);
+                    cell.t = 's';
+                  }
+                } else if (colType.type === 'number') {
+                  const num = typeof raw === 'number' ? raw : parseFloat(String(raw));
+                  if (typeof num === 'number' && isFinite(num)) {
+                    cell.v = num;
+                    cell.t = 'n';
+                    cell.z = colType.format || '0';
+                  } else {
+                    cell.v = raw == null ? '' : String(raw);
+                    cell.t = 's';
+                  }
+                } else if (colType.type === 'boolean') {
+                  let b: boolean | null = null;
+                  if (typeof raw === 'boolean') b = raw;
+                  else if (typeof raw === 'string') {
+                    const s = raw.toLowerCase();
+                    if (s === 'true') b = true; else if (s === 'false') b = false;
+                  }
+                  if (b === null) {
+                    cell.v = raw == null ? '' : String(raw);
+                    cell.t = 's';
+                  } else {
+                    cell.v = b;
+                    cell.t = 'b';
+                  }
+                } else {
+                  cell.v = raw == null ? '' : String(raw);
+                  cell.t = 's';
+                }
+                worksheet[addr] = cell;
+              }
+            }
             
             // 添加工作表到工作簿
             XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
@@ -228,106 +411,37 @@ class DBClientApp {
                 // 根据数据库类型处理字符串值
                 if (typeof value === 'string') {
                   // 转义单引号
-                  value = value.replace(/'/g, "''");
-                  
-                  // 根据数据库类型添加引号
-                  return `'${value}'`;
+                  return `'${String(value).replace(/'/g, "''")}'`;
                 }
                 
-                // 处理日期时间类型
-                if (value instanceof Date) {
-                  if (dbType === 'oracle' || dbType === 'gaussdb') {
-                    return `TO_DATE('${value.toISOString().slice(0, 19).replace('T', ' ')}', 'YYYY-MM-DD HH24:MI:SS')`;
-                  } else {
-                    return `'${value.toISOString().slice(0, 19).replace('T', ' ')}'`;
-                  }
+                if (typeof value === 'number') {
+                  return String(value);
                 }
                 
-                // 处理布尔类型
                 if (typeof value === 'boolean') {
-                  if (dbType === 'mysql') {
-                    return value ? '1' : '0';
-                  } else if (dbType === 'postgresql' || dbType === 'gaussdb') {
-                    return value ? 'TRUE' : 'FALSE';
-                  } else {
-                    return value ? '1' : '0';
-                  }
+                  return value ? (dbType === 'postgresql' ? 'TRUE' : '1') : (dbType === 'postgresql' ? 'FALSE' : '0');
                 }
                 
-                // 其他类型直接返回
-                return String(value);
+                if ((value as any) instanceof Date) {
+                  const formatted = dayjs(value).format('YYYY-MM-DD HH:mm:ss');
+                  return `'${formatted}'`;
+                }
+                
+                // 其他类型统一转字符串
+                return `'${String(value)}'`;
               });
               
-              // 生成INSERT语句
-              let insertStatement = `INSERT INTO ${tableName} (${headers.join(', ')}) VALUES (${values.join(', ')});`;
-              
-              // 根据数据库类型添加特定语法
-              if (dbType === 'postgresql' || dbType === 'gaussdb') {
-                // PostgreSQL支持ON CONFLICT语法
-                insertStatement += ' ON CONFLICT DO NOTHING';
-              }
-              
-              sqlInserts.push(insertStatement);
+              const sql = `INSERT INTO ${tableName} (${headers.map(h => `\`${h}\``).join(', ')}) VALUES (${values.join(', ')});`;
+              sqlInserts.push(sql);
             }
             
-            // 合并所有INSERT语句并写入文件
-            const sqlContent = sqlInserts.join('\n');
-            fs.writeFileSync(filePath, sqlContent, 'utf8');
+            fs.writeFileSync(filePath, sqlInserts.join('\n'), 'utf8');
           }
-        } else if (format === 'xml') {
-          // XML格式处理：生成符合标准的XML文件
-          if (data && data.length > 0) {
-            // 获取根节点名称（从文件名推断）
-            const baseName = path.basename(filePath, '.xml');
-            const rootElement = baseName.includes('-') ? baseName.replace('-', '_') : baseName;
-            const headers = Object.keys(data[0]);
-            
-            // 构建XML文档
-            let xmlContent = '<?xml version="1.0" encoding="UTF-8"?>' + '\n';
-            xmlContent += `<${rootElement}>` + '\n';
-            
-            // 遍历数据生成XML元素
-            for (const row of data) {
-              xmlContent += '  <record>' + '\n';
-              
-              for (const header of headers) {
-                const value = row[header];
-                const safeHeader = header.replace(/[^a-zA-Z0-9_]/g, '_');
-                
-                if (value === null || value === undefined) {
-                  xmlContent += `    <${safeHeader} xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>` + '\n';
-                } else if (typeof value === 'string') {
-                  // 转义XML特殊字符
-                  const escapedValue = value
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&apos;');
-                  xmlContent += `    <${safeHeader}>${escapedValue}</${safeHeader}>` + '\n';
-                } else if (value instanceof Date) {
-                  xmlContent += `    <${safeHeader}>${value.toISOString()}</${safeHeader}>` + '\n';
-                } else {
-                  xmlContent += `    <${safeHeader}>${String(value)}</${safeHeader}>` + '\n';
-                }
-              }
-              
-              xmlContent += '  </record>' + '\n';
-            }
-            
-            xmlContent += `</${rootElement}>`;
-            
-            // 写入XML文件
-            fs.writeFileSync(filePath, xmlContent, 'utf8');
-          }
-        } else {
-          // 默认为JSON格式
-          fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
         }
         
         return { success: true };
       } catch (error) {
-        console.error('写入导出文件失败:', error);
+        console.error('文件写入失败:', error);
         return { success: false, error: (error as Error).message };
       }
     });
@@ -395,6 +509,17 @@ class DBClientApp {
       return await this.handleListDatabases(connectionId);
     });
 
+    // 新增：获取连接池配置（用于渲染端动态并发）
+    ipcMain.handle('get-connection-pool-config', async (event, connectionId) => {
+      try {
+        const cfg = this.databaseService.getConnectionPoolConfig(connectionId);
+        if (cfg) return { success: true, config: cfg };
+        return { success: false, message: '连接池不存在' };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
     // 连接测试处理器
     ipcMain.handle('test-connection', async (event, config) => {
       return await this.handleTestConnection(config);
@@ -403,6 +528,19 @@ class DBClientApp {
     // 关闭测试连接池处理器
     ipcMain.handle('close-test-connection', async (event, config) => {
       return await this.handleCloseTestConnection(config);
+    });
+
+    // 手动检查更新
+    ipcMain.handle('check-for-updates', async () => {
+      if (!app.isPackaged) {
+        return { ok: false, message: '开发模式不检查更新' };
+      }
+      try {
+        const result = await autoUpdater.checkForUpdates();
+        return { ok: true, result };
+      } catch (e: any) {
+        return { ok: false, message: e?.message || String(e) };
+      }
     });
   }
 

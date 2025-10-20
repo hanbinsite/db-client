@@ -379,10 +379,23 @@ export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
 export class DatabaseService extends EventEmitter {
   private connectionPools: Map<string, GenericConnectionPool> = new Map();
   private factory: IDatabaseConnectionFactory;
+  // 新增：记录连接池类型与查询串行队列
+  private poolTypes: Map<string, string> = new Map();
+  private queryChains: Map<string, Promise<void>> = new Map();
 
   constructor() {
     super();
     this.factory = new DatabaseConnectionFactory();
+  }
+
+  // 新增：为Redis执行查询提供串行化队列，避免获取连接等待超时
+  private async enqueueRedis<T>(poolId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.queryChains.get(poolId) || Promise.resolve();
+    let result!: T;
+    const next = prev.then(async () => { result = await fn(); });
+    this.queryChains.set(poolId, next.catch(() => {}));
+    await next;
+    return result;
   }
 
   // 创建数据库连接池
@@ -400,12 +413,27 @@ export class DatabaseService extends EventEmitter {
         throw new Error(`配置验证失败: ${validation.errors.join(', ')}`);
       }
 
-      const pool = new GenericConnectionPool(this.factory, config, poolConfig);
+      // 对Redis强制使用单连接池，确保SELECT后的db选择在同一连接上生效
+      const effectivePoolConfig: IConnectionPoolConfig | undefined = (() => {
+        if (config.type === 'redis') {
+          return {
+            maxConnections: 1,
+            minConnections: 1,
+            acquireTimeout: poolConfig?.acquireTimeout ?? 60000,
+            idleTimeout: poolConfig?.idleTimeout || 60000,
+            testOnBorrow: poolConfig?.testOnBorrow ?? true,
+          };
+        }
+        return poolConfig;
+      })();
+
+      const pool = new GenericConnectionPool(this.factory, config, effectivePoolConfig);
       await pool.initialize();
       
       this.connectionPools.set(poolId, pool);
+      // 新增：记录连接池类型
+      this.poolTypes.set(poolId, config.type);
       this.emit('connectionPoolCreated', config);
-      
       return poolId;
     } catch (error) {
       this.emit('connectionError', config, error);
@@ -442,7 +470,24 @@ export class DatabaseService extends EventEmitter {
     if (!pool) {
       throw new Error('连接池不存在');
     }
+    // 新增：Redis单连接池下串行执行，避免并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          const result = await connection.executeQuery(query, params);
+          this.emit('queryExecuted', poolId, query, result.success);
+          return result;
+        } catch (error) {
+          this.emit('queryExecuted', poolId, query, false);
+          throw error as any;
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
 
+    // 非Redis数据库保持原有并发行为
     const connection = await pool.acquire();
     try {
       const result = await connection.executeQuery(query, params);
@@ -450,7 +495,7 @@ export class DatabaseService extends EventEmitter {
       return result;
     } catch (error) {
       this.emit('queryExecuted', poolId, query, false);
-      throw error;
+      throw error as any;
     } finally {
       pool.release(connection);
     }
@@ -1193,6 +1238,10 @@ class RedisConnection extends BaseDatabaseConnection {
           result = await this.client.scan(cursor, { MATCH, COUNT });
           break;
         }
+        case 'dbsize':
+          // 兼容 node-redis v4/v5 的 camelCase 方法名
+          result = await this.client.dbSize();
+          break;
         case 'lrange':
           if (!params || params.length < 3) throw new Error('LRANGE requires key, start, stop');
           result = await this.client.lRange(params[0], Number(params[1]), Number(params[2]));
@@ -1212,6 +1261,48 @@ class RedisConnection extends BaseDatabaseConnection {
           const stop = Number(params[2]);
           const withScores = params && params.some((p: any) => String(p).toLowerCase() === 'withscores');
           result = withScores ? await this.client.zRange(key, start, stop, { WITHSCORES: true }) : await this.client.zRange(key, start, stop);
+          break;
+        }
+        // ---- New explicit command handlers for camelCase methods in node-redis v4 ----
+        case 'hset': {
+          if (!params || params.length < 3) throw new Error('HSET requires key and field/value pairs');
+          const key = String(params[0]);
+          const rest = params.slice(1);
+          if (rest.length % 2 !== 0) throw new Error('HSET requires field/value pairs');
+          const obj: any = {};
+          for (let i = 0; i < rest.length; i += 2) {
+            obj[String(rest[i])] = String(rest[i + 1]);
+          }
+          result = await this.client.hSet(key, obj);
+          break;
+        }
+        case 'lpush': {
+          if (!params || params.length < 2) throw new Error('LPUSH requires key and at least one value');
+          const key = String(params[0]);
+          const values = params.slice(1).map((v: any) => String(v));
+          result = await this.client.lPush(key, values);
+          break;
+        }
+        case 'sadd': {
+          if (!params || params.length < 2) throw new Error('SADD requires key and at least one member');
+          const key = String(params[0]);
+          const members = params.slice(1).map((v: any) => String(v));
+          result = await this.client.sAdd(key, members);
+          break;
+        }
+        case 'zadd': {
+          if (!params || params.length < 3) throw new Error('ZADD requires key followed by score/member pairs');
+          const key = String(params[0]);
+          const rest = params.slice(1);
+          if (rest.length % 2 !== 0) throw new Error('ZADD requires score/member pairs');
+          const entries = [] as Array<{ score: number; value: string }>;
+          for (let i = 0; i < rest.length; i += 2) {
+            const score = Number(rest[i]);
+            const value = String(rest[i + 1]);
+            if (!Number.isFinite(score)) throw new Error('Invalid ZADD score');
+            entries.push({ score, value });
+          }
+          result = await this.client.zAdd(key, entries);
           break;
         }
         default:

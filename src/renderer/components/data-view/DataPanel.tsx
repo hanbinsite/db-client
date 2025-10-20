@@ -230,11 +230,45 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
         case 'sqlite':
           query = `SELECT * FROM "${table}" LIMIT ${pageSize} OFFSET ${(currentPage - 1) * pageSize}`;
           break;
-        case 'redis':
-          // Redis特殊处理 - 获取键的值
-          query = 'get';
-          paramsArray = [table];
+        case 'redis': {
+          // Redis 类型感知查询：先确保选择正确的数据库，再根据键类型选择命令
+          try {
+            const m = String(database).match(/db(\d+)/i);
+            const dbIndex = m ? parseInt(m[1], 10) : (Number(database) || 0);
+            await window.electronAPI.executeQuery(poolId, 'select', [String(dbIndex)]);
+          } catch {}
+
+          let keyType = 'string';
+          try {
+            const typeRes = await window.electronAPI.executeQuery(poolId, 'type', [table]);
+            const typeVal = typeRes && typeRes.success ? (Array.isArray(typeRes.data) ? (typeRes.data[0]?.value ?? typeRes.data[0]) : typeRes.data) : 'string';
+            keyType = String(typeVal || 'string');
+          } catch {}
+
+          if (keyType === 'string') {
+            query = 'get';
+            paramsArray = [table];
+          } else if (keyType === 'hash') {
+            query = 'hgetall';
+            paramsArray = [table];
+          } else if (keyType === 'list') {
+            query = 'lrange';
+            paramsArray = [table, '0', '-1'];
+          } else if (keyType === 'set') {
+            query = 'smembers';
+            paramsArray = [table];
+          } else if (keyType === 'zset') {
+            query = 'zrange';
+            paramsArray = [table, '0', '-1', 'withscores'];
+          } else {
+            // 其他类型（如stream等）暂不直接拉取，回退为GET，但UI侧将友好提示或JSON化
+            query = 'get';
+            paramsArray = [table];
+          }
+          // 将检测到的类型暂存到闭包，供下方列构建复用
+          (window as any)._redisDataPanelKeyTypeCache = keyType;
           break;
+        }
         default:
           query = `SELECT * FROM "${table}" LIMIT ${pageSize} OFFSET ${(currentPage - 1) * pageSize}`;
       }
@@ -267,11 +301,17 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
               }
             }
 
-            // 获取键的类型
-            const typeResult = await window.electronAPI.executeQuery(poolId, 'type', [keyName]);
+            // 复用上方检测到的键类型，避免重复查询
             let keyType = 'string';
-            if (typeResult && typeResult.success && typeResult.data && typeResult.data.length > 0) {
-              keyType = typeResult.data[0].value || 'string';
+            const cachedType = (window as any)._redisDataPanelKeyTypeCache;
+            if (cachedType && typeof cachedType === 'string') {
+              keyType = cachedType;
+            } else {
+              // 兜底：若缓存不可用则再次查询类型
+              const typeResult = await window.electronAPI.executeQuery(poolId, 'type', [keyName]);
+              if (typeResult && typeResult.success && typeResult.data && typeResult.data.length > 0) {
+                keyType = typeResult.data[0].value || 'string';
+              }
             }
 
             const realColumns = [
@@ -347,7 +387,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
       } else {
         console.warn('未获取到数据或查询失败');
         setData([]);
-          setColumns([]);
+        setColumns([]);
       }
     } catch (error) {
       message.error('加载数据失败');

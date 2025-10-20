@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-table-structure', { connectionId, tableName }),
   listTables: (connectionId: string) => ipcRenderer.invoke('list-tables', connectionId),
   listDatabases: (connectionId: string) => ipcRenderer.invoke('list-databases', connectionId),
+  // 新增：获取连接池配置（动态并发）
+  getConnectionPoolConfig: (connectionId: string) => ipcRenderer.invoke('get-connection-pool-config', connectionId),
   
   // 连接测试
   testConnection: (config: any) => ipcRenderer.invoke('test-connection', config),

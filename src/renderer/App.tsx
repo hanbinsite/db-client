@@ -19,6 +19,7 @@ import { DatabaseConnection, DatabaseType } from './types';
 import './App.css';
 import RedisDataBrowser from './components/data-view/RedisDataBrowser';
 import RedisActions from './components/redis/RedisActions';
+import RedisServiceInfoPage from './components/redis/RedisServiceInfoPage';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -592,6 +593,7 @@ const AppContent: React.FC = () => {
             connection={activeConnection}
             activeDatabase={activeDatabase}
             darkMode={darkMode}
+            onOpenServiceInfo={handleOpenRedisServiceInfo}
           />
         )}
         
@@ -612,6 +614,28 @@ const AppContent: React.FC = () => {
         </div>
       </div>
     );
+  };
+
+  // 打开 Redis 服务信息标签页
+  const handleOpenRedisServiceInfo = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-service-info-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 服务信息',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
   };
 
   // 渲染底部状态栏
@@ -760,11 +784,19 @@ const AppContent: React.FC = () => {
                         onTableDesign={handleTableDesign}
                       />
                     ) : tab.type === 'redis' ? (
-                      <RedisDataBrowser
-                        connection={tab.connection}
-                        database={tab.database}
-                        darkMode={darkMode}
-                      />
+                      tab.key?.startsWith('redis-service-info-') ? (
+                        <RedisServiceInfoPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : (
+                        <RedisDataBrowser
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      )
                     ) : (
                       <DatabaseTabPanel
                         connection={tab.connection}

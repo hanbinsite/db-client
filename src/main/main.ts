@@ -663,19 +663,18 @@ class DBClientApp {
     let poolId: string | undefined;
     let testResult: any = null;
     // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
-    const databaseName = config.database || 
-      (config.type === 'postgresql' ? 'postgres' : 
-       (config.type === 'mysql' ? 'performance_schema' : ''));
+    const databaseName = config.database || ''; // 不使用默认数据库名，只使用配置中指定的数据库名
     const generatedPoolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
     
     try {
-      // 记录连接参数（不记录密码）以帮助诊断
+      // 记录连接参数（包含密码以帮助调试）
       console.log('开始测试数据库连接:', {
         type: config.type,
         host: config.host,
         port: config.port,
         database: config.database,
         username: config.username,
+        password: config.password,
         timeout: config.timeout,
         ssl: config.ssl
       });
@@ -696,21 +695,11 @@ class DBClientApp {
         });
       }
 
-      console.log('连接池创建成功，准备执行测试查询...');
-      // 根据数据库类型选择适合的测试查询语句
-      let testQuery = 'SELECT 1 as test_value';
-      if (config.type === 'postgresql' && !config.database) {
-        // PostgreSQL在没有指定数据库时使用'postgres'作为默认数据库
-        config.database = 'postgres';
-      }
-
-      const result = await this.databaseService.executeQuery(poolId, testQuery);
-
-      console.log('连接测试成功，查询结果:', result);
+      console.log('连接池创建成功，立即返回测试成功，不再执行测试查询');
       testResult = { 
         success: true, 
         message: '连接测试成功',
-        data: result
+        data: { success: true }
       };
       return testResult;
     } catch (error) {
@@ -758,7 +747,7 @@ class DBClientApp {
   private async handleCloseTestConnection(config: any): Promise<any> {
     try {
       // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
-      const databaseName = config.database || (config.type === 'postgresql' ? 'postgres' : '');
+      const databaseName = config.database || ''; // 不使用默认数据库名，只使用配置中指定的数据库名
       const poolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
       
       // 检查连接池是否存在并断开

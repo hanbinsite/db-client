@@ -33,6 +33,7 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
   const [selectedDbType, setSelectedDbType] = useState<DatabaseType | undefined>(undefined);
   const [urlUpdateLock, setUrlUpdateLock] = useState(false); // 用于防止URL与表单字段更新循环
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null); // 存储当前正在编辑的连接
+  const [isLoading, setIsLoading] = useState(false); // 控制按钮禁用状态
 
   // 解析连接URL
   const parseConnectionUrl = (url: string) => {
@@ -359,27 +360,58 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
   // 保存连接（不进行连接测试验证）
   const handleModalOk = async () => {
     try {
+      // 设置按钮为禁用状态
+      setIsLoading(true);
+      
       const values = form.getFieldsValue();
-      const { type, name, host, port, username, password, database, ssl, timeout, connectionUrl } = values;
-
-      // 验证必填字段
-      if (!type || !name || !host) {
+      // 获取数据库类型，优先从表单获取，然后使用selectedDbType作为后备
+      const dbType = values.type || selectedDbType;
+      console.log('保存连接 - 当前数据库类型:', dbType, '表单值:', values);
+      
+      // 解构表单值
+      const {
+        name,
+        host,
+        port,
+        username = '',
+        password = '',
+        database = '',
+        ssl = false,
+        timeout = 30,
+        connectionUrl = '',
+        authType = 'none',
+        redisType = 'standalone'
+      } = values || {};
+      
+      // 安全验证必填字段
+      if (!dbType || !name || !host) {
+        console.log('保存验证失败 - dbType:', dbType, 'name:', name, 'host:', host);
         message.error('请填写必要的连接信息');
+        setIsLoading(false); // 恢复按钮状态
+        return;
+      }
+      
+      // 确保端口是有效的数字
+      if (dbType !== 'sqlite' && (!port || port <= 0)) {
+        message.error('请输入有效的端口号');
+        setIsLoading(false); // 恢复按钮状态
         return;
       }
 
       // 根据数据库类型进行特殊验证
-      switch (type) {
+      switch (dbType) {
         case 'mysql':
         case 'postgresql':
         case 'gaussdb':
         case 'oracle':
           if (!username) {
             message.error('请输入用户名');
+            setIsLoading(false); // 恢复按钮状态
             return;
           }
           if (!port) {
             message.error('请输入端口号');
+            setIsLoading(false); // 恢复按钮状态
             return;
           }
           break;
@@ -387,6 +419,7 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
           // SQLite只需要文件路径
           if (!host.trim()) {
             message.error('请选择SQLite数据库文件');
+            setIsLoading(false); // 恢复按钮状态
             return;
           }
           break;
@@ -394,7 +427,25 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
           // Redis低版本不需要用户名，但需要端口
           if (!port) {
             message.error('请输入端口号');
+            setIsLoading(false); // 恢复按钮状态
             return;
+          }
+          // 检查当authType为password时验证密码
+          if (authType === 'password' && !password) {
+            message.error('请输入密码');
+            setIsLoading(false); // 恢复按钮状态
+            return;
+          } else if (authType === 'username_password') {
+            if (!username) {
+              message.error('请输入用户名');
+              setIsLoading(false); // 恢复按钮状态
+              return;
+            }
+            if (!password) {
+              message.error('请输入密码');
+              setIsLoading(false); // 恢复按钮状态
+              return;
+            }
           }
           break;
       }
@@ -403,37 +454,41 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
       
       if (editingConnection) {
         // 编辑现有连接
-        connectionToSave = {
-          ...editingConnection,
-          name: values.name,
-          type: values.type,
-          host: values.host,
-          port: type === 'sqlite' ? 0 : values.port,
-          username: values.username || '',
-          password: values.password || '',
-          database: values.database || '',
-          ssl: values.ssl || false,
-          timeout: values.timeout || 30,
-          // 注意：DatabaseConnection类型中没有connectionUrl属性，可能需要更新类型定义
-        };
+      connectionToSave = {
+        ...editingConnection,
+        name: values.name,
+        type: dbType,
+        host: values.host,
+        port: dbType === 'sqlite' ? 0 : values.port,
+        username: values.username || '',
+        password: values.password || '',
+        database: values.database || '',
+        ssl: values.ssl || false,
+        timeout: 30, // 固定设置为30秒
+        // 注意：DatabaseConnection类型中没有connectionUrl属性，可能需要更新类型定义
+        authType: values.authType || 'none',
+        redisType: values.redisType || 'standalone'
+      };
         
         onConnectionEdit(connectionToSave);
       } else {
-        // 创建新连接
+        // 创建新连接 - 使用更安全的ID生成方式
         connectionToSave = {
-          id: Date.now().toString(),
-          name: values.name,
-          type: values.type,
-          host: values.host,
-          port: type === 'sqlite' ? 0 : values.port,
-          username: values.username || '',
-          password: values.password || '',
-          database: values.database || '',
-          ssl: values.ssl || false,
-          timeout: values.timeout || 30,
-          // 注意：DatabaseConnection类型中没有connectionUrl属性，可能需要更新类型定义,
-          isConnected: false
-        };
+        id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: values.name,
+        type: dbType,
+        host: values.host,
+        port: dbType === 'sqlite' ? 0 : values.port,
+        username: values.username || '',
+        password: values.password || '',
+        database: values.database || '',
+        ssl: values.ssl || false,
+        timeout: 30, // 固定设置为30秒
+        // 注意：DatabaseConnection类型中没有connectionUrl属性，可能需要更新类型定义,
+        authType: values.authType || 'none',
+        redisType: values.redisType || 'standalone',
+        isConnected: false
+      };
         
         onConnectionCreate(connectionToSave);
       }
@@ -443,38 +498,63 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
       form.resetFields();
       setCurrentStep(1);
       setEditingConnection(null);
+      setIsLoading(false); // 恢复按钮状态
     } catch (error) {
       console.error('保存连接失败:', error);
       message.error('保存连接时发生错误');
+      setIsLoading(false); // 恢复按钮状态
     }
   };
 
   // 测试连接功能 - 测试完成后关闭连接池
   const handleTestConnection = async () => {
     try {
+      // 设置按钮为禁用状态
+      setIsLoading(true);
+      
       const values = form.getFieldsValue();
-      const { type, name, host, port, username, password, database, ssl, timeout } = values;
+      // 获取数据库类型，优先从表单获取，然后使用selectedDbType作为后备
+      const dbType = values.type || selectedDbType;
+      console.log('当前数据库类型:', dbType, '表单值:', values);
+      
+      // 解构时提供默认值，确保即使字段不存在也不会导致错误
+      const { 
+        name, 
+        host, 
+        port, 
+        username = '', 
+        password = '', 
+        database = '', 
+        ssl = false, 
+        timeout = 30, // 确保超时默认为30秒
+        authType = 'none', 
+        redisType = 'standalone' 
+      } = values || {};
 
-      // 验证必填字段
-      if (!type || !name || !host) {
+      // 安全验证必填字段
+      if (!dbType || !name || !host) {
+        console.log('验证失败 - dbType:', dbType, 'name:', name, 'host:', host);
         message.error('请填写必要的连接信息');
+        setIsLoading(false); // 恢复按钮状态
         return;
       }
 
-      // 针对不同数据库类型的特殊验证
-      if (type !== 'sqlite' && !port) {
-        message.error('请输入端口号');
+      // 确保端口是有效的数字
+      if (dbType !== 'sqlite' && (!port || port <= 0)) {
+        message.error('请输入有效的端口号');
+        setIsLoading(false); // 恢复按钮状态
         return;
       }
 
       // 根据数据库类型进行特殊验证
-      switch (type) {
+      switch (dbType) {
         case 'mysql':
         case 'postgresql':
         case 'gaussdb':
         case 'oracle':
           if (!username) {
             message.error('请输入用户名');
+            setIsLoading(false); // 恢复按钮状态
             return;
           }
           break;
@@ -483,29 +563,51 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
           break;
         case 'redis':
           // Redis低版本不需要用户名，但我们仍然接受空用户名
+          // 检查当authType为password时验证密码
+          if (authType === 'password' && !password) {
+            message.error('请输入密码');
+            setIsLoading(false); // 恢复按钮状态
+            return;
+          } else if (authType === 'username_password') {
+            if (!username) {
+              message.error('请输入用户名');
+              setIsLoading(false); // 恢复按钮状态
+              return;
+            }
+            if (!password) {
+              message.error('请输入密码');
+              setIsLoading(false); // 恢复按钮状态
+              return;
+            }
+          }
           break;
       }
 
       const connection: DatabaseConnection = {
         id: 'test',
         name: name || '测试连接',
-        type,
+        type: dbType,
         host,
-        port: type === 'sqlite' ? 0 : port,
+        port: dbType === 'sqlite' ? 0 : port,
         username: username || '',
         password: password || '',
         database: database || '',
         ssl: ssl || false,
-        timeout: timeout || 30,
+        timeout: 30, // 固定设置为30秒
+        authType: authType || 'none',
+        redisType: redisType || 'standalone',
         isConnected: false
       };
-
+      console.log(connection);
       message.loading({ content: '正在测试连接...', key: 'testConnection', duration: 0 });
       
       if (window.electronAPI) {
         try {
-          // 测试连接
-          const testResult = await (window.electronAPI as any)?.testConnection?.(connection) || { success: false, error: '连接测试失败' };
+          // 测试连接，设置超时为65秒（比主进程的60秒超时略长，确保连接尝试完成）
+          const testResult = await Promise.race([
+            (window.electronAPI as any)?.testConnection?.(connection) || { success: false, error: '连接测试失败' },
+            new Promise((_, reject) => setTimeout(() => reject(new Error('连接测试超时')), 65000))
+          ]);
           message.destroy('testConnection');
           
           if (testResult.success) {
@@ -546,7 +648,10 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
     } catch (error) {
       console.error('测试连接失败:', error);
       message.destroy('testConnection');
-      message.error('测试连接时发生错误');
+      message.error(error instanceof Error && error.message === '连接测试超时' ? '连接测试超时，请检查网络或数据库配置' : '测试连接时发生错误');
+    } finally {
+      // 无论成功失败，都恢复按钮状态
+      setIsLoading(false);
     }
   };
 
@@ -714,7 +819,9 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
           initialValues={{
             port: 3306,
             ssl: false,
-            timeout: 30
+            timeout: 30,
+            authType: 'none',
+            redisType: 'standalone'
           }}
           labelCol={currentStep === 1 ? undefined : { span: 6 }}
           wrapperCol={currentStep === 1 ? undefined : { span: 18 }}
@@ -869,13 +976,13 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
                 
                 {/* 第二步的页脚按钮 */}
                 <div className="modal-footer" style={{ marginTop: '32px', textAlign: 'center' }}>
-                  <Button onClick={handlePrevStep}>
+                  <Button onClick={handlePrevStep} disabled={isLoading}>
                     返回
                   </Button>
-                  <Button type="link" onClick={handleTestConnection}>
+                  <Button type="link" onClick={handleTestConnection} disabled={isLoading}>
                     测试连接
                   </Button>
-                  <Button type="primary" onClick={handleModalOk}>
+                  <Button type="primary" onClick={handleModalOk} disabled={isLoading}>
                     {editingConnection ? '更新' : '保存'}
                   </Button>
                 </div>

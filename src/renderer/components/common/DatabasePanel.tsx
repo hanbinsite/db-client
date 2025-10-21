@@ -101,18 +101,33 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
 
   // 处理数据加载完成回调
     const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
-      console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', data.length, '个数据库');
+      console.log('================================================================================');
+      console.log('====================== DATABASE PANEL UPDATE START =============================');
+      console.log('================================================================================');
+      console.log('DATABASE PANEL - 数据加载完成，更新数据库列表:', { dataLength: data.length, connectionId: connection?.connectionId, databaseType: connection?.type });
+      
+      // 特别记录Redis数据库的keyCount信息
+      if (connection?.type === 'redis') {
+        const redisStats = data.map(db => ({
+          name: db.title,
+          keyCount: (db as any).keyCount || 0,
+          key: db.key
+        }));
+        console.log('Redis数据库键数量统计:', redisStats);
+      }
       
       // 检查数据库类型，如果是PostgreSQL则保留完整的树状结构
       let treeDataToSet = data;
       if (connection?.type !== 'postgresql' && connection?.type !== 'gaussdb') {
         // 对于非PostgreSQL数据库，简化树数据，只保留数据库节点，移除子节点
+        console.log(`DATABASE PANEL - 简化非${connection?.type?.toUpperCase()}数据库树结构，仅保留数据库节点`);
         treeDataToSet = data.map(dbNode => ({
           ...dbNode,
           children: [] // 清空子节点，只显示数据库列表
         }));
       }
       
+      console.log('DATABASE PANEL - 最终树数据:', { treeDataLength: treeDataToSet.length, sample: treeDataToSet.slice(0, 5) });
       setTreeData(treeDataToSet);
       setExpandedKeys([]); // 初始不展开任何节点
       setLoading(false);
@@ -128,8 +143,10 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
       
       // 通知父组件数据已加载完成
       if (onDataLoaded) {
+        console.log('DATABASE PANEL - 通知父组件数据加载完成');
         onDataLoaded();
       }
+      console.log('====================== DATABASE PANEL UPDATE END ===============================');
     };
 
     // 处理刷新操作

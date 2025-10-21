@@ -1190,8 +1190,17 @@ class RedisConnection extends BaseDatabaseConnection {
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
+      // 添加详细的命令执行日志
+      console.log(`[REDIS MAIN] 准备执行命令: ${command}`, { params });
+      
       if (!this.client || !this.isConnected()) {
-        throw new Error('Redis client not connected');
+        // 尝试重新连接
+        console.log(`[REDIS MAIN] 客户端未连接，尝试重新连接`);
+        const reconnected = await this.connect();
+        if (!reconnected || !this.isConnected()) {
+          console.error(`[REDIS MAIN] 重新连接失败`);
+          throw new Error('Redis client not connected');
+        }
       }
 
       // 将命令转换为小写
@@ -1202,12 +1211,16 @@ class RedisConnection extends BaseDatabaseConnection {
       switch (cmd) {
         case 'info':
           // 获取Redis信息
+          console.log(`[REDIS MAIN] 执行INFO命令，参数:`, params);
           if (params && params.length > 0 && params[0] === 'keyspace') {
             // 只获取keyspace信息
+            console.log(`[REDIS MAIN] 执行INFO keyspace命令`);
             const info = await this.client.info('keyspace');
+            console.log(`[REDIS MAIN] INFO keyspace命令执行成功，返回结果:`, info);
             result = info;
           } else {
             result = await this.client.info();
+            console.log(`[REDIS MAIN] INFO命令执行成功`);
           }
           break;
         case 'select':
@@ -1484,18 +1497,23 @@ class RedisConnection extends BaseDatabaseConnection {
     // 获取Redis数据库列表
     try {
       if (!this.client || !this.isConnected()) {
-        return [];
+        // 尝试重新连接
+        await this.connect();
+        if (!this.isConnected()) {
+          return ['db0'];
+        }
       }
 
       const info = await this.client.info('keyspace');
       const dbNames: string[] = [];
       
-      // 解析info keyspace输出，提取数据库名称
-      const lines = info.split('\r\n');
+      // 增强的解析逻辑，支持不同的换行符格式
+      const lines = String(info || '').split(/\r?\n/);
       lines.forEach((line: string) => {
-        if (line.startsWith('db')) {
-          const dbName = line.split(':')[0];
-          dbNames.push(dbName);
+        // 更精确的数据库名匹配
+        const match = line.match(/^db(\d+)/);
+        if (match) {
+          dbNames.push(match[0]);
         }
       });
       
@@ -1504,15 +1522,30 @@ class RedisConnection extends BaseDatabaseConnection {
         return ['db0'];
       }
       
-      return dbNames.sort();
+      // 按数字顺序排序
+      return dbNames.sort((a, b) => {
+        const numA = parseInt(a.replace('db', ''), 10);
+        const numB = parseInt(b.replace('db', ''), 10);
+        return numA - numB;
+      });
     } catch (error) {
       console.error('Failed to list Redis databases:', error);
+      // 即使出错也尝试通过dbsize获取当前数据库信息
+      try {
+        if (this.isConnected()) {
+          await this.client.dbSize();
+          return ['db0'];
+        }
+      } catch (innerError) {
+        console.error('Failed to get current Redis DB size:', innerError);
+      }
       return ['db0'];
     }
   }
 
   isConnected(): boolean {
-    return this.client !== null && this.client.isReady;
+    // 增强连接状态检测，增加更多条件确保准确性
+    return this.client !== null && typeof this.client.isReady === 'boolean' && this.client.isReady;
   }
 
   async ping(): Promise<boolean> {

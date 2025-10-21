@@ -8,6 +8,17 @@ import zhCN from 'antd/locale/zh_CN';
 import App from './App';
 import './index.css';
 
+console.log('==================================================================');
+console.log('DATABASE CLIENT APPLICATION STARTING...');
+console.log('Time:', new Date().toLocaleString());
+console.log('==================================================================');
+
+// 立即尝试输出一些基本信息
+console.log('React version:', React.version);
+console.log('Window object exists:', typeof window !== 'undefined');
+console.log('Document object exists:', typeof document !== 'undefined');
+console.log('Root element exists:', document.getElementById('root') ? 'Yes' : 'No');
+
 // 简易错误边界，避免渲染异常导致空白页
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error?: Error }> {
   constructor(props: any) {
@@ -55,4 +66,6 @@ root.render(
   </React.StrictMode>
 );
 
+console.log('App rendered to DOM');
+console.log('==================================================================');
 console.log('Renderer root mounted');

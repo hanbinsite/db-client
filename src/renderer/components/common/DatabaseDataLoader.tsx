@@ -108,18 +108,26 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           
           console.log('DATABASE DATA LOADER - 成功获取数据库列表:', databases);
           
-          // 更新缓存：Redis只有在已连接且获得到的列表有效时缓存；其他数据库正常缓存
-          const shouldCache = hasRealData && databases.length > 0 && (
-            connection.type !== 'redis' || (connection.type === 'redis' && connection.isConnected)
-          );
+          // 更新缓存：对于Redis数据库，完全禁用缓存，确保每次都获取最新数据
+          let shouldCache = false;
+          
+          if (connection.type === 'redis') {
+            // Redis数据库完全禁用缓存
+            shouldCache = false;
+            console.log(`DATABASE DATA LOADER - Redis连接缓存已禁用，将始终重新获取数据库列表`);
+          } else {
+            // 非Redis数据库使用原有缓存逻辑
+            shouldCache = hasRealData && databases.length > 0;
+          }
+          
           if (shouldCache) {
             databaseListCache[cacheKey] = {
               databases: databases,
               timestamp: now
             };
-            console.log('DATABASE DATA LOADER - 数据库列表已缓存, cacheKey:', cacheKey);
+            console.log(`DATABASE DATA LOADER - 数据库列表已缓存, cacheKey: ${cacheKey}, 类型: ${connection.type}`);
           } else {
-            console.log('DATABASE DATA LOADER - 跳过缓存（未连接或占位数据）');
+            console.log(`DATABASE DATA LOADER - 跳过缓存: ${connection.type === 'redis' ? 'Redis数据库' : '非Redis数据库'} (条件不满足)`);
           }
         } catch (error) {
           console.error('DATABASE DATA LOADER - 获取数据库列表失败:', error);
@@ -500,13 +508,56 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
   // 导出清除缓存的方法，供外部调用
   useImperativeHandle(ref, () => ({
     clearCache: () => {
-      const cacheKey = connection ? `${connection.id}_${connection.type}_${connection.isConnected ? (connection.connectionId || 'connected') : 'disconnected'}` : '';
-      if (cacheKey && databaseListCache[cacheKey]) {
-        delete databaseListCache[cacheKey];
-        console.log('DATABASE DATA LOADER - 缓存已清除');
+      // 为Redis数据库添加特殊处理：清除所有与该连接相关的缓存
+      if (connection && connection.type === 'redis') {
+        // 清除所有可能的缓存键组合
+        const possibleKeys = [
+          `${connection.id}_redis_connected`,
+          `${connection.id}_redis_disconnected`,
+          `${connection.id}_redis_${connection.connectionId || 'connected'}`,
+          `${connection.id}_redis_disconnected`
+        ];
+        
+        possibleKeys.forEach(key => {
+          if (databaseListCache[key]) {
+            delete databaseListCache[key];
+            console.log(`DATABASE DATA LOADER - Redis缓存已清除: ${key}`);
+          }
+        });
+        
+        // 也清除通配符匹配的键，确保完全清除
+        Object.keys(databaseListCache).forEach(key => {
+          if (key.startsWith(`${connection.id}_redis`)) {
+            delete databaseListCache[key];
+            console.log(`DATABASE DATA LOADER - Redis通配符缓存已清除: ${key}`);
+          }
+        });
+      } else {
+        // 非Redis数据库使用原有逻辑
+        const cacheKey = connection ? `${connection.id}_${connection.type}_${connection.isConnected ? (connection.connectionId || 'connected') : 'disconnected'}` : '';
+        if (cacheKey && databaseListCache[cacheKey]) {
+          delete databaseListCache[cacheKey];
+          console.log('DATABASE DATA LOADER - 非Redis缓存已清除');
+        }
       }
     }
   }));
+  
+  // 将ref暴露到window对象上，供RedisDbUtils调用
+  useEffect(() => {
+    // 确保ref是一个具有current属性的对象
+    if (ref && typeof ref === 'object' && 'current' in ref && typeof window !== 'undefined') {
+      (window as any).__dataLoaderRef = ref.current;
+      console.log('DATABASE DATA LOADER - ref已暴露到window对象');
+      
+      return () => {
+        if ((window as any).__dataLoaderRef === ref.current) {
+          delete (window as any).__dataLoaderRef;
+          console.log('DATABASE DATA LOADER - ref已从window对象移除');
+        }
+      };
+    }
+  }, [ref]);
 
   return null; // 这个组件不渲染任何UI，只是数据加载服务
 });

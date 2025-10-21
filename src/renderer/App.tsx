@@ -83,15 +83,25 @@ const AppContent: React.FC = () => {
 
   // 初始化
   useEffect(() => {
+    console.log('[APP INIT] 开始初始化应用');
+    
     // 从连接存储服务加载连接列表
     const loadConnections = async () => {
+      console.log('[APP INIT] 开始加载连接列表');
       if (window.electronAPI) {
         try {
           const result = await window.electronAPI.getAllConnections();
           if (result.success) {
             // 只加载连接列表，但不自动设置活动连接
             setConnections(result.connections);
+            console.log('[APP INIT] 连接列表加载成功，共加载', result.connections.length, '个连接');
             // 初始化时不自动选择任何连接，保持activeConnection为null
+            
+            // 添加Redis数据库加载相关的全局日志点
+            const redisConnections = result.connections.filter(conn => conn.type === 'redis');
+            if (redisConnections.length > 0) {
+              console.log('[APP INIT] 发现Redis连接，共', redisConnections.length, '个');
+            }
           } else {
             console.error('加载连接列表失败:', result.message);
             message.error('加载连接列表失败');
@@ -100,6 +110,8 @@ const AppContent: React.FC = () => {
           console.error('加载连接列表异常:', error);
           message.error('加载连接列表异常');
         }
+      } else {
+        console.log('[APP INIT] electronAPI不可用，无法加载连接列表');
       }
     };
 
@@ -107,16 +119,31 @@ const AppContent: React.FC = () => {
 
     // 监听菜单事件
     if (window.electronAPI) {
+      console.log('[APP INIT] 设置菜单事件监听器');
       window.electronAPI.onMenuNewConnection(() => {
         // 触发新建连接逻辑
         createNewConnection();
       });
     }
 
+    // 检查是否有Redis连接相关的工具可用
+    try {
+      if (typeof window !== 'undefined') {
+        console.log('[APP INIT] Window对象可用，准备Redis连接');
+        // 确保localStorage可用
+        if (typeof localStorage !== 'undefined') {
+          console.log('[APP INIT] localStorage可用，可以用于缓存管理');
+        }
+      }
+    } catch (error) {
+      console.error('[APP INIT] 检查环境时出错:', error);
+    }
+
     return () => {
       if (window.electronAPI) {
         window.electronAPI.removeAllListeners('menu-new-connection');
       }
+      console.log('[APP INIT] 清理资源');
     };
   }, []);
 

@@ -42,10 +42,13 @@ const DatabaseStatus: React.FC<DatabaseStatusProps> = ({
 
   const status = getConnectionStatus();
 
+  // Redis 类型不显示状态文本（移除“已连接”等文字）
+  const hideText = connection?.type === 'redis';
+
   return (
     <div className="database-status">
       <span className={`status-indicator ${status.className}`}></span>
-      <span className="status-text">{status.text}</span>
+      {hideText ? null : <span className="status-text">{status.text}</span>}
     </div>
   );
 };

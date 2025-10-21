@@ -7,7 +7,7 @@ import DatabaseTree from '../database-list/DatabaseTree';
 import DatabaseHeader from './DatabaseHeader';
 import DatabaseDataLoader from './DatabaseDataLoader';
 import DatabaseStatus from './DatabaseStatus';
-import DatabaseContextMenu from './DatabaseContextMenu';
+// import DatabaseContextMenu from './DatabaseContextMenu';
 import TreeNodeRenderer from '../database-list/TreeNodeRenderer';
 import AddDatabaseModal from './AddDatabaseModal';
 import AddSchemaModal from './AddSchemaModal';
@@ -70,6 +70,34 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     // 当darkMode变化时，在控制台显示日志
     console.log('DATABASE PANEL - 主题模式变化:', darkMode ? '暗色' : '亮色');
   }, [darkMode]);
+
+  // 新增：监听 Redis 键数量更新事件，主动同步树中对应数据库节点的 keyCount
+  useEffect(() => {
+    const onKeyCountUpdate = (ev: any) => {
+      try {
+        const detail = ev?.detail || {};
+        const { connectionId, keyCount } = detail;
+        // 兼容两种字段名：dbName 或 database
+        const dbName: string = detail.dbName || detail.database || '';
+        if (!connection || connection.connectionId !== connectionId || !dbName) return;
+        setTreeData(prev => prev.map((node: any) => {
+          const title = typeof node?.title === 'string' ? node.title : '';
+          if (title === dbName) {
+            const next = { ...node } as any;
+            next.keyCount = Number(keyCount) || 0;
+            return next;
+          }
+          return node;
+        }));
+      } catch (e) {
+        console.warn('DATABASE PANEL - 处理 redis-keycount-update 事件失败:', e);
+      }
+    };
+    window.addEventListener('redis-keycount-update', onKeyCountUpdate as any);
+    return () => {
+      window.removeEventListener('redis-keycount-update', onKeyCountUpdate as any);
+    };
+  }, [connection]);
 
   // 处理数据加载完成回调
     const handleDataLoaded = (data: TreeNode[], expanded: string[]) => {
@@ -152,239 +180,83 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
         return;
       }
       
-      // 处理PostgreSQL的模式节点双击（兼容旧逻辑）
-      if ((connection?.type === 'postgresql' || connection?.type === 'gaussdb') && 
-          node.type !== 'database' && node.type !== 'table' && 
-          node.type !== 'view' && node.type !== 'materialized-view' && 
-          node.type !== 'procedure' && node.type !== 'function') {
-        // 对于PostgreSQL，除了已知类型外的节点（模式节点），双击时打开详情页面
-        const schemaName = node.title?.toString().split(' (')[0] || '';
-        console.log('DATABASE PANEL - 双击PostgreSQL模式(兼容):', schemaName);
-        // 设置模式名作为数据库名参数，打开详情页面
-        onDatabaseSelect(schemaName);
-        onTableSelect('');
-        setActiveOtherObject('');
-      }
-      // 对于其他数据库类型，保持原有的数据库节点双击行为
-      else if (node.type === 'database' && 
-              connection?.type !== 'postgresql' && 
-              connection?.type !== 'gaussdb') {
-        const dbName = node.title as string;
-        console.log('DATABASE PANEL - 双击其他数据库:', dbName);
-        onDatabaseSelect(dbName);
-        onTableSelect('');
-        setActiveOtherObject('');
+      if (node.type === 'database') {
+        if (connection?.type === 'postgresql' || connection?.type === 'gaussdb') {
+          // 对于PostgreSQL/GaussDB，双击数据库节点时不打开数据浏览标签页，改为展开/折叠
+          const key = node.key as string;
+          const alreadyExpanded = expandedKeys.includes(key);
+          const nextExpanded = alreadyExpanded ? expandedKeys.filter(k => k !== key) : [...expandedKeys, key];
+          setExpandedKeys(nextExpanded);
+        } else {
+          const dbName = node.title as string;
+          console.log('DATABASE PANEL - 双击打开数据库详情:', dbName);
+          onDatabaseSelect(dbName);
+          onTableSelect('');
+          setActiveOtherObject('');
+        }
       }
     };
-
-  // 处理节点展开/折叠
-  const handleNodeExpand = (keys: Key[]) => {
-    console.log('DATABASE PANEL - 节点展开/折叠:', keys);
-    // 将Key[]转换为string[]，因为expandedKeys状态期望的是string[]类型
-    const stringKeys = keys.map(key => String(key));
-    setExpandedKeys(stringKeys);
-  };
-
-  // 辅助函数：查找具有特定前缀的父节点
-  const findParentNodeWithPrefix = (nodes: TreeNode[], prefix: string, targetKey: string): TreeNode | null => {
-    for (const node of nodes) {
-      if (node.key.includes(targetKey)) {
-        // 找到了包含目标key的节点，检查是否有符合前缀的父节点
-        const parentNode = findNodeByPrefix(nodes, prefix);
-        if (parentNode) return parentNode;
-      }
-      if (node.children && node.children.length > 0) {
-        const result = findParentNodeWithPrefix(node.children, prefix, targetKey);
-        if (result) return result;
-      }
-    }
-    return null;
-  };
-
-  // 辅助函数：通过前缀查找节点
-  const findNodeByPrefix = (nodes: TreeNode[], prefix: string): TreeNode | null => {
-    for (const node of nodes) {
-      if (node.key.startsWith(prefix)) {
-        return node;
-      }
-      if (node.children && node.children.length > 0) {
-        const result = findNodeByPrefix(node.children, prefix);
-        if (result) return result;
-      }
-    }
-    return null;
-  };
-
-  // 辅助函数：从节点提取数据库名称
-  const extractDatabaseNameFromNode = (node: TreeNode, allNodes: TreeNode[]): string => {
-    // 尝试从节点key中提取
-    const dbMatch = node.key.match(/db-([^-]+)/);
-    if (dbMatch && dbMatch[1]) {
-      return dbMatch[1];
-    }
     
-    // 尝试查找包含该节点的数据库节点
-    const dbNode = findParentNodeWithPrefix(allNodes, 'db-', node.key);
-    if (dbNode) {
-      return dbNode.title as string;
-    }
-    
-    return activeDatabase || '';
-  };
-
-  // 处理菜单操作
-  const handleMenuSelect = (action: string, node: TreeNode) => {
-    console.log('DATABASE PANEL - 菜单操作:', action, '节点:', node);
-    
-    // 根据不同的操作和节点类型执行相应的逻辑
-    switch (action) {
-      case 'add-database':
-        console.log('DATABASE PANEL - 打开新增数据库弹窗');
-        setIsAddDatabaseModalVisible(true);
-        break;
-      case 'add-schema':
-        console.log('DATABASE PANEL - 打开新增模式弹窗');
-        if (node.type === 'database' && typeof node.title === 'string') {
-          setSelectedDatabaseName(node.title);
-          setIsAddSchemaModalVisible(true);
-        }
-        break;
-      case 'edit-database':
-        console.log('DATABASE PANEL - 编辑数据库:', node.title);
-        // 这里可以实现编辑数据库的逻辑
-        break;
-      case 'delete-database':
-        console.log('DATABASE PANEL - 删除数据库:', node.title);
-        // 这里可以实现删除数据库的逻辑，需要添加确认对话框
-        break;
-      case 'new-query':
-        console.log('DATABASE PANEL - 创建新查询');
-        if (onNewQuery) {
-          // 如果节点类型是database，传递数据库名称给新建查询函数
-          if (node.type === 'database' && typeof node.title === 'string') {
-            onNewQuery(node.title);
-          } else {
-            // 否则使用当前活动数据库
-            onNewQuery(activeDatabase || undefined);
-          }
-        }
-        break;
-      case 'run-sql-file':
-        console.log('DATABASE PANEL - 运行SQL文件');
-        break;
-      case 'dump-all':
-        console.log('DATABASE PANEL - 转储SQL文件（数据和结构）');
-        break;
-      case 'dump-structure':
-        console.log('DATABASE PANEL - 转储SQL文件（仅结构）');
-        break;
-      case 'refresh':
-        handleRefresh();
-        break;
-      case 'view-data':
-        if (node.type === 'table' || node.type === 'view') {
-          handleNodeSelect(node);
-        }
-        break;
-      case 'edit':
-        console.log('DATABASE PANEL - 编辑对象:', node.title);
-        break;
-      case 'execute':
-        console.log('DATABASE PANEL - 执行对象:', node.title);
-        break;
-      default:
-        console.log('DATABASE PANEL - 执行未知操作:', action);
-    }
-  };
-  
-  // 处理新增数据库弹窗的取消
-  const handleAddDatabaseCancel = () => {
-    setIsAddDatabaseModalVisible(false);
-  };
-  
-  // 处理新增数据库成功
-  const handleAddDatabaseSuccess = () => {
-    setIsAddDatabaseModalVisible(false);
-    // 刷新数据库列表
-    handleRefresh();
-  };
-  
-  // 处理新增模式弹窗的取消
-  const handleAddSchemaCancel = () => {
-    setIsAddSchemaModalVisible(false);
-    setSelectedDatabaseName('');
-  };
-  
-  // 处理新增模式成功
-  const handleAddSchemaSuccess = () => {
-    setIsAddSchemaModalVisible(false);
-    setSelectedDatabaseName('');
-    // 刷新数据库列表
-    handleRefresh();
-  };
-
-  // 不再需要展开/折叠功能，因为我们只显示数据库列表
-
-  return (
-    <div className={`database-panel ${darkMode ? 'dark' : ''}`}>
-      {/* 数据库面板头部 */}
-      <DatabaseHeader 
-        loading={loading}
-        onRefresh={handleRefresh}
-      />
-
-      {/* 数据库状态显示已移除 */}
-
-      {/* 数据库数据加载器 - 不渲染UI，只处理数据加载逻辑 */}
-      <DatabaseDataLoader 
-        ref={dataLoaderRef}
-        connection={connection}
-        refreshTrigger={refreshTrigger}
-        onDataLoaded={handleDataLoaded}
-      />
-
-      {/* 数据库树 */}
-      <div className="database-tree-container">
-        {!connection ? (
-          <div className="empty-state">
-            <p>请先连接数据库</p>
-          </div>
-        ) : (
-          <DatabaseTree
-          treeData={treeData}
-          expandedKeys={expandedKeys}
-          selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
-          onNodeSelect={handleNodeSelect}
-          onNodeDoubleClick={handleNodeDoubleClick}
-          onMenuSelect={handleMenuSelect}
-          onExpand={handleNodeExpand}
+    // 构建树组件
+    return (
+      <div className={`database-panel ${darkMode ? 'dark' : 'light'}`}>
+        <DatabaseHeader
           loading={loading}
-          darkMode={darkMode}
-          databaseType={connection?.type || ''}
+          onRefresh={handleRefresh}
         />
-        )}
-      </div>
+        <DatabaseStatus connection={connection} loading={loading} />
+        {/* <DatabaseContextMenu /> */}
 
-      {/* 活动对象信息显示已移除 */}
-      
-      {/* 新增数据库弹窗 */}
-      <AddDatabaseModal
-        visible={isAddDatabaseModalVisible}
-        connection={connection}
-        onCancel={handleAddDatabaseCancel}
-        onSuccess={handleAddDatabaseSuccess}
-      />
-      
-      {/* 新增模式弹窗 */}
-      <AddSchemaModal
-        visible={isAddSchemaModalVisible}
-        connection={connection}
-        databaseName={selectedDatabaseName}
-        onCancel={handleAddSchemaCancel}
-        onSuccess={handleAddSchemaSuccess}
-      />
-    </div>
-  );
+        {/* 数据加载服务组件，仅在连接存在时挂载 */}
+        {connection && (
+          <DatabaseDataLoader
+            ref={dataLoaderRef}
+            connection={connection}
+            refreshTrigger={refreshTrigger}
+            onDataLoaded={handleDataLoaded as any}
+          />
+        )}
+
+        {/* 数据库树组件 */}
+        {connection && (
+          <DatabaseTree
+            treeData={treeData}
+            expandedKeys={expandedKeys}
+            selectedKeys={activeDatabase ? [`db-${activeDatabase}`] : []}
+            onNodeSelect={handleNodeSelect}
+            onNodeDoubleClick={handleNodeDoubleClick}
+            onExpand={(keys: Key[]) => setExpandedKeys(keys.map(k => String(k)))}
+            loading={loading}
+            darkMode={darkMode}
+            databaseType={connection.type}
+          />
+        )}
+
+        {/* 新增数据库弹窗 */}
+        <AddDatabaseModal
+          visible={isAddDatabaseModalVisible}
+          connection={connection}
+          onCancel={() => setIsAddDatabaseModalVisible(false)}
+          onSuccess={() => {
+            setIsAddDatabaseModalVisible(false);
+            handleRefresh();
+          }}
+        />
+
+        {/* 新增模式弹窗 */}
+        <AddSchemaModal
+          visible={isAddSchemaModalVisible}
+          connection={connection}
+          databaseName={selectedDatabaseName}
+          onCancel={() => setIsAddSchemaModalVisible(false)}
+          onSuccess={() => {
+            setIsAddSchemaModalVisible(false);
+            setSelectedDatabaseName('');
+            handleRefresh();
+          }}
+        />
+      </div>
+    );
 };
 
 export default DatabasePanel;

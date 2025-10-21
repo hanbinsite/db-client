@@ -55,7 +55,8 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
       id: connection?.id,
       isConnected: connection?.isConnected,
       type: connection?.type,
-      host: connection?.host
+      host: connection?.host,
+      connectionId: connection?.connectionId
     });
     
     if (!connection) {
@@ -68,8 +69,8 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
     try {
       console.log('DATABASE DATA LOADER - 开始加载数据库列表，连接ID:', connection.id || '模拟', '连接状态:', connection.isConnected, '数据库类型:', connection.type);
       
-      // 创建缓存键
-      const cacheKey = `${connection.id}_${connection.type}`;
+      // 创建缓存键（包含连接状态与连接池ID，避免断开时的0值污染连接后的真实数据）
+      const cacheKey = `${connection.id}_${connection.type}_${connection.isConnected ? (connection.connectionId || 'connected') : 'disconnected'}`;
       
       // 检查是否需要刷新或缓存是否过期
       const cachedData = databaseListCache[cacheKey];
@@ -77,7 +78,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
       const cacheExpired = cachedData && now - cachedData.timestamp >= CACHE_EXPIRY_TIME;
       const triggerChanged = refreshTrigger !== lastRefreshTrigger.current;
       
-      console.log('DATABASE DATA LOADER - 刷新状态检查:', { refreshTrigger, lastRefreshTrigger: lastRefreshTrigger.current, triggerChanged, cacheExists: !!cachedData, cacheExpired });
+      console.log('DATABASE DATA LOADER - 刷新状态检查:', { refreshTrigger, lastRefreshTrigger: lastRefreshTrigger.current, triggerChanged, cacheExists: !!cachedData, cacheExpired, cacheKey });
       
       // 更新上一次的刷新触发器值
       lastRefreshTrigger.current = refreshTrigger;
@@ -98,26 +99,33 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           if (connection.type === 'redis') {
             console.log('DATABASE DATA LOADER - 处理Redis连接，直接调用getRedisDatabases获取完整数据库列表');
             databases = await getRedisDatabases(connection);
+            // 仅在实际连接的情况下才认为是“真实数据”，否则视为占位数据不进入缓存
+            hasRealData = !!connection.isConnected;
           } else {
             databases = await getDatabaseList(connection);
+            hasRealData = true;
           }
           
           console.log('DATABASE DATA LOADER - 成功获取数据库列表:', databases);
-          hasRealData = true;
           
-          // 更新缓存
-          if (hasRealData && databases.length > 0) {
+          // 更新缓存：Redis只有在已连接且获得到的列表有效时缓存；其他数据库正常缓存
+          const shouldCache = hasRealData && databases.length > 0 && (
+            connection.type !== 'redis' || (connection.type === 'redis' && connection.isConnected)
+          );
+          if (shouldCache) {
             databaseListCache[cacheKey] = {
               databases: databases,
               timestamp: now
             };
-            console.log('DATABASE DATA LOADER - 数据库列表已缓存');
+            console.log('DATABASE DATA LOADER - 数据库列表已缓存, cacheKey:', cacheKey);
+          } else {
+            console.log('DATABASE DATA LOADER - 跳过缓存（未连接或占位数据）');
           }
         } catch (error) {
           console.error('DATABASE DATA LOADER - 获取数据库列表失败:', error);
-          // 发生异常时，如果是Redis数据库，仍然返回完整的0-15数据库列表
+          // 发生异常时，如果是Redis数据库，仍然返回完整的0-15数据库列表（不缓存）
           if (connection.type === 'redis') {
-            console.log('DATABASE DATA LOADER - Redis数据库获取失败，返回默认的0-15数据库列表');
+            console.log('DATABASE DATA LOADER - Redis数据库获取失败，返回默认的0-15数据库列表（不缓存）');
             databases = [];
             for (let i = 0; i <= 15; i++) {
               databases.push({
@@ -130,14 +138,14 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                 keyCount: 0
               });
             }
-            hasRealData = true;
+            hasRealData = false; // 占位数据
           } else {
             databases = [];
           }
         }
       } else {
         // 使用缓存的数据
-        console.log('DATABASE DATA LOADER - 使用缓存的数据库列表');
+        console.log('DATABASE DATA LOADER - 使用缓存的数据库列表, cacheKey:', cacheKey);
         databases = cachedData.databases;
         hasRealData = true;
       }
@@ -146,9 +154,9 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
       let displayDatabases = databases;
       if (!displayDatabases || displayDatabases.length === 0) {
         console.warn('DATABASE DATA LOADER - 未获取到真实数据库列表');
-        // 对于Redis数据库，即使缓存或获取失败，也返回完整的0-15数据库列表
+        // 对于Redis数据库，即使缓存或获取失败，也返回完整的0-15数据库列表（占位显示，不缓存）
         if (connection.type === 'redis') {
-          console.log('DATABASE DATA LOADER - Redis数据库列表为空，返回默认的0-15数据库列表');
+          console.log('DATABASE DATA LOADER - Redis数据库列表为空，返回默认的0-15数据库列表（占位）');
           displayDatabases = [];
           for (let i = 0; i <= 15; i++) {
             displayDatabases.push({
@@ -427,112 +435,61 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                         key: `procedure-${dbName}-${schema.name}-${proc}`,
                         title: proc,
                         isLeaf: true,
-                        type: 'function' as const
+                        type: 'procedure' as const
                       }))
                     ]
                   }
-                ].filter(Boolean) as TreeNode[]
+                ]
               };
             });
-          } else {
-            // 对于非PostgreSQL数据库，保持原有结构
-            if ((connection as any).type === DbType.REDIS || (connection as any).type === 'redis') {
-               // Redis 不展示表/视图/函数/存储过程分类
-               dbNode.children = [];
-             } else {
-              dbNode.children = [
-                // 第二层固定展示表、视图、函数、查询、备份等分类
-                // 确保表列表正确填充
-                tables.length > 0 ? {
-                  key: `tables-${dbName}`,
-                  title: `表 (${tables.length})`,
-                  children: tables.map((table: string) => ({
-                    key: `table-${dbName}-${table}`,
-                    title: table,
-                    isLeaf: true,
-                    type: 'table' as const
-                  }))
-                } : {
-                  key: `tables-${dbName}`,
-                  title: `表 (0)`,
-                  children: []
-                },
-                views.length > 0 ? {
-                  key: `views-${dbName}`,
-                  title: `视图 (${views.length})`,
-                  children: views.map((view: string) => ({
-                    key: `view-${dbName}-${view}`,
-                    title: view,
-                    isLeaf: true,
-                    type: 'view' as const
-                  }))
-                } : {
-                  key: `views-${dbName}`,
-                  title: `视图 (0)`,
-                  children: []
-                },
-                // 其他对象类型（存储过程、函数、查询、备份）的处理类似
-                procedures.length > 0 ? {
-                  key: `procedures-${dbName}`,
-                  title: `存储过程 (${procedures.length})`,
-                  children: procedures.map((procedure: string) => ({
-                    key: `procedure-${dbName}-${procedure}`,
-                    title: procedure,
-                    isLeaf: true,
-                    type: 'procedure' as const
-                  }))
-                } : {
-                  key: `procedures-${dbName}`,
-                  title: `存储过程 (0)`,
-                  children: []
-                },
-                functions.length > 0 ? {
-                  key: `functions-${dbName}`,
-                  title: `函数 (${functions.length})`,
-                  children: functions.map((func: string) => ({
-                    key: `function-${dbName}-${func}`,
-                    title: func,
-                    isLeaf: true,
-                    type: 'function' as const
-                  }))
-                } : {
-                  key: `functions-${dbName}`,
-                  title: `函数 (0)`,
-                  children: []
-                },
-  
-              ].filter(Boolean) as TreeNode[];
-            }
-          }
-          
-          return dbNode;
-        });
-        
-        const data: TreeNode[] = await Promise.all(dataPromises);
-
-        console.log('DATABASE DATA LOADER - 数据库结构加载完成，树节点数量:', data.length);
-        
-        // 自动展开第一个数据库
-        let expandedKeys: string[] = [];
-        if (data.length > 0) {
-          expandedKeys = [data[0].key];
         } else {
-          console.warn('DATABASE DATA LOADER - 未生成任何树节点数据');
-          // 不提供任何默认数据库，必须从数据库中获得正确的数据库列表
-          console.log('所有备用方法都失败，必须从数据库中获得正确的数据库列表');
-          onDataLoaded([], []);
+          // 对于非PG/GaussDB，构建常规对象节点
+          const addGroup = (name: string, items: string[], type: 'table' | 'view' | 'procedure' | 'function') => ({
+            key: `${name}-${dbName}`,
+            title: `${name} (${items.length})`,
+            children: items.map((item: string) => ({
+              key: `${type}-${dbName}-${item}`,
+              title: item,
+              isLeaf: true,
+              type
+            }))
+          });
+          
+          dbNode.children = [
+            addGroup('表', tables, 'table'),
+            addGroup('视图', views, 'view'),
+            addGroup('存储过程', procedures, 'procedure'),
+            addGroup('函数', functions, 'function')
+          ];
+        }
+        
+        return dbNode;
+      });
+
+      const data = await Promise.all(dataPromises);
+      let expandedKeys: string[] = [];
+
+      if (data.length > 0) {
+        // 默认展开所有数据库节点
+        expandedKeys = data.map(node => node.key);
+        console.log('DATABASE DATA LOADER - 已生成树节点数据，默认展开所有数据库节点');
+      } else {
+        console.warn('DATABASE DATA LOADER - 未生成任何树节点数据');
+        // 不提供任何默认数据库，必须从数据库中获得正确的数据库列表
+        console.log('所有备用方法都失败，必须从数据库中获得正确的数据库列表');
+        onDataLoaded([], []);
 
     // 注意：刷新触发器由父组件控制，这里不需要重置
-          return;
-        }
-
-        onDataLoaded(data, expandedKeys);
-      } catch (error) {
-        console.error('DATABASE DATA LOADER - 加载数据库结构失败:', error);
-        onDataLoaded([], []);
-      } finally {
-        setLoading(false);
+        return;
       }
+
+      onDataLoaded(data, expandedKeys);
+    } catch (error) {
+      console.error('DATABASE DATA LOADER - 加载数据库结构失败:', error);
+      onDataLoaded([], []);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -543,7 +500,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
   // 导出清除缓存的方法，供外部调用
   useImperativeHandle(ref, () => ({
     clearCache: () => {
-      const cacheKey = connection ? `${connection.id}_${connection.type}` : '';
+      const cacheKey = connection ? `${connection.id}_${connection.type}_${connection.isConnected ? (connection.connectionId || 'connected') : 'disconnected'}` : '';
       if (cacheKey && databaseListCache[cacheKey]) {
         delete databaseListCache[cacheKey];
         console.log('DATABASE DATA LOADER - 缓存已清除');

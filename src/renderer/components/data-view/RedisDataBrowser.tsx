@@ -165,6 +165,34 @@ const execQuery = async (query: string, params?: any[]) => {
   }
   return await runWithReconnect();
 };
+// 新增：带超时与重试的查询封装，避免 dbsize 偶发超时导致键数量为0
+const execQueryWithTimeoutRetry = async (
+  query: string,
+  params: any[] = [],
+  options: { timeoutMs?: number; retries?: number; backoffMs?: number } = {}
+) => {
+  const timeoutMs = options.timeoutMs ?? 2000;
+  const retries = options.retries ?? 3;
+  const backoffMs = options.backoffMs ?? 300;
+  const runOnceWithTimeout = async () => {
+    const t = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), timeoutMs));
+    return await Promise.race([execQuery(query, params), t]);
+  };
+  let attempt = 0;
+  while (attempt <= retries) {
+    try {
+      const res = await runOnceWithTimeout();
+      return res;
+    } catch (e: any) {
+      const isTimeout = String(e?.message || e).includes('TIMEOUT');
+      console.warn('[REDIS BROWSER] execQueryWithTimeoutRetry attempt', attempt + 1, 'failed. isTimeout:', isTimeout, 'error:', e);
+      if (attempt === retries) throw e;
+      await new Promise(r => setTimeout(r, backoffMs * Math.pow(2, attempt)));
+      attempt++;
+    }
+  }
+  throw new Error('execQueryWithTimeoutRetry exhausted');
+};
 useEffect(() => {
   (async () => {
     try {
@@ -389,7 +417,7 @@ useEffect(() => {
       setSelectingDb(true);
       console.log('[REDIS BROWSER] selecting DB index:', dbIndex, 'poolId:', poolId);
       try {
-        const res = await (window as any).electronAPI?.executeQuery(poolId, 'select', [String(dbIndex)]);
+        const res = await execQuery('select', [String(dbIndex)]);
         console.log('[REDIS BROWSER] select result JSON:', safeStringify(res));
         if (!(res && res.success)) {
           console.warn('[REDIS BROWSER] select not successful, continue anyway');
@@ -408,27 +436,32 @@ useEffect(() => {
         setKeyMeta({});
         setKeyError('');
         setScanError('');
-        // 查询当前DB键数量，以决定是否允许 KEYS 回退
+        // 查询当前DB键数量，以决定是否允许 KEYS 回退（新增重试与超时）
         try {
-          const sizeRes = await execQuery('dbsize', []);
+          const sizeRes = await execQueryWithTimeoutRetry('dbsize', [], { timeoutMs: 2000, retries: 3, backoffMs: 300 });
           let sizeVal = 0;
           if (sizeRes && sizeRes.success) {
             const d = sizeRes.data;
             if (typeof d === 'number') {
               sizeVal = d;
-            } else if (Array.isArray(d) && d.length > 0) {
-              const first = d[0];
-              if (typeof first === 'number') sizeVal = first;
-              else if (first && typeof first === 'object' && typeof (first as any).value === 'number') sizeVal = Number((first as any).value);
-            } else if (d && typeof d === 'object' && typeof (d as any).value === 'number') {
-              sizeVal = Number((d as any).value);
-            } else {
-              const n = Number(d as any);
-              if (Number.isFinite(n)) sizeVal = n;
+            } else if (Array.isArray(d)) {
+              const v = Number(d[0]?.value ?? d[0]);
+              if (Number.isFinite(v)) sizeVal = v;
+            } else if (typeof d === 'object' && d !== null) {
+              const v = Number((d as any).value ?? d);
+              if (Number.isFinite(v)) sizeVal = v;
             }
+          } else {
+            console.warn('[REDIS BROWSER] dbsize unsuccessful JSON:', safeStringify(sizeRes));
           }
-          setDbSize(Number.isFinite(sizeVal) ? sizeVal : 0);
-          console.log('[REDIS BROWSER] dbsize:', sizeVal);
+          setDbSize(sizeVal);
+          try {
+            window.dispatchEvent(new CustomEvent('redis-keycount-update', {
+              detail: { connectionId: poolId, database: `db${dbIndex}`, keyCount: sizeVal }
+            }));
+          } catch (e) {
+            console.warn('[REDIS BROWSER] dispatch redis-keycount-update failed:', e);
+          }
         } catch (e) {
           console.warn('[REDIS BROWSER] dbsize query failed:', e);
           setDbSize(0);
@@ -440,7 +473,7 @@ useEffect(() => {
       }
     };
     selectDb();
-  }, [poolId, connection.type, dbIndex]);
+  }, [poolId, dbIndex, connection.type]);
 
   const loadNext = async () => {
     if (scan.loading || scan.reachedEnd || !poolId || selectingDb) {
@@ -876,7 +909,7 @@ useEffect(() => {
       try {
         await Promise.all(batch.map(async (key) => {
           try {
-            const typeRes = await (window as any).electronAPI?.executeQuery(poolId, 'type', [key]);
+            const typeRes = await execQuery('type', [key]);
             const type = (typeRes && typeRes.success) ? String(typeRes.data) : 'unknown';
             updates[key] = type.toUpperCase();
           } catch {
@@ -986,7 +1019,7 @@ useEffect(() => {
       const newKey = editedKey && editedKey.trim();
       let targetKey = selectedKey;
       if (newKey && newKey !== selectedKey) {
-        const res = await (window as any).electronAPI?.executeQuery(poolId, 'rename', [selectedKey, newKey]);
+        const res = await execQuery('rename', [selectedKey, newKey]);
         if (res && res.success) {
           setScan(prev => ({
             ...prev,
@@ -1006,7 +1039,7 @@ useEffect(() => {
 
       // 如果是字符串类型，保存编辑后的值
       if (keyType === 'string') {
-        const resSet = await (window as any).electronAPI?.executeQuery(poolId, 'set', [targetKey, String(stringValueText ?? '')]);
+        const resSet = await execQuery('set', [targetKey, String(stringValueText ?? '')]);
         if (resSet && resSet.success) {
           message.success('值已保存');
           await loadKeyDetail(targetKey);
@@ -1022,7 +1055,7 @@ useEffect(() => {
   const handleDelete = async () => {
     try {
       if (!poolId || !selectedKey) return;
-      const res = await (window as any).electronAPI?.executeQuery(poolId, 'del', [selectedKey]);
+      const res = await execQuery('del', [selectedKey]);
       if (res && res.success) {
         setScan(prev => ({
           ...prev,

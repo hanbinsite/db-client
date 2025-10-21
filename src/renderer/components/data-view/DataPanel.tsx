@@ -16,6 +16,7 @@ import {
 import { DatabaseConnection, DatabaseType } from '../../types';
 // ThemeContext导入已移除，因为该模块不存在
 import './DataPanel.css';
+import { execRedisQueued } from '../../utils/redis-exec-queue';
 
 const { Option } = Select;
 
@@ -235,12 +236,12 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
           try {
             const m = String(database).match(/db(\d+)/i);
             const dbIndex = m ? parseInt(m[1], 10) : (Number(database) || 0);
-            await window.electronAPI.executeQuery(poolId, 'select', [String(dbIndex)]);
+            await execQuerySafe(connection, 'select', [String(dbIndex)]);
           } catch {}
 
           let keyType = 'string';
           try {
-            const typeRes = await window.electronAPI.executeQuery(poolId, 'type', [table]);
+            const typeRes = await execQuerySafe(connection, 'type', [table]);
             const typeVal = typeRes && typeRes.success ? (Array.isArray(typeRes.data) ? (typeRes.data[0]?.value ?? typeRes.data[0]) : typeRes.data) : 'string';
             keyType = String(typeVal || 'string');
           } catch {}
@@ -274,7 +275,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
       }
 
       // 执行查询获取数据
-      const result = await window.electronAPI.executeQuery(poolId, query, paramsArray);
+      const result = await execQuerySafe(connection, query, paramsArray);
       console.log('数据库查询结果:', result);
 
       if (result && result.success && Array.isArray(result.data)) {
@@ -308,7 +309,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
               keyType = cachedType;
             } else {
               // 兜底：若缓存不可用则再次查询类型
-              const typeResult = await window.electronAPI.executeQuery(poolId, 'type', [keyName]);
+              const typeResult = await execQuerySafe(connection, 'type', [keyName]);
               if (typeResult && typeResult.success && typeResult.data && typeResult.data.length > 0) {
                 keyType = typeResult.data[0].value || 'string';
               }
@@ -878,3 +879,64 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
 };
 
 export default DataPanel;
+
+// 在组件函数体内，替换poolId获取与执行方式（仅针对Redis专用路径做增强）
+
+const resolvePoolId = async (conn: any): Promise<string | undefined> => {
+  let pid: string | undefined = conn?.connectionId;
+  if (!pid && (window as any).electronAPI?.connectDatabase && conn) {
+    try {
+      const res = await (window as any).electronAPI.connectDatabase(conn);
+      if (res && res.success && res.connectionId) {
+        pid = res.connectionId;
+        conn.connectionId = pid;
+        conn.isConnected = true;
+      }
+    } catch (e) {
+      // 忽略，继续尝试生成ID检查
+    }
+  }
+  if (!pid && conn) {
+    const generatedId = `${conn.type}_${conn.host}_${conn.port}_${conn.database || ''}`;
+    try {
+      const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+      if (cfgRes && cfgRes.success) {
+        pid = generatedId;
+      }
+    } catch {
+      // no-op
+    }
+  }
+  return pid;
+};
+
+// 封装：在Redis下带自动重连与串行执行的查询
+
+const execQuerySafe = async (conn: any, query: string, params?: any[]): Promise<any> => {
+  const pid = await resolvePoolId(conn);
+  if (!pid) throw new Error('连接池未就绪');
+  if (conn?.type === 'redis') {
+    // 使用串行队列，避免单连接池并发争用
+    const res = await execRedisQueued(pid, query, params);
+    const msg = String(((res as any)?.message || (res as any)?.error || ''));
+    if (res && res.success === false && (msg.includes('连接池不存在') || msg.includes('Redis client not connected') || msg.includes('获取连接超时'))) {
+      try {
+        const reconnect = await (window as any).electronAPI?.connectDatabase?.(conn);
+        if (reconnect && reconnect.success && reconnect.connectionId) {
+          const newPid = reconnect.connectionId;
+          conn.connectionId = newPid;
+          conn.isConnected = true;
+          return await execRedisQueued(newPid, query, params);
+        }
+      } catch {
+        // 维持原错误返回
+      }
+    }
+    return res;
+  }
+  // 非Redis保持原有并发行为
+  return await (window as any).electronAPI?.executeQuery(pid, query, params);
+};
+
+
+// （辅助函数声明结束）

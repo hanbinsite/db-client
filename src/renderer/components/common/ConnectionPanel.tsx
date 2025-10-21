@@ -109,6 +109,9 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
               password = auth.substring(1);
             } else if (auth.includes(':')) {
               [username, password] = auth.split(':');
+            } else {
+              // 只有用户名没有冒号的情况
+              username = auth;
             }
             hostPortDb = rest;
           }
@@ -127,12 +130,21 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
             host = hostPortDb;
           }
           
+          // 根据解析出的认证信息自动设置authType，避免密码被"none"模式清空
+          let authType: string = 'none';
+          if (username && password) {
+            authType = 'username_password';
+          } else if (!username && password) {
+            authType = 'password';
+          }
+          
           form.setFieldsValue({
             host,
             port: parseInt(port, 10),
             username,
             password,
-            database
+            database,
+            authType
           });
           break;
           
@@ -321,38 +333,22 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
         onClick: () => onConnectionSelect(connection)
       },
       {
-        key: 'refresh',
-        label: '刷新连接',
-        icon: <RestOutlined />,
-        onClick: () => handleRefreshConnection(connection)
-      },
-      {
         key: 'edit',
-        label: '编辑连接',
+        label: '编辑',
         icon: <EditOutlined />,
         onClick: () => handleEditConnection(connection)
       },
       {
-        key: 'copy',
-        label: '复制连接',
-        icon: <CopyOutlined />,
-        onClick: () => {
-          const newConnection: DatabaseConnection = {
-            ...connection,
-            id: Date.now().toString(),
-            name: `${connection.name} (副本)`,
-            isConnected: false
-          };
-          onConnectionCreate(newConnection);
-          message.success('连接已复制');
-        }
+        key: 'delete',
+        label: '删除',
+        icon: <DeleteOutlined />,
+        onClick: () => handleDeleteConnection(connection.id)
       },
       {
-        key: 'delete',
-        label: '删除连接',
-        icon: <DeleteOutlined />,
-        danger: true,
-        onClick: () => handleDeleteConnection(connection.id)
+        key: 'refresh',
+        label: '刷新连接',
+        icon: <RestOutlined />,
+        onClick: () => handleRefreshConnection(connection)
       }
     ]
   });
@@ -518,48 +514,37 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
       console.log('当前数据库类型:', dbType, '表单值:', values);
       
       // 解构时提供默认值，确保即使字段不存在也不会导致错误
-      const { 
-        name, 
-        host, 
-        port, 
-        username = '', 
-        password = '', 
-        database = '', 
-        ssl = false, 
-        timeout = 30, // 确保超时默认为30秒
-        authType = 'none', 
-        redisType = 'standalone' 
+      const {
+        name = '测试连接',
+        host = '',
+        port = 0,
+        username = '',
+        password = '',
+        database = '',
+        ssl = false,
+        timeout = 30,
+        authType = 'none',
+        redisType = 'standalone'
       } = values || {};
-
-      // 安全验证必填字段
-      if (!dbType || !name || !host) {
-        console.log('验证失败 - dbType:', dbType, 'name:', name, 'host:', host);
-        message.error('请填写必要的连接信息');
-        setIsLoading(false); // 恢复按钮状态
-        return;
-      }
-
-      // 确保端口是有效的数字
-      if (dbType !== 'sqlite' && (!port || port <= 0)) {
-        message.error('请输入有效的端口号');
-        setIsLoading(false); // 恢复按钮状态
-        return;
-      }
-
-      // 根据数据库类型进行特殊验证
+      
+      // 基于数据库类型的验证逻辑
       switch (dbType) {
         case 'mysql':
         case 'postgresql':
         case 'gaussdb':
         case 'oracle':
-          if (!username) {
-            message.error('请输入用户名');
+          if (!host || !port || !username) {
+            message.error('请填写完整的连接信息');
             setIsLoading(false); // 恢复按钮状态
             return;
           }
           break;
         case 'sqlite':
-          // SQLite不需要端口和用户名密码
+          if (!host.trim()) {
+            message.error('请选择SQLite数据库文件');
+            setIsLoading(false); // 恢复按钮状态
+            return;
+          }
           break;
         case 'redis':
           // Redis低版本不需要用户名，但我们仍然接受空用户名
@@ -973,7 +958,7 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
                     </Col>
                   </Row>
                 </div>
-                
+                  
                 {/* 第二步的页脚按钮 */}
                 <div className="modal-footer" style={{ marginTop: '32px', textAlign: 'center' }}>
                   <Button onClick={handlePrevStep} disabled={isLoading}>

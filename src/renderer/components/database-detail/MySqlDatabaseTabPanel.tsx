@@ -863,7 +863,7 @@ const MySqlDatabaseTabPanel: React.FC<Props> = ({ connection, database, type, da
                 <Space size={8} style={{ marginTop: 4 }}>
                   <Tag color={getDatabaseColor(type)}>{type.toUpperCase()}</Tag>
                   <span style={{ color: '#666', fontSize: 12 }}>
-                    连接: {connection?.name || '-'} - 状态: {connection?.isConnected ? '已连接' : '未连接'}
+                    连接: {connection?.name || '-'}
                   </span>
                   {mysqlVersion !== '未知' && (
                     <span style={{ color: '#666', fontSize: 12 }}>

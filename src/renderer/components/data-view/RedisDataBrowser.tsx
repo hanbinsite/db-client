@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Input, List, Spin, Empty, Typography, Tag, Space, Divider, Alert, Button, Switch, Select, message, InputNumber, Tooltip, Progress } from 'antd';
 import type { DatabaseConnection } from '../../types';
+import { execRedisQueuedWithTimeout } from '../../utils/redis-exec-queue';
 
 interface RedisDataBrowserProps {
   connection: DatabaseConnection;
@@ -128,42 +129,31 @@ const SAFE_KEYS_FALLBACK_LIMIT = 5000;
 const [scanError, setScanError] = useState<string>('');
 // 动态并发与命令队列
 const [maxConnections, setMaxConnections] = useState<number>(1);
-const serialChainRef = useRef<Promise<void>>(Promise.resolve());
 const execQuery = async (query: string, params?: any[]) => {
   if (!poolId) throw new Error('Pool not ready');
-  const runOnce = async (pid: string) => (window as any).electronAPI?.executeQuery(pid, query, params);
-  const runWithReconnect = async () => {
-    let currentPid = poolId!;
-    let res = await runOnce(currentPid);
-    const msg = String(((res as any)?.message || (res as any)?.error || ''));
-    if (res && res.success === false && (msg.includes('连接池不存在') || msg.includes('Redis client not connected') || msg.includes('获取连接超时'))) {
-      console.warn('[REDIS BROWSER] execQuery detected pool issue, attempting reconnect. message:', msg);
-      try {
-        const reconnect = await (window as any).electronAPI?.connectDatabase?.(connection);
-        if (reconnect && reconnect.success && reconnect.connectionId) {
-          currentPid = reconnect.connectionId;
-          setPoolId(currentPid);
-          connection.connectionId = currentPid;
-          connection.isConnected = true;
-          console.log('[REDIS BROWSER] reconnect success, new poolId:', currentPid);
-          res = await runOnce(currentPid);
-        } else {
-          console.warn('[REDIS BROWSER] reconnect failed or no connectionId, res:', reconnect);
-        }
-      } catch (e) {
-        console.error('[REDIS BROWSER] reconnect error:', e);
+  const runOnce = async (pid: string) => execRedisQueuedWithTimeout(pid, query, params, 0);
+  let currentPid = poolId!;
+  let res = await runOnce(currentPid);
+  const msg = String(((res as any)?.message || (res as any)?.error || ''));
+  if (res && res.success === false && (msg.includes('连接池不存在') || msg.includes('Redis client not connected') || msg.includes('获取连接超时'))) {
+    console.warn('[REDIS BROWSER] execQuery detected pool issue, attempting reconnect. message:', msg);
+    try {
+      const reconnect = await (window as any).electronAPI?.connectDatabase?.(connection);
+      if (reconnect && reconnect.success && reconnect.connectionId) {
+        currentPid = reconnect.connectionId;
+        setPoolId(currentPid);
+        connection.connectionId = currentPid;
+        connection.isConnected = true;
+        console.log('[REDIS BROWSER] reconnect success, new poolId:', currentPid);
+        res = await runOnce(currentPid);
+      } else {
+        console.warn('[REDIS BROWSER] reconnect failed or no connectionId, res:', reconnect);
       }
+    } catch (e) {
+      console.error('[REDIS BROWSER] reconnect error:', e);
     }
-    return res;
-  };
-  if (connection.type === 'redis' && maxConnections <= 1) {
-    let result: any;
-    const p = serialChainRef.current.then(async () => { result = await runWithReconnect(); });
-    serialChainRef.current = p.catch(() => {});
-    await p;
-    return result;
   }
-  return await runWithReconnect();
+  return res;
 };
 // 新增：带超时与重试的查询封装，避免 dbsize 偶发超时导致键数量为0
 const execQueryWithTimeoutRetry = async (

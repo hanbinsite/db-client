@@ -523,6 +523,18 @@ export class DatabaseService extends EventEmitter {
       throw new Error('连接池不存在');
     }
 
+    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          return await connection.getDatabaseInfo();
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
+
     const connection = await pool.acquire();
     try {
       return await connection.getDatabaseInfo();
@@ -536,6 +548,18 @@ export class DatabaseService extends EventEmitter {
     const pool = this.getConnectionPool(poolId);
     if (!pool) {
       throw new Error('连接池不存在');
+    }
+
+    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          return await connection.getTableStructure(tableName);
+        } finally {
+          pool.release(connection);
+        }
+      });
     }
 
     const connection = await pool.acquire();
@@ -553,6 +577,18 @@ export class DatabaseService extends EventEmitter {
       throw new Error('连接池不存在');
     }
 
+    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          return await connection.listTables();
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
+
     const connection = await pool.acquire();
     try {
       return await connection.listTables();
@@ -566,6 +602,18 @@ export class DatabaseService extends EventEmitter {
     const pool = this.getConnectionPool(poolId);
     if (!pool) {
       throw new Error('连接池不存在');
+    }
+
+    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          return await connection.listDatabases();
+        } finally {
+          pool.release(connection);
+        }
+      });
     }
 
     const connection = await pool.acquire();

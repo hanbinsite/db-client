@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Tabs, message, Button, Tooltip, Dropdown, Badge, Menu } from 'antd';
+import RedisQueryPage from './components/redis/RedisQueryPage';
 import {
   PlusOutlined, DatabaseOutlined, UserOutlined,
   FileTextOutlined, BankOutlined, 
@@ -470,11 +471,20 @@ const AppContent: React.FC = () => {
     const tabKey = `query-${Date.now()}`;
     // 使用传入的数据库名称或当前活动数据库
     const targetDatabase = databaseName || activeDatabase;
-    // 生成基本查询语句，如果有数据库名则包含数据库前缀
-    let defaultQuery = '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n';
-    if (targetDatabase) {
-      defaultQuery = `-- 输入SQL查询语句\n-- 例如: SELECT * FROM \`${targetDatabase}\`\`.table_name LIMIT 100;\n\n`;
+    
+    // 根据连接类型生成不同的默认查询内容
+    let defaultQuery = '';
+    if (activeConnection?.type === 'redis') {
+      // Redis连接的默认内容
+      defaultQuery = '# Redis命令示例\n# 输入命令执行，例如:\n# KEYS * - 列出所有键\n# GET key_name - 获取键值\n# SET key_name value - 设置键值\n\n';
+    } else {
+      // SQL数据库的默认内容
+      defaultQuery = '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n';
+      if (targetDatabase) {
+        defaultQuery = `-- 输入SQL查询语句\n-- 例如: SELECT * FROM \`${targetDatabase}\`\`.table_name LIMIT 100;\n\n`;
+      }
     }
+    
     const newTab: QueryTab = {
       key: tabKey,
       label: '查询 ' + (queryTabs.length + 1),
@@ -980,21 +990,32 @@ const AppContent: React.FC = () => {
                 </TabPane>
               ))}
               
-              {queryTabs.map(tab => (
+              {queryTabs.map(tab => {
+                const tabConnection = tab.connection || activeConnection;
+                return (
                 <TabPane 
                   key={tab.key} 
                   tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
                   closable={true}
                 >
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <QueryPanel
-                      connection={tab.connection || activeConnection}
-                      database={tab.database || activeDatabase}
-                      darkMode={darkMode}
-                    />
+                    {tabConnection?.type === 'redis' ? (
+                      <RedisQueryPage
+                        connection={tabConnection}
+                        database={tab.database || activeDatabase}
+                        darkMode={darkMode}
+                      />
+                    ) : (
+                      <QueryPanel
+                        connection={tabConnection}
+                        database={tab.database || activeDatabase}
+                        darkMode={darkMode}
+                      />
+                    )}
                   </div>
                 </TabPane>
-              ))}
+                );
+              })}
               
               {tableDataTabs.map(tab => (
                 <TabPane 

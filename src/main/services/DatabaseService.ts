@@ -267,6 +267,9 @@ export class GenericConnectionPool implements IDatabaseConnectionPool {
 
   private async createAndAcquireConnection(): Promise<IDatabaseConnection> {
     const connection = await this.createAndAddConnection();
+    // 从空闲队列移除，作为当前活跃连接返回
+    const idx = this.idleConnections.indexOf(connection);
+    if (idx !== -1) this.idleConnections.splice(idx, 1);
     return connection;
   }
 
@@ -274,8 +277,14 @@ export class GenericConnectionPool implements IDatabaseConnectionPool {
     const connection = this.factory.createConnection(this.config);
     
     try {
-      await connection.connect();
+      const ok = await connection.connect();
+      // 如果连接实现返回false或未处于连接状态，则视为失败
+      if (!ok && typeof (connection as any).isConnected === 'function' && !(connection as any).isConnected()) {
+        throw new Error('连接失败');
+      }
       this.connections.push(connection);
+      // 新增：将新创建的连接加入空闲队列，供后续获取
+      this.idleConnections.push(connection);
       return connection;
     } catch (error) {
       // 增强错误处理，保留原始错误的详细信息
@@ -622,6 +631,50 @@ export class DatabaseService extends EventEmitter {
     } finally {
       pool.release(connection);
     }
+  }
+
+  // Redis 发布/订阅：开始订阅
+  async redisSubscribe(poolId: string, channels: string[], isPattern: boolean = false): Promise<boolean> {
+    const pool = this.getConnectionPool(poolId);
+    if (!pool) throw new Error('连接池不存在');
+    // 串行化，避免与查询并发导致获取连接超时
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          const onMsg = (channel: string, message: string) => {
+            this.emit('redisPubSubMessage', poolId, channel, message);
+          };
+          if (isPattern) {
+            await (connection as any).psubscribePatterns(channels, onMsg);
+          } else {
+            await (connection as any).subscribeChannels(channels, onMsg);
+          }
+          return true;
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
+    return false;
+  }
+
+  // Redis 发布/订阅：取消订阅
+  async redisUnsubscribe(poolId: string, channels: string[], isPattern: boolean = false): Promise<boolean> {
+    const pool = this.getConnectionPool(poolId);
+    if (!pool) throw new Error('连接池不存在');
+    if (this.poolTypes.get(poolId) === 'redis') {
+      return await this.enqueueRedis(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          await (connection as any).unsubscribeChannels(channels, isPattern);
+          return true;
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
+    return false;
   }
 
   // 获取连接池状态
@@ -1115,6 +1168,8 @@ class GaussDBConnection extends BaseDatabaseConnection {
 class RedisConnection extends BaseDatabaseConnection {
   private client: any = null;
   protected isConnecting: boolean = false;
+  private subscriber: any = null;
+  private subscribedChannels: Set<string> = new Set();
 
   // Redis连接实现
   async connect(): Promise<boolean> {
@@ -1131,23 +1186,42 @@ class RedisConnection extends BaseDatabaseConnection {
       const redisOptions: any = {
         socket: {
           host: config.host,
-          port: config.port,
+          port: Number(config.port) || 6379,
           connectTimeout: (config.timeout || 30) * 1000
         }
       };
 
-      // 如果提供了用户名和密码，添加认证信息
-      if (config.username && config.username.trim()) {
-        redisOptions.username = config.username;
-      }
-      if (config.password && config.password.trim()) {
-        redisOptions.password = config.password;
+      // 根据认证类型设置认证信息（并对缺省authType且提供了密码的情况做兼容）
+      const hasPassword = typeof config.password === 'string' && config.password.trim().length > 0;
+      const hasUsername = typeof config.username === 'string' && config.username.trim().length > 0;
+      if (config.authType === 'username_password') {
+        if (hasUsername) {
+          redisOptions.username = config.username;
+        }
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
+      } else if (config.authType === 'password') {
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
+      } else {
+        // 兼容：如果未声明认证类型但给了密码（目标实例未启用ACL，仅requirepass），仍然传入password
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
       }
 
       // 如果提供了默认数据库，选择数据库
       if (config.database && !isNaN(Number(config.database))) {
         this.selectedDb = Number(config.database);
       }
+
+      // 记录简化后的连接选项（不打印敏感字段）便于诊断
+      try {
+        const safeOpts = { socket: redisOptions.socket, username: !!redisOptions.username, passwordPresent: !!redisOptions.password };
+        console.log('[REDIS MAIN] createClient options:', JSON.stringify(safeOpts));
+      } catch {}
 
       // 创建Redis客户端
       this.client = createClient(redisOptions);
@@ -1163,7 +1237,7 @@ class RedisConnection extends BaseDatabaseConnection {
 
       // 如果有默认数据库，切换到该数据库
       if (this.selectedDb !== undefined) {
-        await this.client.select(String(this.selectedDb));
+        await this.client.select(this.selectedDb);
       }
 
       this.isConnecting = false;
@@ -1191,7 +1265,9 @@ class RedisConnection extends BaseDatabaseConnection {
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
       // 添加详细的命令执行日志
-      console.log(`[REDIS MAIN] 准备执行命令: ${command}`, { params });
+      if (String(command).toLowerCase() !== 'info') {
+        console.log(`[REDIS MAIN] 准备执行命令: ${command}`, { params });
+      }
       
       if (!this.client || !this.isConnected()) {
         // 尝试重新连接
@@ -1209,20 +1285,16 @@ class RedisConnection extends BaseDatabaseConnection {
       // 根据Redis命令执行相应操作
       let result: any;
       switch (cmd) {
-        case 'info':
-          // 获取Redis信息
-          console.log(`[REDIS MAIN] 执行INFO命令，参数:`, params);
-          if (params && params.length > 0 && params[0] === 'keyspace') {
-            // 只获取keyspace信息
-            console.log(`[REDIS MAIN] 执行INFO keyspace命令`);
-            const info = await this.client.info('keyspace');
-            console.log(`[REDIS MAIN] INFO keyspace命令执行成功，返回结果:`, info);
-            result = info;
+        case 'info': {
+          // 获取Redis信息（静默执行，移除噪音日志）
+          const section = (params && params.length > 0 && typeof params[0] === 'string') ? params[0] : undefined;
+          if (section) {
+            result = await this.client.info(section);
           } else {
             result = await this.client.info();
-            console.log(`[REDIS MAIN] INFO命令执行成功`);
           }
           break;
+        }
         case 'select':
           // 切换数据库
           if (params && params.length > 0) {
@@ -1364,6 +1436,61 @@ class RedisConnection extends BaseDatabaseConnection {
             entries.push({ score, value });
           }
           result = await this.client.zAdd(key, entries);
+          break;
+        }
+        case 'pubsub': {
+          const subcmd = String(params?.[0] ?? '').toLowerCase();
+          if (subcmd === 'channels') {
+            const pattern = (params && params.length > 1 && typeof params[1] === 'string') ? String(params[1]) : undefined;
+            if (typeof (this.client as any).pubSubChannels === 'function') {
+              result = await (this.client as any).pubSubChannels(pattern);
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              const args = ['PUBSUB', 'CHANNELS'];
+              if (pattern) args.push(pattern);
+              result = await (this.client as any).sendCommand(args);
+            } else {
+              throw new Error('PUBSUB CHANNELS not supported by client');
+            }
+          } else if (subcmd === 'numsub') {
+            const channels = params?.slice(1)?.map((c: any) => String(c)) || [];
+            if (typeof (this.client as any).pubSubNumSub === 'function') {
+              result = await (this.client as any).pubSubNumSub(channels);
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              const args = ['PUBSUB', 'NUMSUB', ...channels];
+              result = await (this.client as any).sendCommand(args);
+            } else {
+              throw new Error('PUBSUB NUMSUB not supported by client');
+            }
+          } else if (subcmd === 'numpat') {
+            if (typeof (this.client as any).pubSubNumPat === 'function') {
+              result = await (this.client as any).pubSubNumPat();
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              result = await (this.client as any).sendCommand(['PUBSUB', 'NUMPAT']);
+            } else {
+              throw new Error('PUBSUB NUMPAT not supported by client');
+            }
+          } else {
+            throw new Error(`Unsupported PUBSUB subcommand: ${subcmd}`);
+          }
+          break;
+        }
+        case 'slowlog': {
+          const subcmd = String(params?.[0] ?? '').toLowerCase();
+          if (typeof (this.client as any).sendCommand !== 'function') {
+            throw new Error('SLOWLOG not supported by client');
+          }
+          if (subcmd === 'get') {
+            const count = params?.[1];
+            const args = ['SLOWLOG', 'GET'];
+            if (typeof count !== 'undefined') args.push(String(count));
+            result = await (this.client as any).sendCommand(args);
+          } else if (subcmd === 'len') {
+            result = await (this.client as any).sendCommand(['SLOWLOG', 'LEN']);
+          } else if (subcmd === 'reset') {
+            result = await (this.client as any).sendCommand(['SLOWLOG', 'RESET']);
+          } else {
+            throw new Error(`Unsupported SLOWLOG subcommand: ${subcmd}`);
+          }
           break;
         }
         default:
@@ -1579,6 +1706,85 @@ class RedisConnection extends BaseDatabaseConnection {
     }
     
     return [result];
+  }
+
+  // Pub/Sub：确保订阅客户端
+  private async ensureSubscriber(): Promise<any> {
+    if (this.subscriber && this.subscriber.isReady) return this.subscriber;
+    const { createClient } = require('redis');
+    const cfg = this.getConfig();
+    const opts: any = {
+      socket: {
+        host: cfg.host,
+        port: Number(cfg.port) || 6379,
+        connectTimeout: (cfg.timeout || 30) * 1000
+      }
+    };
+    const hasPassword = typeof cfg.password === 'string' && cfg.password.trim().length > 0;
+    const hasUsername = typeof cfg.username === 'string' && cfg.username.trim().length > 0;
+    if (cfg.authType === 'username_password') {
+      if (hasUsername) opts.username = cfg.username;
+      if (hasPassword) opts.password = cfg.password;
+    } else if (cfg.authType === 'password') {
+      if (hasPassword) opts.password = cfg.password;
+    } else {
+      if (hasPassword) opts.password = cfg.password;
+    }
+    this.subscriber = createClient(opts);
+    this.subscriber.on('error', (err: Error) => console.error('Redis subscriber error:', err));
+    await this.subscriber.connect();
+    if (this.selectedDb !== undefined) {
+      try { await this.subscriber.select(this.selectedDb); } catch {}
+    }
+    return this.subscriber;
+  }
+
+  // 订阅普通频道
+  async subscribeChannels(channels: string[], onMessage: (channel: string, message: string) => void): Promise<void> {
+    const sub = await this.ensureSubscriber();
+    for (const ch of channels) {
+      const name = String(ch).trim();
+      if (!name) continue;
+      if (!this.subscribedChannels.has(name)) {
+        await sub.subscribe(name, (msg: string) => onMessage(name, msg));
+        this.subscribedChannels.add(name);
+      }
+    }
+  }
+
+  // 订阅模式频道（PSUBSCRIBE）
+  async psubscribePatterns(patterns: string[], onMessage: (channel: string, message: string) => void): Promise<void> {
+    const sub = await this.ensureSubscriber();
+    for (const p of patterns) {
+      const pat = String(p).trim();
+      if (!pat) continue;
+      if (!this.subscribedChannels.has(pat)) {
+        await sub.pSubscribe(pat, (msg: string, ch: string) => onMessage(ch, msg));
+        this.subscribedChannels.add(pat);
+      }
+    }
+  }
+
+  // 取消订阅
+  async unsubscribeChannels(channels: string[], isPattern: boolean = false): Promise<void> {
+    if (!this.subscriber) return;
+    for (const ch of channels) {
+      const name = String(ch).trim();
+      if (!name) continue;
+      try {
+        if (isPattern) {
+          await this.subscriber.pUnsubscribe(name);
+        } else {
+          await this.subscriber.unsubscribe(name);
+        }
+      } catch {}
+      this.subscribedChannels.delete(name);
+    }
+    // 如果没有订阅，释放订阅连接
+    if (this.subscribedChannels.size === 0) {
+      try { await this.subscriber.quit(); } catch {}
+      this.subscriber = null;
+    }
   }
 
   // 存储当前选择的数据库

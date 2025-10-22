@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 新增：获取连接池配置（动态并发）
   getConnectionPoolConfig: (connectionId: string) => ipcRenderer.invoke('get-connection-pool-config', connectionId),
   
+  // Redis 发布/订阅
+  redisSubscribe: (connectionId: string, channels: string[], isPattern?: boolean) =>
+    ipcRenderer.invoke('redis-subscribe', { connectionId, channels, isPattern }),
+  redisUnsubscribe: (connectionId: string, channels: string[], isPattern?: boolean) =>
+    ipcRenderer.invoke('redis-unsubscribe', { connectionId, channels, isPattern }),
+  onRedisPubSubMessage: (callback: (payload: { connectionId: string; channel: string; message: string; ts: number }) => void) => {
+    ipcRenderer.on('redis-pubsub-message', (_event, payload) => callback(payload));
+  },
+  
   // 连接测试
   testConnection: (config: any) => ipcRenderer.invoke('test-connection', config),
   closeTestConnection: (config: any) => ipcRenderer.invoke('close-test-connection', config),

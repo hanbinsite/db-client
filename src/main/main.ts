@@ -509,6 +509,34 @@ class DBClientApp {
       return await this.handleListDatabases(connectionId);
     });
 
+    // Redis 发布/订阅：订阅与取消订阅
+    ipcMain.handle('redis-subscribe', async (event, { connectionId, channels, isPattern }) => {
+      try {
+        const ok = await this.databaseService.redisSubscribe(connectionId, channels || [], !!isPattern);
+        return { success: ok };
+      } catch (e: any) {
+        return { success: false, error: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('redis-unsubscribe', async (event, { connectionId, channels, isPattern }) => {
+      try {
+        const ok = await this.databaseService.redisUnsubscribe(connectionId, channels || [], !!isPattern);
+        return { success: ok };
+      } catch (e: any) {
+        return { success: false, error: e?.message || String(e) };
+      }
+    });
+
+    // Redis 发布/订阅：主进程转发消息到渲染进程
+    this.databaseService.on('redisPubSubMessage', (connectionId: string, channel: string, message: string) => {
+      try {
+        this.mainWindow?.webContents.send('redis-pubsub-message', { connectionId, channel, message, ts: Date.now() });
+      } catch (e) {
+        console.error('Failed to send redis-pubsub-message:', e);
+      }
+    });
+
     // 新增：获取连接池配置（用于渲染端动态并发）
     ipcMain.handle('get-connection-pool-config', async (event, connectionId) => {
       try {
@@ -667,17 +695,20 @@ class DBClientApp {
     const generatedPoolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
     
     try {
-      // 记录连接参数（包含密码以帮助调试）
-      console.log('开始测试数据库连接:', {
+      // 记录连接参数（根据authType决定是否包含用户名）
+      const logConnection: any = {
         type: config.type,
         host: config.host,
         port: config.port,
         database: config.database,
-        username: config.username,
         password: config.password,
         timeout: config.timeout,
         ssl: config.ssl
-      });
+      };
+      if (config.authType === 'username_password' && config.username) {
+        logConnection.username = config.username;
+      }
+      console.log('开始测试数据库连接:', logConnection);
 
       // 首先检查连接池是否已经存在
       if (this.databaseService.getConnectionPool(generatedPoolId)) {

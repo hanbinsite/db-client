@@ -20,6 +20,9 @@ import './App.css';
 import RedisDataBrowser from './components/data-view/RedisDataBrowser';
 import RedisActions from './components/redis/RedisActions';
 import RedisServiceInfoPage from './components/redis/RedisServiceInfoPage';
+import RedisSlowlogPage from './components/redis/RedisSlowlogPage';
+import RedisCliPage from './components/redis/RedisCliPage';
+import RedisPubSubPage from './components/redis/RedisPubSubPage';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -621,6 +624,9 @@ const AppContent: React.FC = () => {
             activeDatabase={activeDatabase}
             darkMode={darkMode}
             onOpenServiceInfo={handleOpenRedisServiceInfo}
+            onOpenSlowlog={handleOpenRedisSlowlog}
+            onOpenCli={handleOpenRedisCli}
+            onOpenPubSub={handleOpenRedisPubSub}
           />
         )}
         
@@ -664,6 +670,124 @@ const AppContent: React.FC = () => {
     }
     setActiveTabKey(key);
   };
+
+  // 打开 Redis 慢日志标签页
+  const handleOpenRedisSlowlog = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-slowlog-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 慢日志',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 打开 Redis 命令行标签页
+  const handleOpenRedisCli = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-cli-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 命令行',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 打开 Redis 发布/订阅标签页
+  const handleOpenRedisPubSub = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-pubsub-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 发布/订阅',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 全局函数：从服务信息页等位置打开指定Redis数据库的键浏览器标签
+  useEffect(() => {
+    (window as any).__openRedisDbTab = (dbName: string) => {
+      if (!activeConnection) {
+        message.warning('请先选择一个Redis连接');
+        return;
+      }
+      const tabKey = `db-${activeConnection.id}-${dbName}`;
+      const exists = databaseTabs.find(t => t.key === tabKey);
+      if (!exists) {
+        const newTab: DatabaseTab = {
+          key: tabKey,
+          label: `${activeConnection.name} - ${dbName}`,
+          connection: activeConnection,
+          database: dbName,
+          type: 'redis' as DatabaseType
+        };
+        setDatabaseTabs(prev => [...prev, newTab]);
+      }
+      setActiveTabKey(tabKey);
+    };
+    (window as any).__locateRedisDbInSidebar = (dbName: string) => {
+      if (!activeConnection) {
+        message.warning('请先选择一个Redis连接');
+        return;
+      }
+      setActiveDatabase(dbName);
+      message.success(`定位到侧边栏数据库: ${dbName}`);
+    };
+    (window as any).__exportCmdStatsCsv = (rows: any[]) => {
+      try {
+        const header = ['cmd','calls','usec','usecPerCall','windowCalls','windowUsecPerCall','windowRate'];
+        const lines = [header.join(',')].concat((rows||[]).map(r => header.map(h => r[h] ?? '').join(',')));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `redis-command-stats-${Date.now()}.csv`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        console.error('导出CSV失败', e);
+        message.error('导出失败');
+      }
+    };
+    return () => { 
+      try { delete (window as any).__openRedisDbTab; } catch {}
+      try { delete (window as any).__locateRedisDbInSidebar; } catch {}
+      try { delete (window as any).__exportCmdStatsCsv; } catch {}
+    };
+  }, [activeConnection, databaseTabs]);
 
   // 渲染底部状态栏
   const renderStatusBar = () => {
@@ -813,6 +937,24 @@ const AppContent: React.FC = () => {
                     ) : tab.type === 'redis' ? (
                       tab.key?.startsWith('redis-service-info-') ? (
                         <RedisServiceInfoPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-slowlog-') ? (
+                        <RedisSlowlogPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-cli-') ? (
+                        <RedisCliPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-pubsub-') ? (
+                        <RedisPubSubPage
                           connection={tab.connection}
                           database={tab.database}
                           darkMode={darkMode}

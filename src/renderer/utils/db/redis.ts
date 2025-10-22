@@ -31,13 +31,19 @@ export class RedisDbUtils extends BaseDbUtils {
       return this.getDefaultDatabases();
     }
     
-    const connectionId = connection.connectionId || connection.id;
-    console.log('[REDIS DB UTILS] 连接信息:', {
+    // 确保连接池ID（优先创建/复用主进程连接池）
+    const ensuredPoolId = await this.ensurePoolId(connection);
+    const connectionId = ensuredPoolId || connection.connectionId || connection.id;
+    console.log('[REDIS DB UTILS] 连接信息 JSON:', JSON.stringify({
       connectionId,
       host: connection.host,
       port: connection.port,
       isConnected: connection.isConnected
-    });
+    }));
+    if (!connectionId) {
+      console.warn('[REDIS DB UTILS] 无法获取有效的连接池ID，返回默认数据库列表');
+      return this.getDefaultDatabases();
+    }
     
     // 清除所有可能的缓存
     this.clearCaches();
@@ -59,9 +65,9 @@ export class RedisDbUtils extends BaseDbUtils {
       console.error('[REDIS DB UTILS] INFO keyspace方法发生异常:', error);
     }
     
-    // 使用备用方法：SELECT/DBSIZE命令逐个查询
+    // 使用备用方法：SELECT/DBSIZE命令逐个查询（串行执行，避免单连接池并发超时）
     try {
-      console.log('[REDIS DB UTILS] 尝试方法2: 使用SELECT/DBSIZE命令逐个查询');
+      console.log('[REDIS DB UTILS] 尝试方法2: 使用SELECT/DBSIZE命令逐个查询（串行）');
       const fallbackDatabases = await this.getDatabasesWithFallback(connection);
       
       console.log(`[REDIS DB UTILS] 备用方法完成，获取到 ${fallbackDatabases.length} 个数据库`);
@@ -175,11 +181,18 @@ export class RedisDbUtils extends BaseDbUtils {
         // 使用execRedisQueued执行命令
         const result = await execRedisQueued(connectionId, 'info', ['keyspace'], timeoutMs);
         
-        console.log(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 结果:`, result);
+        console.log(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 结果 JSON:`, JSON.stringify(result));
         
         // 立即返回成功结果
         if (result && result.success) {
           return result;
+        }
+        
+        // 失败时打印错误与数据类型，辅助定位
+        if (result && !result.success) {
+          const errMsg = (result as any).error || (result as any).message || '';
+          const dataType = typeof (result as any).data;
+          console.warn(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 未成功，error: ${String(errMsg)}, dataType: ${dataType}`);
         }
       } catch (error) {
         console.error(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 失败:`, error);
@@ -340,17 +353,8 @@ export class RedisDbUtils extends BaseDbUtils {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // 使用带超时的Promise确保命令不会无限等待
-        const result = await Promise.race([
-          this.executeDatabaseKeyCountCommand(connectionId, dbIndex),
-          new Promise<null>(resolve => {
-            setTimeout(() => {
-              console.warn(`[REDIS DB UTILS] 获取数据库 ${dbIndex} 键数量超时`);
-              resolve(null);
-            }, 3000); // 3秒超时
-          })
-        ]);
-        
+        // 直接执行命令（execRedisQueued内部已带超时与串行队列）
+        const result = await this.executeDatabaseKeyCountCommand(connectionId, dbIndex);
         if (result !== null) {
           return result;
         }
@@ -376,8 +380,8 @@ export class RedisDbUtils extends BaseDbUtils {
     try {
       // 切换到目标数据库
       console.log(`[REDIS DB UTILS] 执行 SELECT ${dbIndex}`);
-      const selectResult = await execRedisQueued(connectionId, 'SELECT', [dbIndex.toString()], 2000);
-      console.log(`[REDIS DB UTILS] SELECT ${dbIndex} 结果:`, selectResult);
+      const selectResult = await execRedisQueued(connectionId, 'select', [dbIndex.toString()], 2000);
+      console.log(`[REDIS DB UTILS] SELECT ${dbIndex} 结果 JSON:`, JSON.stringify(selectResult));
       
       // 验证SELECT命令是否成功
       if (!selectResult || !selectResult.success) {
@@ -387,8 +391,8 @@ export class RedisDbUtils extends BaseDbUtils {
       
       // 执行DBSIZE命令
       console.log(`[REDIS DB UTILS] 执行 DBSIZE`);
-      const dbsizeResult = await execRedisQueued(connectionId, 'DBSIZE', [], 3000);
-      console.log(`[REDIS DB UTILS] DBSIZE 结果:`, dbsizeResult);
+      const dbsizeResult = await execRedisQueued(connectionId, 'dbsize', [], 3000);
+      console.log(`[REDIS DB UTILS] DBSIZE 结果 JSON:`, JSON.stringify(dbsizeResult));
       
       // 解析键数量
       if (dbsizeResult && dbsizeResult.success) {
@@ -432,57 +436,36 @@ export class RedisDbUtils extends BaseDbUtils {
     let successCount = 0;
     let errorCount = 0;
     
-    // 并发查询所有0-15号数据库，提高效率
-    const promises = [];
+    // 串行查询所有0-15号数据库，适配Redis单连接池，避免并发超时
     for (let i = 0; i <= 15; i++) {
-      const promise = this.getDatabaseKeyCount(connectionId, i)
-        .then(keyCount => {
-          databases.push({
-            name: `db${i}`,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: [],
-            keyCount: keyCount ?? 0
-          });
-          
-          successCount++;
-          return keyCount;
-        })
-        .catch(error => {
-          console.error(`[REDIS DB UTILS] 处理数据库 db${i} 失败:`, error);
-          
-          // 即使失败也添加数据库条目
-          databases.push({
-            name: `db${i}`,
-            tables: [],
-            views: [],
-            procedures: [],
-            functions: [],
-            schemas: [],
-            keyCount: 0
-          });
-          
-          errorCount++;
-          return null;
+      try {
+        const keyCount = await this.getDatabaseKeyCount(connectionId, i);
+        databases.push({
+          name: `db${i}`,
+          tables: [],
+          views: [],
+          procedures: [],
+          functions: [],
+          schemas: [],
+          keyCount: keyCount ?? 0
         });
-      
-      promises.push(promise);
+        successCount++;
+      } catch (error) {
+        console.error(`[REDIS DB UTILS] 处理数据库 db${i} 失败:`, error);
+        databases.push({
+          name: `db${i}`,
+          tables: [],
+          views: [],
+          procedures: [],
+          functions: [],
+          schemas: [],
+          keyCount: 0
+        });
+        errorCount++;
+      }
     }
     
-    // 等待所有查询完成
-    await Promise.allSettled(promises);
-    
-    console.log(`[REDIS DB UTILS] 备用方法完成: 成功 ${successCount}, 失败 ${errorCount}`);
-    
-    // 确保数据库按顺序排序
-    databases.sort((a, b) => {
-      const numA = parseInt(a.name.replace('db', ''), 10);
-      const numB = parseInt(b.name.replace('db', ''), 10);
-      return numA - numB;
-    });
-    
+    console.log(`[REDIS DB UTILS] 备用方法统计 - 成功: ${successCount}, 失败: ${errorCount}`);
     return databases;
   }
 
@@ -552,5 +535,85 @@ export class RedisDbUtils extends BaseDbUtils {
   async getSchemas(connection: DatabaseConnection, databaseName: string): Promise<string[]> {
     console.log(`[REDIS DB UTILS] getSchemas 调用，数据库: ${databaseName}，Redis不支持模式概念`);
     return [];
+  }
+
+  // 新增：确保连接池ID（优先创建连接池，其次复用已存在的池ID）
+  private async ensurePoolId(connection: DatabaseConnection): Promise<string | undefined> {
+    let pid: string | undefined = connection.connectionId;
+    try {
+      // 先触发一次测试连接并记录关键日志点位
+      if (!pid && connection.type === 'redis') {
+        const logCfg: any = {
+          host: connection.host,
+          port: connection.port,
+          authType: connection.authType,
+          usernamePresent: !!connection.username,
+          passwordPresent: !!connection.password,
+          database: connection.database,
+          timeout: connection.timeout
+        };
+        try {
+          console.log('[REDIS TEST] start with config:', JSON.stringify(logCfg));
+        } catch {}
+        const testRes = await (window as any).electronAPI?.testConnection?.(connection);
+        try {
+          console.log('[REDIS TEST] testConnection result:', JSON.stringify(testRes));
+        } catch {
+          console.log('[REDIS TEST] testConnection result:', String(testRes));
+        }
+        const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+        const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+        try {
+          console.log('[REDIS TEST] getConnectionPoolConfig:', JSON.stringify(cfgRes));
+        } catch {
+          console.log('[REDIS TEST] getConnectionPoolConfig:', String(cfgRes));
+        }
+        if (cfgRes && cfgRes.success) {
+          pid = generatedId;
+          connection.connectionId = pid;
+          connection.isConnected = true;
+          console.log('[REDIS DB UTILS] ensurePoolId 复用测试创建的连接池，poolId:', pid);
+          // 执行健康查询以确认连接可用
+          try {
+            const infoRes = await (window as any).electronAPI?.executeQuery?.(generatedId, 'info', ['keyspace']);
+            console.log('[REDIS TEST] INFO keyspace result:', typeof infoRes === 'string' ? infoRes : JSON.stringify(infoRes));
+          } catch (e) {
+            console.warn('[REDIS TEST] INFO keyspace error:', e);
+          }
+          try {
+            const dbsizeRes = await (window as any).electronAPI?.executeQuery?.(generatedId, 'dbsize');
+            console.log('[REDIS TEST] DBSIZE result:', typeof dbsizeRes === 'string' ? dbsizeRes : JSON.stringify(dbsizeRes));
+          } catch (e) {
+            console.warn('[REDIS TEST] DBSIZE error:', e);
+          }
+        }
+      }
+
+      // 如仍无pid，则尝试正常创建连接池；失败时回退复用已存在poolId
+      if (!pid) {
+        const res = await (window as any).electronAPI?.connectDatabase?.(connection);
+        try {
+          console.log('[REDIS BROWSER] connectDatabase after test result:', JSON.stringify(res));
+        } catch {
+          console.log('[REDIS BROWSER] connectDatabase after test result:', String(res));
+        }
+        if (res && res.success && res.connectionId) {
+          pid = res.connectionId;
+          connection.connectionId = pid;
+          connection.isConnected = true;
+          console.log('[REDIS DB UTILS] ensurePoolId 创建连接池成功，poolId:', pid);
+        } else {
+          const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+          const cfgRes2 = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+          if (cfgRes2 && cfgRes2.success) {
+            pid = generatedId;
+            console.warn('[REDIS DB UTILS] ensurePoolId 复用已存在连接池，poolId:', pid);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[REDIS DB UTILS] ensurePoolId 过程出现异常:', e);
+    }
+    return pid;
   }
 }

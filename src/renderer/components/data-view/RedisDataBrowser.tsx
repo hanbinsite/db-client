@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Input, List, Spin, Empty, Typography, Tag, Space, Divider, Alert, Button, Switch, Select, message, InputNumber, Tooltip, Progress } from 'antd';
 import type { DatabaseConnection } from '../../types';
 import { execRedisQueuedWithTimeout } from '../../utils/redis-exec-queue';
+import RedisAddKeyModal from '../redis/RedisAddKeyModal';
 
 interface RedisDataBrowserProps {
   connection: DatabaseConnection;
@@ -103,6 +104,15 @@ const [valueDisplayMode, setValueDisplayMode] = useState<'json' | 'text'>('json'
 const [stringValueText, setStringValueText] = useState<string>('');
 const [stringEditing, setStringEditing] = useState<boolean>(false);
 const [stringWrap, setStringWrap] = useState<boolean>(true);
+// 新增：非字符串类型编辑状态
+const [hashEntries, setHashEntries] = useState<Array<{field: string; value: string}>>([]);
+const [hashSelected, setHashSelected] = useState<number>(-1);
+const [listElements, setListElements] = useState<string[]>([]);
+const [listSelected, setListSelected] = useState<number>(-1);
+const [setMembers, setSetMembers] = useState<string[]>([]);
+const [setSelected, setSetSelected] = useState<number>(-1);
+const [zsetEntries, setZsetEntries] = useState<Array<{member: string; score: number}>>([]);
+const [zsetSelected, setZsetSelected] = useState<number>(-1);
 // 扫描与多模式/本地过滤相关状态
 const [scanCount, setScanCount] = useState<number>(PAGE_COUNT);
 const [multiEnabled, setMultiEnabled] = useState<boolean>(false);
@@ -118,6 +128,7 @@ const [localFilterEnabled, setLocalFilterEnabled] = useState<boolean>(false);
 const [filterPatterns, setFilterPatterns] = useState<string[]>([]);
 const [localFilterThreshold, setLocalFilterThreshold] = useState<number>(5000);
 const [maxBatchHint, setMaxBatchHint] = useState<number>(20);
+const [addVisible, setAddVisible] = useState<boolean>(false);
 // 新增：数据库大小与加载控制
 const [dbSize, setDbSize] = useState<number>(0);
 const [autoLoad, setAutoLoad] = useState<boolean>(true);
@@ -129,6 +140,35 @@ const SAFE_KEYS_FALLBACK_LIMIT = 5000;
 const [scanError, setScanError] = useState<string>('');
 // 动态并发与命令队列
 const [maxConnections, setMaxConnections] = useState<number>(1);
+const debugLog = (..._args: any[]) => {};
+// 批量渲染缓冲与节流，避免海量键导致频繁重渲染
+const pendingKeysRef = useRef<string[]>([]);
+const flushTimerRef = useRef<any>(null);
+const FLUSH_INTERVAL_MS = 120;
+const seenKeysRef = useRef<Set<string>>(new Set());
+const queueKeys = (keysToAdd: string[]) => {
+  if (!keysToAdd || keysToAdd.length === 0) return;
+  // 去重：避免重复键反复渲染
+  const fresh: string[] = [];
+  for (const k of keysToAdd) {
+    if (!seenKeysRef.current.has(k)) {
+      seenKeysRef.current.add(k);
+      fresh.push(k);
+    }
+  }
+  if (fresh.length === 0) return;
+  pendingKeysRef.current.push(...fresh);
+  if (!flushTimerRef.current) {
+    flushTimerRef.current = setTimeout(() => {
+      const toAdd = pendingKeysRef.current.splice(0);
+      setScan(prev => ({
+        ...prev,
+        keys: prev.keys.length === 0 ? toAdd : [...prev.keys, ...toAdd]
+      }));
+      flushTimerRef.current = null;
+    }, FLUSH_INTERVAL_MS);
+  }
+};
 const execQuery = async (query: string, params?: any[]) => {
   if (!poolId) throw new Error('Pool not ready');
   const runOnce = async (pid: string) => execRedisQueuedWithTimeout(pid, query, params, 0);
@@ -144,7 +184,7 @@ const execQuery = async (query: string, params?: any[]) => {
         setPoolId(currentPid);
         connection.connectionId = currentPid;
         connection.isConnected = true;
-        console.log('[REDIS BROWSER] reconnect success, new poolId:', currentPid);
+        debugLog('reconnect success, new poolId:', currentPid);
         res = await runOnce(currentPid);
       } else {
         console.warn('[REDIS BROWSER] reconnect failed or no connectionId, res:', reconnect);
@@ -190,7 +230,7 @@ useEffect(() => {
         const resp = await (window as any).electronAPI.getConnectionPoolConfig(poolId);
         const mc = (resp && resp.success && resp.config && typeof resp.config.maxConnections === 'number') ? resp.config.maxConnections : 1;
         setMaxConnections(mc);
-        console.log('[REDIS BROWSER] pool maxConnections:', mc);
+        debugLog('pool maxConnections:', mc);
       } else {
         setMaxConnections(1);
       }
@@ -207,6 +247,57 @@ useEffect(() => {
       setStringValueText(text);
     } else {
       setStringValueText('');
+    }
+  }, [keyType, keyData, selectedKey]);
+
+  // 新增：同步非字符串类型的编辑状态
+  useEffect(() => {
+    setHashSelected(-1);
+    setListSelected(-1);
+    setSetSelected(-1);
+    setZsetSelected(-1);
+
+    if (!selectedKey) {
+      setHashEntries([]);
+      setListElements([]);
+      setSetMembers([]);
+      setZsetEntries([]);
+      return;
+    }
+    const kd: any = keyData;
+    if (keyType === 'hash') {
+      let entries: Array<{field: string; value: string}> = [];
+      if (Array.isArray(kd)) {
+        for (let i = 0; i < kd.length; i += 2) {
+          const f = kd[i];
+          const v = kd[i + 1];
+          entries.push({ field: String(f ?? ''), value: String(v ?? '') });
+        }
+      } else if (kd && typeof kd === 'object') {
+        entries = Object.entries(kd).map(([f, v]) => ({ field: String(f), value: String(v ?? '') }));
+      }
+      setHashEntries(entries);
+    } else if (keyType === 'list') {
+      const arr = Array.isArray(kd) ? kd.map(v => String(v ?? '')) : [];
+      setListElements(arr);
+    } else if (keyType === 'set') {
+      const arr = Array.isArray(kd) ? kd.map(v => String(v ?? '')) : [];
+      setSetMembers(arr);
+    } else if (keyType === 'zset') {
+      const rows: Array<{member: string; score: number}> = [];
+      if (Array.isArray(kd)) {
+        for (let i = 0; i < kd.length; i += 2) {
+          const m = kd[i];
+          const s = Number(kd[i + 1]);
+          rows.push({ member: String(m ?? ''), score: isNaN(s) ? 0 : s });
+        }
+      }
+      setZsetEntries(rows);
+    } else {
+      setHashEntries([]);
+      setListElements([]);
+      setSetMembers([]);
+      setZsetEntries([]);
     }
   }, [keyType, keyData, selectedKey]);
 
@@ -274,6 +365,25 @@ useEffect(() => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const [listScrollTop, setListScrollTop] = useState(0);
+  const [listContainerHeight, setListContainerHeight] = useState(400);
+  const itemHeight = 28;
+  const overscan = 5;
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const update = () => setListContainerHeight(el.clientHeight || 400);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setListScrollTop((e.currentTarget as HTMLDivElement).scrollTop);
+  };
+
   const dbIndex = useMemo(() => {
     const m = String(database).match(/db(\d+)/i);
     return m ? parseInt(m[1], 10) : (Number(database) || 0);
@@ -321,6 +431,16 @@ useEffect(() => {
     return items;
   }, [scan.keys, expandedPaths]);
 
+  const virtualWindow = useMemo(() => {
+    const total = displayItems.length;
+    const totalHeight = total * itemHeight;
+    const start = Math.max(0, Math.floor(listScrollTop / itemHeight) - overscan);
+    const viewportCount = Math.ceil(listContainerHeight / itemHeight) + overscan * 2;
+    const end = Math.min(total, start + viewportCount);
+    const slice = displayItems.slice(start, end);
+    return { totalHeight, start, slice };
+  }, [displayItems, listScrollTop, listContainerHeight]);
+
   const togglePath = (p: string) => {
     setExpandedPaths(prev => ({ ...prev, [p]: !prev[p] }));
   };
@@ -331,11 +451,11 @@ useEffect(() => {
     const ensurePool = async () => {
       try {
         let pid = poolId;
-        console.log('[REDIS BROWSER] ensurePool start, current poolId:', pid, 'connId:', connection.connectionId);
+        debugLog('ensurePool start, current poolId:', pid, 'connId:', connection.connectionId);
         if (!pid) {
           // 优先尝试创建连接池
           const res = await (window as any).electronAPI?.connectDatabase?.(connection);
-          console.log('[REDIS BROWSER] connectDatabase result:', res);
+          debugLog('connectDatabase result:', res);
           if (res && res.success && res.connectionId) {
             pid = res.connectionId;
             connection.connectionId = pid;
@@ -357,7 +477,7 @@ useEffect(() => {
           }
         }
         if (!cancelled && pid) {
-          console.log('[REDIS BROWSER] ensurePool set poolId:', pid);
+          debugLog('ensurePool set poolId:', pid);
           setPoolId(pid);
         }
       } catch (e) {
@@ -405,10 +525,10 @@ useEffect(() => {
     const selectDb = async () => {
       if (!poolId || connection.type !== 'redis') return;
       setSelectingDb(true);
-      console.log('[REDIS BROWSER] selecting DB index:', dbIndex, 'poolId:', poolId);
+      debugLog('selecting DB index:', dbIndex, 'poolId:', poolId);
       try {
         const res = await execQuery('select', [String(dbIndex)]);
-        console.log('[REDIS BROWSER] select result JSON:', safeStringify(res));
+        debugLog('select result ok');
         if (!(res && res.success)) {
           console.warn('[REDIS BROWSER] select not successful, continue anyway');
         }
@@ -420,6 +540,10 @@ useEffect(() => {
         setPaused(true);
         setSelectingDb(false);
         setScan(prev => ({ cursor: '0', keys: [], loading: false, reachedEnd: false, pattern: prev.pattern || '*' }));
+        // 重置缓冲与去重集合
+        pendingKeysRef.current = [];
+        seenKeysRef.current.clear();
+        if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
         setSelectedKey(null);
         setKeyType('');
         setKeyData(null);
@@ -467,16 +591,16 @@ useEffect(() => {
 
   const loadNext = async () => {
     if (scan.loading || scan.reachedEnd || !poolId || selectingDb) {
-      console.log('[REDIS BROWSER] loadNext guard hit', { loading: scan.loading, reachedEnd: scan.reachedEnd, poolId, selectingDb });
+      debugLog('loadNext guard hit', { loading: scan.loading, reachedEnd: scan.reachedEnd, poolId, selectingDb });
       return;
     }
     if (scanAbortRef.current) {
-      console.log('[REDIS BROWSER] loadNext aborted');
+      debugLog('loadNext aborted');
       setScan(prev => ({ ...prev, loading: false }));
       return;
     }
     if (hardCap > 0 && scan.keys.length >= hardCap) {
-      console.log('[REDIS BROWSER] loadNext reached hard cap', hardCap);
+      debugLog('loadNext reached hard cap', hardCap);
       setScan(prev => ({ ...prev, loading: false, reachedEnd: true }));
       message.warning(`达到浏览上限 ${hardCap} 项，已停止扫描`);
       return;
@@ -485,7 +609,7 @@ useEffect(() => {
     if ((multiEnabled || localFilterEnabled) && scanThrottleMs > 0) {
       const now = Date.now();
       if (now - (lastBatchAtRef.current || 0) < scanThrottleMs) {
-        console.log('[REDIS BROWSER] throttle guard, wait', scanThrottleMs, 'ms');
+        debugLog('throttle guard, wait', scanThrottleMs, 'ms');
         return;
       }
     }
@@ -507,9 +631,9 @@ useEffect(() => {
             setMultiInFlight(prev => ({ ...prev, [pattern]: true }));
             const cursor = multiState.cursors[pattern] || '0';
             const params = [cursor, 'MATCH', pattern || '*', 'COUNT', String(scanCount)];
-            console.log('[REDIS BROWSER] SCAN(multi-concurrent) params:', params);
-            const res = await execQuery('scan', params);
-            console.log('[REDIS BROWSER] SCAN(multi-concurrent) raw JSON:', safeStringify(res));
+            debugLog('SCAN(multi-concurrent) params:', params);
+        const res = await execQuery('scan', params);
+        // debugLog('SCAN(multi-concurrent) raw JSON');
             if (res && res.success) {
               const data = res.data;
               let nextCursor: string = '0';
@@ -529,7 +653,7 @@ useEffect(() => {
                 if (dbSize > 0 && dbSize <= SAFE_KEYS_FALLBACK_LIMIT) {
                   try {
                     const keysRes = await execQuery('keys', [scan.pattern || '*']);
-                    console.log('[REDIS BROWSER] SCAN empty, fallback KEYS result JSON:', safeStringify(keysRes));
+                    debugLog('SCAN empty, fallback KEYS');
                     if (keysRes && keysRes.success) {
                       const kd = keysRes.data;
                       if (Array.isArray(kd)) {
@@ -544,14 +668,20 @@ useEffect(() => {
                   message.info('当前数据库键数量较大，已禁用 KEYS 回退，请使用 SCAN 分批加载');
                 }
               }
-              console.log('[REDIS BROWSER] SCAN parsed -> nextCursor:', nextCursor, 'keys count:', keysNormalized.length);
+              debugLog('SCAN parsed -> nextCursor:', nextCursor, 'keys count:', keysNormalized.length);
               setScan(prev => ({
+                ...prev,
                 cursor: String(nextCursor),
-                keys: [...prev.keys, ...keysNormalized],
                 loading: false,
                 reachedEnd: String(nextCursor) === '0',
-                pattern: prev.pattern
               }));
+              queueKeys(keysNormalized);
+              // 自动继续扫描：当前批次为空且未结束时
+              if ((keysNormalized.length === 0) && (String(nextCursor) !== '0') && autoLoad && !scanAbortRef.current && !selectingDb) {
+                setTimeout(() => {
+                  loadNext();
+                }, scanThrottleMs > 0 ? scanThrottleMs : 0);
+              }
             } else {
               console.warn('[REDIS BROWSER] SCAN unsuccessful JSON:', safeStringify(res));
               setScan(prev => ({ ...prev, loading: false }));
@@ -582,9 +712,10 @@ useEffect(() => {
       // 本地过滤：统一使用 '*' 扫描，前端按模式筛选
       if (localFilterEnabled) {
         const params = ['' + scan.cursor, 'MATCH', '*', 'COUNT', String(scanCount)];
-        console.log('[REDIS BROWSER] SCAN(local-filter) params:', params, 'patterns:', multiEnabled ? multiPatterns : filterPatterns);
+        debugLog('SCAN(local-filter) params:', params);
         const res = await execQuery('scan', params);
-        console.log('[REDIS BROWSER] SCAN(local-filter) raw JSON:', safeStringify(res));
+        // 去除大JSON输出
+        // debugLog('SCAN(local-filter) raw JSON');
         if (res && res.success) {
           const data = res.data;
           let nextCursor: string = '0';
@@ -600,12 +731,20 @@ useEffect(() => {
           const pats = multiEnabled ? (multiPatterns && multiPatterns.length > 0 ? multiPatterns : ['*']) : (filterPatterns && filterPatterns.length > 0 ? filterPatterns : ['*']);
           const filtered = keysNormalized.filter(k => matchAnyPattern(k, pats));
           setScan(prev => ({
+            ...prev,
             cursor: String(nextCursor),
-            keys: [...prev.keys, ...filtered.filter(k => !prev.keys.includes(k))],
             loading: false,
             reachedEnd: String(nextCursor) === '0',
             pattern: '*'
           }));
+          queueKeys(filtered);
+          // 自动继续扫描：当前批次为空且未结束时
+          if ((filtered.length === 0) && (String(nextCursor) !== '0') && autoLoad && !scanAbortRef.current && !selectingDb) {
+            setTimeout(() => {
+              loadNext();
+            }, scanThrottleMs > 0 ? scanThrottleMs : 0);
+          }
+
           // 批次节流：等待一定时间再释放下一次批次
           lastBatchAtRef.current = Date.now();
           if (scanThrottleMs > 0) {
@@ -631,9 +770,9 @@ useEffect(() => {
 
       // 单模式（后端匹配）
       const params = ['' + scan.cursor, 'MATCH', scan.pattern || '*', 'COUNT', String(scanCount)];
-      console.log('[REDIS BROWSER] SCAN params:', params);
-      const res = await execQuery('scan', params);
-      console.log('[REDIS BROWSER] SCAN raw result JSON:', safeStringify(res));
+      debugLog('SCAN params:', params);
+        const res = await execQuery('scan', params);
+        // debugLog('SCAN raw result JSON');
       if (res && res.success) {
         const data = res.data;
         let nextCursor: string = '0';
@@ -651,7 +790,7 @@ useEffect(() => {
         if (keysNormalized.length === 0 && String(nextCursor) === '0' && scan.cursor === '0') {
           try {
             const keysRes = await execQuery('keys', [scan.pattern || '*']);
-            console.log('[REDIS BROWSER] SCAN empty, fallback KEYS result JSON:', safeStringify(keysRes));
+            debugLog('SCAN empty, fallback KEYS');
             if (keysRes && keysRes.success) {
               const kd = keysRes.data;
               if (Array.isArray(kd)) {
@@ -662,30 +801,35 @@ useEffect(() => {
             console.warn('[REDIS BROWSER] KEYS fallback error:', e);
           }
         }
-        console.log('[REDIS BROWSER] SCAN parsed -> nextCursor:', nextCursor, 'keys count:', keysNormalized.length);
-        setScan(prev => ({
-          cursor: String(nextCursor),
-          keys: [...prev.keys, ...keysNormalized],
-          loading: false,
-          reachedEnd: String(nextCursor) === '0',
-          pattern: prev.pattern
-        }));
+
+       // 使用批量缓冲，降低渲染压力
+       queueKeys(keysNormalized);
+       setScan(prev => ({
+         ...prev,
+         cursor: String(nextCursor),
+         loading: false,
+         reachedEnd: String(nextCursor) === '0',
+       }));
+       // 自动继续扫描：当前批次为空且未结束时
+       if ((keysNormalized.length === 0) && (String(nextCursor) !== '0') && autoLoad && !scanAbortRef.current && !selectingDb) {
+         setTimeout(() => {
+           loadNext();
+         }, scanThrottleMs > 0 ? scanThrottleMs : 0);
+       }
       } else {
         console.warn('[REDIS BROWSER] SCAN unsuccessful JSON:', safeStringify(res));
         setScan(prev => ({ ...prev, loading: false }));
-        setScanError(String((((res as any) && (((res as any).message || (res as any).error))) || '扫描失败')));
       }
     } catch (e) {
       console.error('[REDIS BROWSER] SCAN error:', e);
       setScan(prev => ({ ...prev, loading: false }));
-      setScanError(String(((e as any)?.message || e || '扫描异常')));
     }
   };
 
   // immediate search executor to avoid stale state
   const performSearch = async (pattern: string) => {
     if (!poolId || selectingDb) {
-      console.log('[REDIS BROWSER] performSearch guard hit', { poolId, selectingDb });
+      debugLog('performSearch guard hit', { poolId, selectingDb });
       return;
     }
 
@@ -695,11 +839,14 @@ useEffect(() => {
       setFilterPatterns(patterns);
       setMultiCounts({});
       setScan({ cursor: '0', keys: [], loading: true, reachedEnd: false, pattern: '*' });
+      // 重置缓冲与去重集合
+      pendingKeysRef.current = [];
+      seenKeysRef.current.clear();
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
       try {
         const params = ['0', 'MATCH', '*', 'COUNT', String(scanCount)];
-        console.log('[REDIS BROWSER] SEARCH SCAN(local-filter multi) params:', params);
+        debugLog('SEARCH SCAN(local-filter multi) params:', params);
         const res = await execQuery('scan', params);
-        console.log('[REDIS BROWSER] SEARCH SCAN(local-filter multi) raw JSON:', safeStringify(res));
         if (res && res.success) {
           const data = res.data;
           let nextCursor: string = '0';
@@ -713,13 +860,14 @@ useEffect(() => {
           }
           const keysNormalized: string[] = (keys || []).map((k: any) => toStr(k));
           const filtered = keysNormalized.filter(k => matchAnyPattern(k, patterns));
-          setScan({
+          setScan(prev => ({
+            ...prev,
             cursor: String(nextCursor),
-            keys: filtered,
             loading: false,
             reachedEnd: String(nextCursor) === '0',
             pattern: '*'
-          });
+          }));
+          queueKeys(filtered);
           setMultiState({ cursors: { '*': String(nextCursor) }, reached: { '*': String(nextCursor) === '0' }, index: 0 });
           setMultiCounts(patterns.reduce((acc, p) => ({ ...acc, [p]: filtered.filter(k => wildcardToRegExp(p).test(k)).length }), {} as Record<string, number>));
         } else {
@@ -740,12 +888,16 @@ useEffect(() => {
       setMultiInFlight({});
       setMultiState({ cursors: {}, reached: {}, index: 0 });
       setScan({ cursor: '0', keys: [], loading: true, reachedEnd: false, pattern: patterns[0] || '*' });
+      // 重置缓冲与去重集合
+      pendingKeysRef.current = [];
+      seenKeysRef.current.clear();
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
       try {
         const p0 = patterns[0] || '*';
         const params = ['0', 'MATCH', p0, 'COUNT', String(scanCount)];
-        console.log('[REDIS BROWSER] SEARCH SCAN(multi init) params:', params);
+        debugLog('SEARCH SCAN(multi init) params:', params);
         const res = await execQuery('scan', params);
-        console.log('[REDIS BROWSER] SEARCH SCAN(multi init) raw JSON:', safeStringify(res));
+        // debugLog('SEARCH SCAN(multi init) raw JSON');
         if (res && res.success) {
           const data = res.data;
           let nextCursor: string = '0';
@@ -758,13 +910,15 @@ useEffect(() => {
             keys = Array.isArray((data as any).keys) ? (data as any).keys : [];
           }
           const keysNormalized: string[] = (keys || []).map((k: any) => toStr(k));
-          setScan({
+          setScan(prev => ({
+            ...prev,
             cursor: '0',
-            keys: keysNormalized,
+            keys: [],
             loading: false,
             reachedEnd: false,
             pattern: p0
-          });
+          }));
+          queueKeys(keysNormalized);
           setMultiState({ cursors: { [p0]: String(nextCursor) }, reached: { [p0]: String(nextCursor) === '0' }, index: patterns.length > 1 ? 1 : 0 });
           setMultiCounts({ [p0]: keysNormalized.length });
         } else {
@@ -780,11 +934,15 @@ useEffect(() => {
 
     // 单模式（后端匹配）
     setScan({ cursor: '0', keys: [], loading: true, reachedEnd: false, pattern });
+    // 重置缓冲与去重集合
+    pendingKeysRef.current = [];
+    seenKeysRef.current.clear();
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
     try {
       const params = ['0', 'MATCH', pattern || '*', 'COUNT', String(scanCount)];
-      console.log('[REDIS BROWSER] SEARCH SCAN params:', params);
-      const res = await execQuery('scan', params);
-      console.log('[REDIS BROWSER] SEARCH SCAN raw result JSON:', safeStringify(res));
+      debugLog('SEARCH SCAN params:', params);
+        const res = await execQuery('scan', params);
+        // debugLog('SEARCH SCAN raw result JSON');
       if (res && res.success) {
         const data = res.data;
         let nextCursor: string = '0';
@@ -796,14 +954,14 @@ useEffect(() => {
           nextCursor = toStr((data as any).cursor);
           keys = Array.isArray((data as any).keys) ? (data as any).keys : [];
         } else {
-          console.warn('[REDIS BROWSER] Unexpected SEARCH SCAN data format, data JSON:', safeStringify(data));
+          debugLog('Unexpected SEARCH SCAN data format');
         }
         let keysNormalized: string[] = (keys || []).map((k: any) => toStr(k));
         if (keysNormalized.length === 0 && String(nextCursor) === '0') {
           if (dbSize > 0 && dbSize <= SAFE_KEYS_FALLBACK_LIMIT) {
             try {
               const keysRes = await execQuery('keys', [pattern || '*']);
-              console.log('[REDIS BROWSER] SEARCH SCAN empty, fallback KEYS result JSON:', safeStringify(keysRes));
+              debugLog('SEARCH SCAN empty, fallback KEYS');
               if (keysRes && keysRes.success) {
                 const kd = keysRes.data;
                 if (Array.isArray(kd)) {
@@ -818,14 +976,20 @@ useEffect(() => {
             message.info('当前数据库键数量较大，已禁用 KEYS 回退');
           }
         }
-        console.log('[REDIS BROWSER] SEARCH parsed -> nextCursor:', nextCursor, 'keys count:', keysNormalized.length);
-        setScan({
+        debugLog('SEARCH parsed -> nextCursor:', nextCursor, 'keys count:', keysNormalized.length);
+        setScan(prev => ({
+          ...prev,
           cursor: String(nextCursor),
-          keys: keysNormalized,
           loading: false,
           reachedEnd: String(nextCursor) === '0',
-          pattern
-        });
+        }));
+        // 自动继续扫描：当前批次为空且未结束时
+        if ((keysNormalized.length === 0) && (String(nextCursor) !== '0') && autoLoad && !scanAbortRef.current && !selectingDb) {
+          setTimeout(() => {
+            loadNext();
+          }, scanThrottleMs > 0 ? scanThrottleMs : 0);
+        }
+        queueKeys(keysNormalized);
       } else {
         console.warn('[REDIS BROWSER] SEARCH SCAN unsuccessful JSON:', safeStringify(res));
         setScan(prev => ({ ...prev, loading: false }));
@@ -843,19 +1007,23 @@ useEffect(() => {
       const patterns = raw.split(',').map(s => s.trim()).filter(Boolean);
       setMultiPatterns(patterns.length > 0 ? patterns : ['*']);
       if (localFilterEnabled) setFilterPatterns(patterns.length > 0 ? patterns : ['*']);
-      console.log('[REDIS BROWSER] onSearch multi patterns:', patterns, 'localFilter:', localFilterEnabled);
+      // 移除冗长日志
       await performSearch(patterns[0] || '*');
     } else {
       if (localFilterEnabled) setFilterPatterns([raw]);
-      console.log('[REDIS BROWSER] onSearch pattern:', raw, 'localFilter:', localFilterEnabled);
+      // 移除冗长日志
       await performSearch(raw);
     }
   };
 
   // initial load
   useEffect(() => {
-    console.log('[REDIS BROWSER] initial load, reset scan state');
+    // 移除初始化日志，直接重置状态
     setScan({ cursor: '0', keys: [], loading: false, reachedEnd: false, pattern: '*' });
+    // 重置缓冲
+    pendingKeysRef.current = [];
+    seenKeysRef.current.clear();
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
     setMultiState({ cursors: {}, reached: {}, index: 0 });
     setMultiCounts({});
     setMultiInFlight({});
@@ -865,10 +1033,10 @@ useEffect(() => {
 
   useEffect(() => {
     if (poolId && !selectingDb) {
-      console.log('[REDIS BROWSER] triggering initial loadNext with poolId:', poolId);
+      debugLog('triggering initial loadNext with poolId:', poolId);
       loadNext();
     } else {
-      console.log('[REDIS BROWSER] skip initial loadNext due to selectingDb:', selectingDb);
+      debugLog('skip initial loadNext due to selectingDb:', selectingDb);
     }
   }, [poolId, selectingDb]);
 
@@ -879,7 +1047,7 @@ useEffect(() => {
     const handler = () => {
       if (!autoLoad || scanAbortRef.current) return;
       if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
-        console.log('[REDIS BROWSER] list scroll near bottom, loadNext');
+        debugLog('list scroll near bottom, loadNext');
         loadNext();
       }
     };
@@ -924,7 +1092,7 @@ useEffect(() => {
   // search (legacy single-pattern version kept but renamed to avoid duplicate)
   const onSearchLegacy = async (value: string) => {
     const pattern = value && value.trim() ? value.trim() : '*';
-    console.log('[REDIS BROWSER] onSearch pattern:', pattern);
+    debugLog('onSearch pattern');
     await performSearch(pattern);
   };
 
@@ -1027,7 +1195,7 @@ useEffect(() => {
         console.log('[REDIS BROWSER] 保存操作：键名未变化');
       }
 
-      // 如果是字符串类型，保存编辑后的值
+      // 保存不同类型的值
       if (keyType === 'string') {
         const resSet = await execQuery('set', [targetKey, String(stringValueText ?? '')]);
         if (resSet && resSet.success) {
@@ -1035,6 +1203,104 @@ useEffect(() => {
           await loadKeyDetail(targetKey);
         } else {
           setKeyError('保存值失败');
+        }
+      } else if (keyType === 'hash') {
+        const cleaned = (hashEntries || []).filter(r => String(r.field || '').trim().length > 0);
+        // 计算需删除的字段以保留TTL
+        let currentFields: string[] = [];
+        const kd: any = keyData;
+        if (Array.isArray(kd)) {
+          for (let i = 0; i < kd.length; i += 2) currentFields.push(String(kd[i] ?? ''));
+        } else if (kd && typeof kd === 'object') {
+          currentFields = Object.keys(kd);
+        }
+        const newFields = cleaned.map(r => r.field);
+        const toRemove = currentFields.filter(f => !newFields.includes(f));
+        if (toRemove.length > 0) await execQuery('hdel', [targetKey, ...toRemove]);
+        if (cleaned.length > 0) {
+          const flat = cleaned.flatMap(r => [r.field, String(r.value ?? '')]);
+          const resHset = await execQuery('hset', [targetKey, ...flat]);
+          if (resHset && resHset.success) {
+            message.success('哈希已保存');
+            await loadKeyDetail(targetKey);
+          } else {
+            setKeyError('保存哈希失败');
+          }
+        } else {
+          // 无字段则删除键
+          const resDel = await execQuery('del', [targetKey]);
+          if (resDel && resDel.success) {
+            message.success('哈希为空，已删除键');
+            setSelectedKey(null);
+          } else setKeyError('删除空哈希失败');
+        }
+      } else if (keyType === 'list') {
+        const cleaned = (listElements || []).map(v => String(v ?? ''));
+        // 简化处理：重建列表（可能影响TTL）
+        const resDel = await execQuery('del', [targetKey]);
+        if (!(resDel && resDel.success)) {
+          setKeyError('清空列表失败');
+          return;
+        }
+        if (cleaned.length > 0) {
+          const resPush = await execQuery('rpush', [targetKey, ...cleaned]);
+          if (resPush && resPush.success) {
+            message.success('列表已保存');
+            await loadKeyDetail(targetKey);
+          } else {
+            setKeyError('保存列表失败');
+          }
+        } else {
+          message.success('列表为空，已清空');
+          await loadKeyDetail(targetKey);
+        }
+      } else if (keyType === 'set') {
+        const cleaned = (setMembers || []).map(v => String(v ?? '')).filter(v => v.trim().length > 0);
+        const curr = Array.isArray(keyData) ? (keyData as any[]).map(v => String(v ?? '')) : [];
+        const toRemove = curr.filter(m => !cleaned.includes(m));
+        if (toRemove.length > 0) await execQuery('srem', [targetKey, ...toRemove]);
+        if (cleaned.length > 0) {
+          const resAdd = await execQuery('sadd', [targetKey, ...cleaned]);
+          if (resAdd && resAdd.success) {
+            message.success('集合已保存');
+            await loadKeyDetail(targetKey);
+          } else {
+            setKeyError('保存集合失败');
+          }
+        } else {
+          const resDel = await execQuery('del', [targetKey]);
+          if (resDel && resDel.success) {
+            message.success('集合为空，已删除键');
+            setSelectedKey(null);
+          } else setKeyError('删除空集合失败');
+        }
+      } else if (keyType === 'zset') {
+        const cleaned = (zsetEntries || [])
+          .filter(r => String(r.member || '').trim().length > 0)
+          .map(r => ({ member: String(r.member), score: Number(r.score) }));
+        // 计算需移除成员
+        const kd: any = keyData;
+        let currMembers: string[] = [];
+        if (Array.isArray(kd)) {
+          for (let i = 0; i < kd.length; i += 2) currMembers.push(String(kd[i] ?? ''));
+        }
+        const toRemove = currMembers.filter(m => !cleaned.some(r => r.member === m));
+        if (toRemove.length > 0) await execQuery('zrem', [targetKey, ...toRemove]);
+        if (cleaned.length > 0) {
+          const flat = cleaned.flatMap(r => [r.score, r.member]);
+          const resZadd = await execQuery('zadd', [targetKey, ...flat]);
+          if (resZadd && resZadd.success) {
+            message.success('有序集合已保存');
+            await loadKeyDetail(targetKey);
+          } else {
+            setKeyError('保存有序集合失败');
+          }
+        } else {
+          const resDel = await execQuery('del', [targetKey]);
+          if (resDel && resDel.success) {
+            message.success('有序集合为空，已删除键');
+            setSelectedKey(null);
+          } else setKeyError('删除空有序集合失败');
         }
       }
     } catch (e: any) {
@@ -1082,17 +1348,27 @@ useEffect(() => {
     <div style={containerStyle}>
       {/* 左侧：键列表 */}
       <div style={leftPaneStyle}>
+        <RedisAddKeyModal
+          visible={addVisible}
+          onClose={() => setAddVisible(false)}
+          connection={connection}
+          activeDatabase={database}
+          darkMode={darkMode}
+          onCreated={() => setAddVisible(false)}
+        />
         <div style={headerStyle}>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Typography.Text strong>键列表</Typography.Text>
             <Space>
-              <Typography.Text type="secondary">COUNT:</Typography.Text>
-              {/* COUNT 滑条 */}
+              <Tooltip title="每次 SCAN 返回的最大条数">
+                <Typography.Text type="secondary">COUNT:</Typography.Text>
+              </Tooltip>
               <div style={{ width: 160 }}>
-                {/* 使用原生range替代Slider避免额外导入 */}
                 <input type="range" min={10} max={5000} step={10} value={scanCount} onChange={e => setScanCount(Number(e.target.value))} />
               </div>
+              <Tag color="blue">{scanCount}</Tag>
               <Tag color="purple">DBSIZE: {dbSize}</Tag>
+              <Tag color="cyan">已加载: {scan.keys.length}/{hardCap}</Tag>
             </Space>
           </Space>
           <div style={{ marginTop: 8 }}>
@@ -1147,6 +1423,7 @@ useEffect(() => {
                 ) : (
                   <Button danger onClick={() => { scanAbortRef.current = true; setPaused(true); setScan(prev => ({ ...prev, loading: false })); }}>暂停扫描</Button>
                 )}
+                <Button type="primary" onClick={() => setAddVisible(true)}>新增</Button>
               </Space>
               {localFilterEnabled && scan.keys.length > localFilterThreshold && (
                 <Alert type="warning" showIcon message={`当前累计键数(${scan.keys.length})已超过阈值N(${localFilterThreshold})，建议关闭“仅本次过滤”以减少前端压力。`} action={<Button size="small" onClick={() => setLocalFilterEnabled(false)}>关闭本地过滤</Button>} />
@@ -1178,26 +1455,33 @@ useEffect(() => {
         </div>
         <div ref={scrollRef} style={scrollAreaStyle}>
           {selectingDb && <Spin style={{ marginBottom: 8 }} />}
-          <div ref={listRef} style={{ height: 'calc(100vh - 330px)', overflow: 'auto' }}>
-            {scanError && (<Alert style={{ marginBottom: 8 }} type="error" showIcon message={scanError} />)}
-            <List
-              size="small"
-              bordered
-              dataSource={displayItems}
-              locale={{ emptyText: '暂无键' }}
-              renderItem={(item) => (
-                <List.Item
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                  onClick={() => item.kind === 'key' ? loadKeyDetail(item.fullPath) : togglePath(item.fullPath)}
-                >
-                  <Typography.Text ellipsis style={{ flex: 1, paddingLeft: item.level * 12 }}>
-                    {item.kind === 'folder' ? (expandedPaths[item.fullPath] ? '▼ ' : '▶ ') : ''}
-                    {item.name}
-                  </Typography.Text>
-                </List.Item>
-              )}
-            />
-          </div>
+          {scanError && (<Alert style={{ marginBottom: 8 }} type="error" showIcon message={scanError} />)}
+          {displayItems.length === 0 ? (
+            <Empty description="暂无键" />
+          ) : (
+            <div
+              ref={listRef}
+              style={{ height: 'calc(100vh - 360px)', overflow: 'auto', border: '1px solid var(--split-border, #f0f0f0)', borderRadius: 4 }}
+              onScroll={handleListScroll}
+            >
+              <div style={{ height: virtualWindow.totalHeight, position: 'relative' }}>
+                <div style={{ position: 'absolute', top: virtualWindow.start * itemHeight, left: 0, right: 0 }}>
+                  {virtualWindow.slice.map((item, idx) => (
+                    <div
+                      key={item.fullPath + ':' + (virtualWindow.start + idx)}
+                      style={{ height: itemHeight, display: 'flex', alignItems: 'center', padding: '0 8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+                      onClick={() => item.kind === 'key' ? loadKeyDetail(item.fullPath) : togglePath(item.fullPath)}
+                    >
+                      <Typography.Text ellipsis style={{ flex: 1, paddingLeft: item.level * 12 }}>
+                        {item.kind === 'folder' ? (expandedPaths[item.fullPath] ? '▼ ' : '▶ ') : ''}
+                        {item.name}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           {scan.loading && (
             <div style={{ padding: 8 }}><Spin /></div>
           )}
@@ -1272,42 +1556,183 @@ useEffect(() => {
             </>
           )}
           {keyType === 'hash' && (
-          valueDisplayMode === 'json' ? (
-          <JsonPreview value={keyData} />
-          ) : (
-          <TextPreview value={keyData} />
-          )
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Space wrap>
+                  <Button onClick={() => setHashEntries(prev => [...prev, { field: '', value: '' }])}>添加行</Button>
+                  <Button onClick={() => {
+                    if (hashSelected >= 0) setHashEntries(prev => prev.filter((_, i) => i !== hashSelected));
+                  }} disabled={hashSelected < 0}>删除选中</Button>
+                  <Button onClick={() => {
+                    if (hashSelected > 0) {
+                      setHashEntries(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[hashSelected];
+                        arr[hashSelected] = arr[hashSelected - 1];
+                        arr[hashSelected - 1] = tmp;
+                        return arr;
+                      });
+                      setHashSelected(hashSelected - 1);
+                    }
+                  }} disabled={hashSelected <= 0}>上移</Button>
+                  <Button onClick={() => {
+                    if (hashSelected >= 0 && hashSelected < hashEntries.length - 1) {
+                      setHashEntries(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[hashSelected];
+                        arr[hashSelected] = arr[hashSelected + 1];
+                        arr[hashSelected + 1] = tmp;
+                        return arr;
+                      });
+                      setHashSelected(hashSelected + 1);
+                    }
+                  }} disabled={hashSelected < 0 || hashSelected >= hashEntries.length - 1}>下移</Button>
+                </Space>
+              </div>
+              <div>
+                {hashEntries.map((row, idx) => (
+                  <div key={idx} onClick={() => setHashSelected(idx)} style={{ display: 'flex', gap: 8, padding: 6, border: '1px solid #f0f0f0', marginBottom: 4, background: hashSelected === idx ? 'var(--selected-bg, #fafafa)' : undefined }}>
+                    <Tag color="purple">{idx}</Tag>
+                    <Input placeholder="字段" value={row.field} onChange={e => {
+                      const v = e.target.value;
+                      setHashEntries(prev => { const arr = [...prev]; arr[idx] = { ...arr[idx], field: v }; return arr; });
+                    }} style={{ width: 200 }} />
+                    <Input placeholder="值" value={row.value} onChange={e => {
+                      const v = e.target.value;
+                      setHashEntries(prev => { const arr = [...prev]; arr[idx] = { ...arr[idx], value: v }; return arr; });
+                    }} />
+                  </div>
+                ))}
+              </div>
+            </>
           )}
-          {keyType === 'list' && Array.isArray(keyData) && (
-          <List size="small" bordered dataSource={keyData as any[]} renderItem={item => (
-          <List.Item>
-          <Typography.Text>{String(item)}</Typography.Text>
-          </List.Item>
-          )} />
+          {keyType === 'list' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Space wrap>
+                  <Button onClick={() => setListElements(prev => [...prev, ''])}>添加元素</Button>
+                  <Button onClick={() => {
+                    if (listSelected >= 0) setListElements(prev => prev.filter((_, i) => i !== listSelected));
+                  }} disabled={listSelected < 0}>删除选中</Button>
+                  <Button onClick={() => {
+                    if (listSelected > 0) {
+                      setListElements(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[listSelected];
+                        arr[listSelected] = arr[listSelected - 1];
+                        arr[listSelected - 1] = tmp;
+                        return arr;
+                      });
+                      setListSelected(listSelected - 1);
+                    }
+                  }} disabled={listSelected <= 0}>上移</Button>
+                  <Button onClick={() => {
+                    if (listSelected >= 0 && listSelected < listElements.length - 1) {
+                      setListElements(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[listSelected];
+                        arr[listSelected] = arr[listSelected + 1];
+                        arr[listSelected + 1] = tmp;
+                        return arr;
+                      });
+                      setListSelected(listSelected + 1);
+                    }
+                  }} disabled={listSelected < 0 || listSelected >= listElements.length - 1}>下移</Button>
+                </Space>
+              </div>
+              <div>
+                {listElements.map((item, idx) => (
+                  <div key={idx} onClick={() => setListSelected(idx)} style={{ display: 'flex', gap: 8, padding: 6, border: '1px solid #f0f0f0', marginBottom: 4, background: listSelected === idx ? 'var(--selected-bg, #fafafa)' : undefined }}>
+                    <Tag color="blue">{idx}</Tag>
+                    <Input placeholder="元素" value={item} onChange={e => {
+                      const v = e.target.value;
+                      setListElements(prev => { const arr = [...prev]; arr[idx] = v; return arr; });
+                    }} />
+                  </div>
+                ))}
+              </div>
+            </>
           )}
-          {keyType === 'set' && Array.isArray(keyData) && (
-          <List size="small" bordered dataSource={keyData as any[]} renderItem={item => (
-          <List.Item>
-          <Typography.Text>{String(item)}</Typography.Text>
-          </List.Item>
-          )} />
+          {keyType === 'set' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Space wrap>
+                  <Button onClick={() => setSetMembers(prev => [...prev, ''])}>添加成员</Button>
+                  <Button onClick={() => {
+                    if (setSelected >= 0) setSetMembers(prev => prev.filter((_, i) => i !== setSelected));
+                  }} disabled={setSelected < 0}>删除选中</Button>
+                </Space>
+              </div>
+              <div>
+                {setMembers.map((item, idx) => (
+                  <div key={idx} onClick={() => setSetSelected(idx)} style={{ display: 'flex', gap: 8, padding: 6, border: '1px solid #f0f0f0', marginBottom: 4, background: setSelected === idx ? 'var(--selected-bg, #fafafa)' : undefined }}>
+                    <Tag color="green">{idx}</Tag>
+                    <Input placeholder="成员" value={item} onChange={e => {
+                      const v = e.target.value;
+                      setSetMembers(prev => { const arr = [...prev]; arr[idx] = v; return arr; });
+                    }} />
+                  </div>
+                ))}
+              </div>
+            </>
           )}
-          {keyType === 'zset' && Array.isArray(keyData) && (
-          <List size="small" bordered dataSource={keyData as any[]} renderItem={(item, idx) => (
-          <List.Item>
-          <Space>
-          <Tag color="blue">{idx}</Tag>
-          <Typography.Text>{typeof item === 'object' ? JSON.stringify(item) : String(item)}</Typography.Text>
-          </Space>
-          </List.Item>
-          )} />
+          {keyType === 'zset' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Space wrap>
+                  <Button onClick={() => setZsetEntries(prev => [...prev, { member: '', score: 0 }])}>添加成员</Button>
+                  <Button onClick={() => {
+                    if (zsetSelected >= 0) setZsetEntries(prev => prev.filter((_, i) => i !== zsetSelected));
+                  }} disabled={zsetSelected < 0}>删除选中</Button>
+                  <Button onClick={() => {
+                    if (zsetSelected > 0) {
+                      setZsetEntries(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[zsetSelected];
+                        arr[zsetSelected] = arr[zsetSelected - 1];
+                        arr[zsetSelected - 1] = tmp;
+                        return arr;
+                      });
+                      setZsetSelected(zsetSelected - 1);
+                    }
+                  }} disabled={zsetSelected <= 0}>上移</Button>
+                  <Button onClick={() => {
+                    if (zsetSelected >= 0 && zsetSelected < zsetEntries.length - 1) {
+                      setZsetEntries(prev => {
+                        const arr = [...prev];
+                        const tmp = arr[zsetSelected];
+                        arr[zsetSelected] = arr[zsetSelected + 1];
+                        arr[zsetSelected + 1] = tmp;
+                        return arr;
+                      });
+                      setZsetSelected(zsetSelected + 1);
+                    }
+                  }} disabled={zsetSelected < 0 || zsetSelected >= zsetEntries.length - 1}>下移</Button>
+                </Space>
+              </div>
+              <div>
+                {zsetEntries.map((row, idx) => (
+                  <div key={idx} onClick={() => setZsetSelected(idx)} style={{ display: 'flex', gap: 8, padding: 6, border: '1px solid #f0f0f0', marginBottom: 4, background: zsetSelected === idx ? 'var(--selected-bg, #fafafa)' : undefined }}>
+                    <Tag color="gold">{idx}</Tag>
+                    <Input placeholder="成员" value={row.member} onChange={e => {
+                      const v = e.target.value;
+                      setZsetEntries(prev => { const arr = [...prev]; arr[idx] = { ...arr[idx], member: v }; return arr; });
+                    }} style={{ width: 260 }} />
+                    <InputNumber placeholder="分数" value={row.score} onChange={(v) => {
+                      const s = Number(v ?? 0);
+                      setZsetEntries(prev => { const arr = [...prev]; arr[idx] = { ...arr[idx], score: isNaN(s) ? 0 : s }; return arr; });
+                    }} />
+                  </div>
+                ))}
+              </div>
+            </>
           )}
           {!['string','hash','list','set','zset'].includes(keyType || '') && (
-          valueDisplayMode === 'json' ? (
-          <JsonPreview value={keyData} />
-          ) : (
-          <TextPreview value={keyData} />
-          )
+            valueDisplayMode === 'json' ? (
+              <JsonPreview value={keyData} />
+            ) : (
+              <TextPreview value={keyData} />
+            )
           )}
           </>
           )

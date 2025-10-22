@@ -19,7 +19,7 @@ interface CommandHistory {
   timestamp: number;
 }
 
-const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
+const RedisQueryPage: React.FC<Props> = ({ connection, database }) => {
   const [input, setInput] = useState<string>('');
   const [terminalOutput, setTerminalOutput] = useState<Array<{type: 'command' | 'result' | 'error' | 'info', content: string}>>([]);
   const [history, setHistory] = useState<CommandHistory[]>([]);
@@ -513,7 +513,7 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
         alignItems: 'center'
       }}>
         <div style={{ color: '#F0F6FC', fontWeight: 'bold', fontSize: '13px' }}>
-          Redis CLI - {connection?.name || '连接'}
+          Redis 查询 - {connection?.name || '连接'}
         </div>
         <Space size="small">
           <div style={{ color: connected ? '#3FB950' : '#F85149', fontSize: '12px' }}>
@@ -533,7 +533,7 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
           lineHeight: '1.4'
         }}
       >
-        <div style={{ color: '#3FB950', marginBottom: '10px' }}>欢迎使用DB-CLIENT命令工具。</div>
+        <div style={{ color: '#3FB950', marginBottom: '10px' }}>欢迎使用Redis查询工具。</div>
         {terminalOutput.map(renderTerminalLine)}
         
         {/* 命令提示符和输入区域 */}
@@ -685,4 +685,4 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
   );
 };
 
-export default RedisCliPage;
+export default RedisQueryPage;

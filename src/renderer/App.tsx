@@ -24,6 +24,11 @@ import RedisServiceInfoPage from './components/redis/RedisServiceInfoPage';
 import RedisSlowlogPage from './components/redis/RedisSlowlogPage';
 import RedisCliPage from './components/redis/RedisCliPage';
 import RedisPubSubPage from './components/redis/RedisPubSubPage';
+import MySqlActions from './components/mysql/MySqlActions';
+import MySqlServiceInfoPage from './components/mysql/MySqlServiceInfoPage';
+import MySqlUsersPage from './components/mysql/MySqlUsersPage';
+import MySqlCliPage from './components/mysql/MySqlCliPage';
+import MySqlSlowlogPage from './components/mysql/MySqlSlowlogPage';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -686,7 +691,18 @@ const AppContent: React.FC = () => {
             onOpenPubSub={handleOpenRedisPubSub}
           />
         )}
-        
+        {activeConnection?.type === 'mysql' && (
+          <MySqlActions
+            connection={activeConnection}
+            activeDatabase={activeDatabase}
+            darkMode={darkMode}
+            onOpenServiceInfo={handleOpenMySqlServiceInfo}
+            onOpenUsers={handleOpenMySqlUsers}
+            onOpenCli={handleOpenMySqlCli}
+            onOpenSlowlog={handleOpenMySqlSlowlog}
+          />
+        )}
+
         <div className="toolbar-section" style={{ marginLeft: 'auto' }}>
           <Tooltip title={darkMode ? '切换为亮色模式' : '切换为暗色模式'}>
             <Button 
@@ -788,6 +804,94 @@ const AppContent: React.FC = () => {
         connection: activeConnection,
         database: dbName,
         type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 服务信息
+  const handleOpenMySqlServiceInfo = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'information_schema';
+    const key = `mysql-service-info-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 服务信息',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 用户信息
+  const handleOpenMySqlUsers = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-users-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 用户信息',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 命令行
+  const handleOpenMySqlCli = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-cli-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 命令行',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 慢日志
+  const handleOpenMySqlSlowlog = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-slowlog-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 慢日志',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
       };
       setDatabaseTabs(prev => [...prev, newTab]);
     }
@@ -975,6 +1079,31 @@ const AppContent: React.FC = () => {
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                     {/* 根据数据库类型渲染不同的面板组件 */}
                     {tab.type === 'mysql' ? (
+                      tab.key?.startsWith('mysql-service-info-') ? (
+                        <MySqlServiceInfoPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('mysql-users-') ? (
+                        <MySqlUsersPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('mysql-cli-') ? (
+                        <MySqlCliPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('mysql-slowlog-') ? (
+                        <MySqlSlowlogPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : (
                       <MySqlDatabaseTabPanel
                         connection={tab.connection}
                         database={tab.database}
@@ -983,6 +1112,7 @@ const AppContent: React.FC = () => {
                         onTableSelect={handleTableSelect}
                         onTableDesign={handleTableDesign}
                       />
+                      )
                     ) : tab.type === 'postgresql' || tab.type === 'gaussdb' ? (
                       <PostgreSqlDatabaseTabPanel
                         connection={tab.connection}

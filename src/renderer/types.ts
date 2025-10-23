@@ -99,9 +99,25 @@ export interface DatabaseInfo {
     used: number;
     free: number;
   };
+  // 新增：全实例存储统计（可选）
+  storageInstance?: {
+    total: number;
+    used: number;
+    free: number;
+  };
   performance: {
     queriesPerSecond: number;
+    // 短期滑动平均QPS（可选）
+    queriesPerSecondAvg?: number;
+    // 最近采样窗口大小（样本数，可选）
+    queriesPerSecondAvgWindowSize?: number;
     slowQueries: number;
+    threadsRunning?: number;
+    openTables?: number;
+    innodbBufferPoolSize?: number;
+    innodbBufferPoolReads?: number;
+    innodbBufferPoolWriteRequests?: number;
+    innodbBufferPoolReadRequests?: number; // 新增：用于计算缓冲池命中率
   };
 }
 

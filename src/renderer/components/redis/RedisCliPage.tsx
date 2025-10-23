@@ -32,6 +32,8 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const [showHistoryOverlay, setShowHistoryOverlay] = useState<boolean>(false);
   const maxHistorySize = 100;
   const poolId = connection?.connectionId;
   
@@ -444,6 +446,9 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
         setShowSuggestions(false);
         setSelectedSuggestion(-1);
       }
+      if (historyRef.current && !historyRef.current.contains(event.target as Node)) {
+        setShowHistoryOverlay(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -451,6 +456,23 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+  
+  // 历史面板控制与工具函数
+  const toggleHistory = () => {
+    setShowHistoryOverlay(prev => !prev);
+  };
+  const formatTime = (ts: number) => {
+    try {
+      return new Date(ts).toLocaleTimeString();
+    } catch {
+      return '';
+    }
+  };
+  const pickHistory = (h: CommandHistory) => {
+    setInput(`${h.command} ${h.params}`.trim());
+    setShowHistoryOverlay(false);
+    focusInput();
+  };
   
   // 清空终端输出
   const clearTerminal = () => {
@@ -623,7 +645,8 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
         justifyContent: 'space-between',
         alignItems: 'center',
         fontSize: '12px',
-        color: '#8B949E'
+        color: '#8B949E',
+        position: 'relative'
       }}>
         <div>{getConnectionInfo()}</div>
         <Space size="small">
@@ -631,30 +654,30 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
             onClick={clearTerminal}
             style={{
               background: 'none',
-            border: 'none',
-            color: '#8B949E',
-            cursor: 'pointer',
-            fontSize: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '3px 8px',
-            borderRadius: '3px',
-            transition: 'all 0.2s ease'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#21262D';
-            e.currentTarget.style.color = '#F0F6FC';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent';
-            e.currentTarget.style.color = '#8B949E';
-          }}
+              border: 'none',
+              color: '#8B949E',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              padding: '3px 8px',
+              borderRadius: '3px',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#21262D';
+              e.currentTarget.style.color = '#F0F6FC';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = '#8B949E';
+            }}
           >
             <ClearOutlined style={{ marginRight: '2px', fontSize: '12px' }} />
             清空
           </button>
           <button 
-            onClick={focusInput}
+            onClick={toggleHistory}
             style={{
               background: 'none',
               border: 'none',
@@ -680,6 +703,51 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
             历史
           </button>
         </Space>
+        {showHistoryOverlay && (
+          <div
+            ref={historyRef}
+            style={{
+              position: 'absolute',
+              right: '15px',
+              bottom: '32px',
+              width: '280px',
+              maxHeight: '240px',
+              overflowY: 'auto',
+              backgroundColor: '#161B22',
+              border: '1px solid #30363D',
+              borderRadius: '4px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+              zIndex: 1000
+            }}
+          >
+            {history.length === 0 ? (
+              <div style={{ padding: '8px 10px', color: '#8B949E' }}>暂无历史</div>
+            ) : (
+              history.map((h, i) => (
+                <div
+                  key={`${h.timestamp}-${i}`}
+                  style={{
+                    padding: '8px 10px',
+                    cursor: 'pointer',
+                    color: '#F0F6FC',
+                    borderBottom: '1px solid #21262D'
+                  }}
+                  onClick={() => pickHistory(h)}
+                >
+                  <div style={{ fontSize: '11px', color: '#8B949E' }}>{formatTime(h.timestamp)}</div>
+                  <div style={{
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}>
+                    {h.command} {h.params}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

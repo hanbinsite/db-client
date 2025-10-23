@@ -3,6 +3,7 @@ import { DatabaseConnection } from '../../types';
 import { BaseQueryPanelProps } from './types';
 import MySqlQueryPanel from './MySqlQueryPanel';
 import PostgreSqlQueryPanel from './PostgreSqlQueryPanel';
+import RedisQueryPanel from './RedisQueryPanel';
 
 // 默认查询面板组件（如果没有匹配的数据库类型）
 const DefaultQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, tabKey, onTabClose, darkMode }) => {
@@ -37,6 +38,8 @@ const QueryPanelFactory: React.FC<QueryPanelFactoryProps> = ({
         return MySqlQueryPanel;
       case 'postgresql':
         return PostgreSqlQueryPanel;
+      case 'redis':
+        return RedisQueryPanel;
       default:
         return DefaultQueryPanel;
     }

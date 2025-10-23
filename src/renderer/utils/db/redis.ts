@@ -568,7 +568,7 @@ export class RedisDbUtils extends BaseDbUtils {
         } catch {
           console.log('[REDIS TEST] getConnectionPoolConfig:', String(cfgRes));
         }
-        if (cfgRes && cfgRes.success) {
+        if (cfgRes) {
           pid = generatedId;
           connection.connectionId = pid;
           connection.isConnected = true;
@@ -605,7 +605,7 @@ export class RedisDbUtils extends BaseDbUtils {
         } else {
           const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
           const cfgRes2 = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
-          if (cfgRes2 && cfgRes2.success) {
+          if (cfgRes2) {
             pid = generatedId;
             console.warn('[REDIS DB UTILS] ensurePoolId 复用已存在连接池，poolId:', pid);
           }

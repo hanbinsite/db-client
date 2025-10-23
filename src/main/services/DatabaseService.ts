@@ -1264,21 +1264,18 @@ class RedisConnection extends BaseDatabaseConnection {
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
-      // 添加详细的命令执行日志
-      if (String(command).toLowerCase() !== 'info') {
-        console.log(`[REDIS MAIN] 准备执行命令: ${command}`, { params });
-      }
-      
-      if (!this.client || !this.isConnected()) {
-        // 尝试重新连接
-        console.log(`[REDIS MAIN] 客户端未连接，尝试重新连接`);
-        const reconnected = await this.connect();
-        if (!reconnected || !this.isConnected()) {
-          console.error(`[REDIS MAIN] 重新连接失败`);
-          throw new Error('Redis client not connected');
-        }
-      }
+      // 移除冗长的命令执行日志，避免Terminal刷屏
 
+      if (!this.client || !this.isConnected()) {
+         // 尝试重新连接
+         console.log(`[REDIS MAIN] 客户端未连接，尝试重新连接`);
+         const reconnected = await this.connect();
+         if (!reconnected || !this.isConnected()) {
+           console.error(`[REDIS MAIN] 重新连接失败`);
+           throw new Error('Redis client not connected');
+         }
+       }
+      
       // 将命令转换为小写
       const cmd = command.toLowerCase();
       

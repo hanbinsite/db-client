@@ -1,3 +1,4 @@
+/* DatabasePanel 头部与列表样式 */
 .database-panel {
   height: 100%;
   display: flex;
@@ -12,53 +13,68 @@
   border-right-color: #333;
 }
 
+/* Header 样式：更小高度、扁平化与科技色（低对比） */
 .database-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid #d9d9d9;
-  background-color: #1890ff;
-}
-
-.database-panel.dark .database-header {
-  border-bottom-color: #333;
-  background-color: #40a9ff;
-}
+   height: 36px;
+   padding: 0 12px;
+   display: flex;
+   align-items: center;
+   border-bottom: 1px solid #405066;
+   background-color: #3b4a60; /* 更浅的科技蓝灰 */
+ }
+ 
+ .database-header.dark {
+   border-bottom-color: #3a4a5a;
+   background-color: #42546d; /* 暗色下也稍微变浅 */
+ }
 
 .header-content {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
 }
 
 .header-title {
   font-weight: 500;
-  color: white;
-  font-size: 14px;
+  color: #e6ebf3; /* 轻微降低对比度的浅色 */
+  font-size: 13px; /* 缩小字号 */
 }
 
-.database-panel.dark .header-title {
-  color: #e0e0e0;
+.database-header.dark .header-title {
+  color: #dbe2ea; /* 暗色下进一步降低对比度 */
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
-.refresh-btn, .more-btn {
-  padding: 4px;
-  border-radius: 4px;
+/* 刷新按钮样式：扁平化与更小尺寸 */
+.refresh-btn {
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #e6ebf3;
+  background-color: transparent; /* 扁平化 */
 }
 
-.refresh-btn:hover, .more-btn:hover {
-  background-color: rgba(0, 0, 0, 0.05);
+.refresh-btn:hover {
+  background-color: rgba(255, 255, 255, 0.12); /* 低对比悬停 */
 }
 
-.database-panel.dark .refresh-btn:hover, 
-.database-panel.dark .more-btn:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+.database-header.dark .refresh-btn {
+  color: #dbe2ea;
+  background-color: transparent;
 }
 
+.database-header.dark .refresh-btn:hover {
+  background-color: rgba(255, 255, 255, 0.10);
+}
+
+/* 数据库树列表区域 */
 .database-tree {
   flex: 1;
   overflow-y: auto;
@@ -114,25 +130,11 @@
 }
 
 /* 数据库对象类型图标颜色 */
-.database-icon {
-  color: #4479a1;
-}
-
-.table-icon {
-  color: #52c41a;
-}
-
-.view-icon {
-  color: #faad14;
-}
-
-.procedure-icon {
-  color: #722ed1;
-}
-
-.function-icon {
-  color: #f5222d;
-}
+.database-icon { color: #4479a1; }
+.table-icon { color: #52c41a; }
+.view-icon { color: #faad14; }
+.procedure-icon { color: #722ed1; }
+.function-icon { color: #f5222d; }
 
 /* 展开/折叠图标样式 */
 .ant-tree-switcher {
@@ -143,32 +145,10 @@
 }
 
 /* 滚动条样式 */
-.database-tree::-webkit-scrollbar {
-  width: 6px;
-}
-
-.database-tree::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 3px;
-}
-
-.database-panel.dark .database-tree::-webkit-scrollbar-track {
-  background: #333;
-}
-
-.database-tree::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 3px;
-}
-
-.database-panel.dark .database-tree::-webkit-scrollbar-thumb {
-  background: #666;
-}
-
-.database-tree::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-.database-panel.dark .database-tree::-webkit-scrollbar-thumb:hover {
-  background: #444;
-}
+.database-tree::-webkit-scrollbar { width: 6px; }
+.database-tree::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
+.database-panel.dark .database-tree::-webkit-scrollbar-track { background: #333; }
+.database-tree::-webkit-scrollbar-thumb { background: #888; border-radius: 3px; }
+.database-panel.dark .database-tree::-webkit-scrollbar-thumb { background: #666; }
+.database-tree::-webkit-scrollbar-thumb:hover { background: #555; }
+.database-panel.dark .database-tree::-webkit-scrollbar-thumb:hover { background: #444; }

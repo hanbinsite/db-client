@@ -398,7 +398,7 @@ export class DatabaseService extends EventEmitter {
   }
 
   // 新增：为Redis执行查询提供串行化队列，避免获取连接等待超时
-  private async enqueueRedis<T>(poolId: string, fn: () => Promise<T>): Promise<T> {
+  private async enqueueQuery<T>(poolId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.queryChains.get(poolId) || Promise.resolve();
     let result!: T;
     const next = prev.then(async () => { result = await fn(); });
@@ -422,9 +422,9 @@ export class DatabaseService extends EventEmitter {
         throw new Error(`配置验证失败: ${validation.errors.join(', ')}`);
       }
 
-      // 对Redis强制使用单连接池，确保SELECT后的db选择在同一连接上生效
+      // 对MySQL强制使用单连接池，确保数据库选择(USE)在同一连接上生效
       const effectivePoolConfig: IConnectionPoolConfig | undefined = (() => {
-        if (config.type === 'redis') {
+        if (config.type === 'mysql') {
           return {
             maxConnections: 1,
             minConnections: 1,
@@ -479,9 +479,9 @@ export class DatabaseService extends EventEmitter {
     if (!pool) {
       throw new Error('连接池不存在');
     }
-    // 新增：Redis单连接池下串行执行，避免并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+    // 对MySQL使用串行执行，确保数据库上下文一致性
+    if (this.poolTypes.get(poolId) === 'mysql') {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           const result = await connection.executeQuery(query, params);
@@ -532,9 +532,9 @@ export class DatabaseService extends EventEmitter {
       throw new Error('连接池不存在');
     }
 
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+    // 对 MySQL 使用串行队列，确保数据库上下文一致性
+    if (this.poolTypes.get(poolId) === 'mysql') {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           return await connection.getDatabaseInfo();
@@ -559,9 +559,9 @@ export class DatabaseService extends EventEmitter {
       throw new Error('连接池不存在');
     }
 
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+    // 对 MySQL 使用串行队列，确保数据库上下文一致性
+    if (this.poolTypes.get(poolId) === 'mysql') {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           return await connection.getTableStructure(tableName);
@@ -586,9 +586,9 @@ export class DatabaseService extends EventEmitter {
       throw new Error('连接池不存在');
     }
 
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+    // 对 MySQL 使用串行队列，确保数据库上下文一致性
+    if (this.poolTypes.get(poolId) === 'mysql') {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           return await connection.listTables();
@@ -615,7 +615,7 @@ export class DatabaseService extends EventEmitter {
 
     // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
     if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           return await connection.listDatabases();
@@ -639,7 +639,7 @@ export class DatabaseService extends EventEmitter {
     if (!pool) throw new Error('连接池不存在');
     // 串行化，避免与查询并发导致获取连接超时
     if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           const onMsg = (channel: string, message: string) => {
@@ -664,7 +664,7 @@ export class DatabaseService extends EventEmitter {
     const pool = this.getConnectionPool(poolId);
     if (!pool) throw new Error('连接池不存在');
     if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
+      return await this.enqueueQuery(poolId, async () => {
         const connection = await pool.acquire();
         try {
           await (connection as any).unsubscribeChannels(channels, isPattern);
@@ -738,7 +738,7 @@ class MySQLConnection extends BaseDatabaseConnection {
         port: this.config.port,
         user: this.config.username,
         password: this.config.password,
-        database: this.config.database,
+        // 移除默认数据库参数，允许通过USE命令自由切换数据库
         ssl: this.config.ssl ? {
           // 为了解决SSL握手失败问题，我们提供更完整的SSL配置
           rejectUnauthorized: false,
@@ -769,7 +769,18 @@ class MySQLConnection extends BaseDatabaseConnection {
   async executeQuery(query: string, params?: any[]): Promise<QueryResult> {
     try {
       const startTime = Date.now();
-      const [rows, fields] = await this.connection.execute(query, params || []);
+      let rows, fields;
+      
+      // 检测是否为USE命令，MySQL的prepared statement不支持USE命令
+      const trimmedQuery = query.trim().toUpperCase();
+      if (trimmedQuery.startsWith('USE ') && !trimmedQuery.includes('?')) {
+        // 对于USE命令，使用普通的query方法而不是execute方法
+        [rows, fields] = await this.connection.query(query);
+      } else {
+        // 其他命令使用prepared statement
+        [rows, fields] = await this.connection.execute(query, params || []);
+      }
+      
       const executionTime = Date.now() - startTime;
 
       return {

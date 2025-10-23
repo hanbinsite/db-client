@@ -168,6 +168,12 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     const handleNodeSelect = (node: TreeNode) => {
       console.log('DATABASE PANEL - 节点被选择:', node.key, node.title);
       
+      // 断开连接时禁止交互
+      if (!connection?.isConnected) {
+        console.log('DATABASE PANEL - 连接已断开，忽略节点选择');
+        return;
+      }
+      
       if (node.type === 'database') {
         // 对于PostgreSQL数据库，点击数据库名称只展开/折叠节点，不打开数据库详情
         // 对于其他数据库类型，保持原有行为
@@ -184,6 +190,12 @@ const DatabasePanel: React.FC<DatabasePanelProps> = ({
     // 处理节点双击事件
     const handleNodeDoubleClick = (node: TreeNode) => {
       console.log('DATABASE PANEL - 节点双击:', node.key, node.title, node.type);
+      
+      // 断开连接时禁止交互
+      if (!connection?.isConnected) {
+        console.log('DATABASE PANEL - 连接已断开，忽略节点双击');
+        return;
+      }
       
       // 特别处理schema类型节点
       if (node.type === 'schema') {

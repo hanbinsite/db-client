@@ -303,7 +303,7 @@
   max-width: 100%;
 }
 
-/* 连接成功标志样式 */
+/* 连接成功标志样式（旧） */
 .connection-success-indicator {
   width: 8px;
   height: 8px;
@@ -315,4 +315,63 @@
 
 .connection-panel.dark .connection-success-indicator {
   background-color: #52c41a;
+}
+
+/* 新：连接项内容与状态联动样式 */
+.connection-item-content {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-icon-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+}
+
+.connection-status-badge {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-left: auto;
+  margin-right: 8px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04) inset;
+}
+
+.connection-status-badge.connected {
+  background-color: #52c41a;
+  box-shadow: 0 0 4px rgba(82, 196, 26, 0.5);
+}
+
+.connection-status-badge.disconnected {
+  background-color: #bfbfbf;
+}
+
+.connection-item.connected {
+  border-left: 3px solid #52c41a;
+}
+
+.connection-item.disconnected {
+  border-left: 3px solid transparent;
+}
+
+.connection-item.active.connected {
+  border-left-color: #52c41a;
+  background-color: #f0fff4;
+}
+
+.connection-panel.dark .connection-item.connected {
+  border-left-color: #52c41a;
+}
+
+.connection-panel.dark .connection-status-badge.disconnected {
+  background-color: #808080;
+}
+
+.connection-panel.dark .connection-item.active.connected {
+  background-color: #1d2a1b;
 }

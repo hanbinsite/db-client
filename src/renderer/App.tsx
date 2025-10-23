@@ -319,6 +319,51 @@ const AppContent: React.FC = () => {
     }
   };
 
+  // 新增：断开连接并清理相关页面与状态
+  const handleConnectionDisconnect = async (connection: DatabaseConnection) => {
+    try {
+      const poolId = connection.connectionId || `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+      if (window.electronAPI && connection.isConnected && poolId) {
+        await window.electronAPI.disconnectDatabase(poolId);
+      }
+
+      // 先计算新标签页集合，移除该连接的所有相关页面
+      const newDbTabs = databaseTabs.filter(t => t.connection.id !== connection.id);
+      const newQueryTabs = queryTabs.filter(t => (t.connection?.id || '') !== connection.id);
+      const newTableDataTabs = tableDataTabs.filter(t => t.connection.id !== connection.id);
+      const newTableDesignTabs = tableDesignTabs.filter(t => t.connection.id !== connection.id);
+
+      setDatabaseTabs(newDbTabs);
+      setQueryTabs(newQueryTabs);
+      setTableDataTabs(newTableDataTabs);
+      setTableDesignTabs(newTableDesignTabs);
+
+      // 更新连接状态为未连接并清除连接池ID
+      setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false, connectionId: undefined } : conn));
+
+      // 如当前活动连接为该连接，则清空右侧上下文并重置活动标签
+      if (activeConnection && activeConnection.id === connection.id) {
+        const updatedActive = { ...connection, isConnected: false, connectionId: undefined };
+        setActiveConnection(updatedActive);
+        setActiveDatabase('');
+        setActiveTable('');
+
+        const nextTabsOrder = [
+          ...newDbTabs,
+          ...newQueryTabs,
+          ...newTableDataTabs,
+          ...newTableDesignTabs
+        ];
+        setActiveTabKey(nextTabsOrder.length > 0 ? nextTabsOrder[0].key : '');
+      }
+
+      message.success('连接已断开，已关闭相关页面并清理数据');
+    } catch (error) {
+      console.error('断开连接异常:', error);
+      message.error('断开连接时发生错误');
+    }
+  };
+
   // 创建新连接
   const createNewConnection = () => {
     // 触发ConnectionPanel中的新建连接逻辑
@@ -879,6 +924,7 @@ const AppContent: React.FC = () => {
             onConnectionSelect={handleConnectionSelect}
             onConnectionEdit={handleConnectionEdit}
             onConnectionDelete={handleConnectionDelete}
+            onConnectionDisconnect={handleConnectionDisconnect}
             activeConnection={activeConnection}
             darkMode={darkMode}
           />

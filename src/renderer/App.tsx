@@ -205,37 +205,46 @@ const AppContent: React.FC = () => {
     // 用户第一次点击连接时，尝试连接到数据库并设置连接状态
     try {
       if (window.electronAPI && connection.id) {
-        // 使用connectDatabase创建持久连接，而不是testConnection
-        const connectResult = await window.electronAPI.connectDatabase(connection);
-        
-        if (connectResult && connectResult.success) {
-          // 更新连接的状态为已连接，并保存返回的connectionId
-          const updatedConnection = { 
-            ...connection, 
-            isConnected: true, 
-            connectionId: connectResult.connectionId // 保存真实的连接池ID
-          };
-          setActiveConnection(updatedConnection);
-          
-          // 更新连接列表中的状态
-          setConnections(prev => 
-            prev.map(conn => conn.id === connection.id ? updatedConnection : conn)
-          );
-          
-          console.log('数据库连接成功并保持持久连接，现在将尝试获取真实数据');
-          // 让DatabasePanel组件的自动选择逻辑工作，不手动选择数据库
+        // 先测试连接并尝试复用/保留测试创建的连接池
+        const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+        const testResult = await window.electronAPI.testConnection(connection);
+        if (testResult && testResult.success) {
+          // 测试成功后检查是否已存在连接池配置（复用测试创建的池）
+          const cfgRes = await window.electronAPI.getConnectionPoolConfig(generatedId);
+          if (cfgRes) {
+            const updatedConnection = {
+              ...connection,
+              isConnected: true,
+              connectionId: generatedId
+            };
+            setActiveConnection(updatedConnection);
+            setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
+            console.log('测试连接成功并复用/保留连接池，设置poolId:', generatedId);
+          } else {
+            // 未检测到连接池配置，回退到创建持久连接
+            const connectResult = await window.electronAPI.connectDatabase(connection);
+            if (connectResult && connectResult.success) {
+              const updatedConnection = {
+                ...connection,
+                isConnected: true,
+                connectionId: connectResult.connectionId
+              };
+              setActiveConnection(updatedConnection);
+              setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
+              console.log('连接池未检测到，创建持久连接成功，poolId:', connectResult.connectionId);
+            } else {
+              console.warn('连接数据库失败:', connectResult?.message);
+              setActiveConnection({ ...connection, isConnected: false });
+              setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
+              message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
+            }
+          }
         } else {
-          console.warn('连接数据库失败:', connectResult?.message);
-          
-          // 连接失败时，保持未连接状态
+          // 测试失败，保持未连接状态并提示
+          console.warn('测试连接失败:', (testResult && testResult.error) || '未知错误');
           setActiveConnection({ ...connection, isConnected: false });
-          
-          // 更新连接列表中的状态
-          setConnections(prev => 
-            prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
-          );
-          
-          message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
+          setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
+          message.error('连接测试失败: ' + ((testResult && testResult.error) || '未知错误'));
         }
       } else {
         // 开发环境或无法使用electronAPI时，设置为未连接状态
@@ -244,15 +253,8 @@ const AppContent: React.FC = () => {
       }
     } catch (error) {
       console.error('连接数据库时出错:', error);
-      
-      // 出错时，设置为未连接状态
       setActiveConnection({ ...connection, isConnected: false });
-      
-      // 更新连接列表中的状态
-      setConnections(prev => 
-        prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
-      );
-      
+      setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
       message.error('连接数据库时发生错误');
     }
   };
@@ -999,19 +1001,11 @@ const AppContent: React.FC = () => {
                   closable={true}
                 >
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    {tabConnection?.type === 'redis' ? (
-                      <RedisQueryPage
-                        connection={tabConnection}
-                        database={tab.database || activeDatabase}
-                        darkMode={darkMode}
-                      />
-                    ) : (
-                      <QueryPanel
-                        connection={tabConnection}
-                        database={tab.database || activeDatabase}
-                        darkMode={darkMode}
-                      />
-                    )}
+                    <QueryPanel
+                      connection={tabConnection}
+                      database={tab.database || activeDatabase}
+                      darkMode={darkMode}
+                    />
                   </div>
                 </TabPane>
                 );

@@ -1096,6 +1096,16 @@ const AppContent: React.FC = () => {
                           connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
+                          onDatabaseChange={(newDatabase) => {
+                            // 更新标签页的数据库信息
+                            setDatabaseTabs(prev => prev.map(t => 
+                              t.key === tab.key ? { ...t, database: newDatabase } : t
+                            ));
+                            // 更新全局活动数据库状态
+                            if (tab.connection.id === activeConnection?.id) {
+                              setActiveDatabase(newDatabase);
+                            }
+                          }}
                         />
                       ) : tab.key?.startsWith('mysql-slowlog-') ? (
                         <MySqlSlowlogPage

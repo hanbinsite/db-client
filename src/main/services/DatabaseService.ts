@@ -718,8 +718,19 @@ export class DatabaseService extends EventEmitter {
 
 // MySQL 连接实现
 class MySQLConnection extends BaseDatabaseConnection {
+  private lastTotalQueries: number | null = null;
+  private lastQueriesTimestamp: number | null = null;
+  private preferredQueriesCounter: 'Queries' | 'Questions' | null = null;
+  private qpsRecent: number[] = [];
+  private qpsWindowSize: number = 5;
+
   async connect(): Promise<boolean> {
     try {
+      // 重置增量QPS状态
+      this.lastTotalQueries = null;
+      this.lastQueriesTimestamp = null;
+      this.preferredQueriesCounter = null;
+
       this.isConnecting = true;
       const mysql = require('mysql2/promise');
       this.connection = await mysql.createConnection({
@@ -749,6 +760,10 @@ class MySQLConnection extends BaseDatabaseConnection {
       await this.connection.end();
       this.connection = null;
     }
+    // 断开时清空增量QPS状态
+    this.lastTotalQueries = null;
+    this.lastQueriesTimestamp = null;
+    this.preferredQueriesCounter = null;
   }
 
   async executeQuery(query: string, params?: any[]): Promise<QueryResult> {
@@ -775,20 +790,122 @@ class MySQLConnection extends BaseDatabaseConnection {
 
   async getDatabaseInfo(): Promise<DatabaseInfo> {
     try {
-      const [versionResult] = await this.connection.execute('SELECT VERSION() as version');
-      const [statusResult] = await this.connection.execute('SHOW STATUS LIKE \'Uptime\'');
-      const [connectionsResult] = await this.connection.execute('SHOW STATUS LIKE \'Threads_connected\'');
-      
-      const version = versionResult[0]?.version || 'Unknown';
-      const uptime = parseInt(statusResult[0]?.Value || '0');
-      const connections = parseInt(connectionsResult[0]?.Value || '0');
+      // 基本信息
+      const [versionResult]: any = await this.connection.execute("SELECT VERSION() as version");
+      const [uptimeResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Uptime'");
+      const [threadsConnectedResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Threads_connected'");
+      const version = versionResult?.[0]?.version || 'Unknown';
+      const uptime = parseInt((uptimeResult?.[0]?.Value ?? '0') as string, 10);
+      const connections = parseInt((threadsConnectedResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 性能指标：QPS、慢查询与更多状态（基于增量计算QPS）
+      const [queriesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Queries'");
+      const [questionsResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Questions'");
+      const [slowQueriesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Slow_queries'");
+      const [threadsRunningResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Threads_running'");
+      const [openTablesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Open_tables'");
+
+      const queriesVal = parseInt((queriesResult?.[0]?.Value ?? 'NaN') as string, 10);
+      const questionsVal = parseInt((questionsResult?.[0]?.Value ?? 'NaN') as string, 10);
+      const counterUsed: 'Queries' | 'Questions' = (!Number.isNaN(queriesVal) && queriesVal > 0) ? 'Queries' : 'Questions';
+      const totalQueries = counterUsed === 'Queries'
+        ? (Number.isNaN(queriesVal) ? 0 : queriesVal)
+        : (Number.isNaN(questionsVal) ? 0 : questionsVal);
+
+      const slowQueries = parseInt((slowQueriesResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 增量QPS计算，优先使用相同计数器的差值（防止在Queries和Questions之间切换导致错误）
+      let queriesPerSecond = 0;
+      const nowTs = Date.now();
+      if (this.lastTotalQueries !== null && this.lastQueriesTimestamp !== null && this.preferredQueriesCounter === counterUsed) {
+        const elapsedMs = nowTs - this.lastQueriesTimestamp;
+        const delta = totalQueries - this.lastTotalQueries;
+        if (elapsedMs > 0) {
+          if (delta >= 0) {
+            queriesPerSecond = Math.round((delta * 1000) / elapsedMs);
+            // 记录样本用于短期滑动平均
+            if (queriesPerSecond >= 0) {
+              this.qpsRecent.push(queriesPerSecond);
+              if (this.qpsRecent.length > this.qpsWindowSize) {
+                this.qpsRecent = this.qpsRecent.slice(this.qpsRecent.length - this.qpsWindowSize);
+              }
+            }
+          } else {
+            // 异常保护：负delta（回绕或重启），重置基线并清空样本
+            this.lastTotalQueries = totalQueries;
+            this.lastQueriesTimestamp = nowTs;
+            this.qpsRecent = [];
+            queriesPerSecond = 0;
+          }
+        }
+      } else {
+        // 首次或计数器切换，使用基于Uptime的近似值以避免跳变
+        queriesPerSecond = uptime > 0 ? Math.round(totalQueries / uptime) : 0;
+        this.preferredQueriesCounter = counterUsed;
+        // 初始化样本
+        if (queriesPerSecond > 0) {
+          this.qpsRecent = [queriesPerSecond];
+        } else {
+          this.qpsRecent = [];
+        }
+      }
+      // 更新状态用于下次增量计算
+      this.lastTotalQueries = totalQueries;
+      this.lastQueriesTimestamp = nowTs;
+
+      const threadsRunning = parseInt((threadsRunningResult?.[0]?.Value ?? '0') as string, 10);
+      const openTables = parseInt((openTablesResult?.[0]?.Value ?? '0') as string, 10);
+
+      // InnoDB缓冲池相关
+      const [bpSizeVars]: any = await this.connection.execute("SHOW VARIABLES LIKE 'innodb_buffer_pool_size'");
+      const [bpReadsResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_reads'");
+      const [bpReadReqResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_read_requests'");
+      const [bpWriteReqResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_write_requests'");
+      const innodbBufferPoolSize = parseInt((bpSizeVars?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolReads = parseInt((bpReadsResult?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolReadRequests = parseInt((bpReadReqResult?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolWriteRequests = parseInt((bpWriteReqResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 存储信息：当前数据库（schema=DATABASE()）与全实例（所有库）
+      const [dbRows]: any = await this.connection.execute(
+        `SELECT 
+           IFNULL(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS used_bytes,
+           IFNULL(SUM(DATA_FREE), 0) AS free_bytes
+         FROM information_schema.tables 
+         WHERE table_schema = DATABASE()`
+      );
+      const usedBytesDb = Number(dbRows?.[0]?.used_bytes || 0);
+      const freeBytesDb = Number(dbRows?.[0]?.free_bytes || 0);
+      const totalBytesDb = usedBytesDb + freeBytesDb;
+
+      const [instRows]: any = await this.connection.execute(
+        `SELECT 
+           IFNULL(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS used_bytes,
+           IFNULL(SUM(DATA_FREE), 0) AS free_bytes
+         FROM information_schema.tables`
+      );
+      const usedBytesInst = Number(instRows?.[0]?.used_bytes || 0);
+      const freeBytesInst = Number(instRows?.[0]?.free_bytes || 0);
+      const totalBytesInst = usedBytesInst + freeBytesInst;
 
       return {
         version,
         uptime,
         connections,
-        storage: { total: 0, used: 0, free: 0 },
-        performance: { queriesPerSecond: 0, slowQueries: 0 }
+        storage: { total: totalBytesDb, used: usedBytesDb, free: freeBytesDb },
+        storageInstance: { total: totalBytesInst, used: usedBytesInst, free: freeBytesInst },
+        performance: { 
+          queriesPerSecond, 
+          queriesPerSecondAvg: this.qpsRecent.length > 0 ? Math.round(this.qpsRecent.reduce((a, b) => a + b, 0) / this.qpsRecent.length) : queriesPerSecond,
+          queriesPerSecondAvgWindowSize: this.qpsRecent.length,
+          slowQueries,
+          threadsRunning,
+          openTables,
+          innodbBufferPoolSize,
+          innodbBufferPoolReads,
+          innodbBufferPoolReadRequests,
+          innodbBufferPoolWriteRequests
+        }
       };
     } catch (error) {
       return {
@@ -796,6 +913,7 @@ class MySQLConnection extends BaseDatabaseConnection {
         uptime: 0,
         connections: 0,
         storage: { total: 0, used: 0, free: 0 },
+        storageInstance: { total: 0, used: 0, free: 0 },
         performance: { queriesPerSecond: 0, slowQueries: 0 }
       };
     }

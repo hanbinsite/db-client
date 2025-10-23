@@ -17,8 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-table-structure', { connectionId, tableName }),
   listTables: (connectionId: string) => ipcRenderer.invoke('list-tables', connectionId),
   listDatabases: (connectionId: string) => ipcRenderer.invoke('list-databases', connectionId),
-  // 新增：获取连接池配置（动态并发）
-  getConnectionPoolConfig: (connectionId: string) => ipcRenderer.invoke('get-connection-pool-config', connectionId),
+  // 新增：获取连接池配置（动态并发），直接返回配置对象或null
+  getConnectionPoolConfig: async (connectionId: string) => {
+    const res = await ipcRenderer.invoke('get-connection-pool-config', connectionId);
+    return res && res.success ? res.config : null;
+  },
   
   // Redis 发布/订阅
   redisSubscribe: (connectionId: string, channels: string[], isPattern?: boolean) =>
@@ -32,6 +35,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 连接测试
   testConnection: (config: any) => ipcRenderer.invoke('test-connection', config),
   closeTestConnection: (config: any) => ipcRenderer.invoke('close-test-connection', config),
+
+  // 检查更新（仅打包后可用）
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   
   // 菜单事件监听
   onMenuNewConnection: (callback: () => void) => {

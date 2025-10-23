@@ -48,6 +48,26 @@ declare global {
       getTableStructure: (connectionId: string, tableName: string) => Promise<any>;
       listTables: (connectionId: string) => Promise<any>;
       listDatabases: (connectionId: string) => Promise<any>;
+      // 新增：连接池配置（返回配置对象或null）
+      getConnectionPoolConfig: (connectionId: string) => Promise<{
+        maxConnections: number;
+        idleTimeoutMs?: number;
+      } | null>;
+
+      // Redis 发布/订阅
+      redisSubscribe: (
+        connectionId: string,
+        channels: string[],
+        isPattern?: boolean
+      ) => Promise<{ success: boolean; error?: string }>;
+      redisUnsubscribe: (
+        connectionId: string,
+        channels: string[],
+        isPattern?: boolean
+      ) => Promise<{ success: boolean; error?: string }>;
+      onRedisPubSubMessage: (
+        callback: (payload: { connectionId: string; channel: string; message: string; ts: number }) => void
+      ) => void;
       
       // 连接测试
       testConnection: (config: any) => Promise<any>;
@@ -57,11 +77,14 @@ declare global {
       exportQueryResult: (connectionId: string, query: string, format: string) => Promise<any>;
       exportTableData: (connectionId: string, tableName: string, format: string) => Promise<any>;
       showSaveDialog: (defaultFileName: string, format: string) => Promise<any>;
-  writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
+      writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
       
       // 菜单事件监听
       onMenuNewConnection: (callback: () => void) => void;
       removeAllListeners: (channel: string) => void;
+
+      // 新增：检查更新（打包后使用）
+      checkForUpdates: () => Promise<{ ok: boolean; result?: any; message?: string }>;
     };
   }
 }

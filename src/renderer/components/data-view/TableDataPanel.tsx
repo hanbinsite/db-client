@@ -326,11 +326,15 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
       console.log("日志测试输出部分-----4", tableIdentifier);
       console.log(`超大表加载监控 - 表[${database}.${tableName}]即将调用getTableStructure方法，当前poolId: ${poolId}`);
       // 第一步：加载表头信息（表结构）- 添加超时控制
-      let tableStructureResult;
+      let tableStructureResult: any;
       try {
         console.log(`超大表加载监控 - 表[${database}.${tableName}]创建表结构查询Promise`);
         // 为getTableStructure调用添加30秒超时控制
-        const getTableStructurePromise = window.electronAPI.getTableStructure(poolId, tableIdentifier);
+        const getTableStructurePromise = (
+          connection.type === 'postgresql' || connection.type === 'gaussdb'
+            ? window.electronAPI.getTableStructureWithSchema(poolId, database, tableName)
+            : window.electronAPI.getTableStructure(poolId, tableIdentifier)
+        );
         const timeoutPromise = new Promise((_, reject) => 
           setTimeout(() => reject(new Error(`获取表结构超时: 超过30秒未完成`)), 30000)
         );
@@ -362,8 +366,13 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
         
         // 构建查询语句，包含筛选和排序
         // 对于超大数据表，实现选择性列查询以提高性能
-        let baseQuery = `SELECT * FROM \`${database}\`.\`${tableName}\``;
-        let countQuery = `SELECT COUNT(*) as count FROM \`${database}\`.\`${tableName}\``;
+        const quoteIdent = (name: string) => (
+          connection.type === 'postgresql' || connection.type === 'gaussdb'
+            ? `"${String(name).replace(/\"/g, '""')}"`
+            : `\`${String(name).replace(/`/g, '\\`')}\``
+        );
+        let baseQuery = `SELECT * FROM ${quoteIdent(database)}.${quoteIdent(tableName)}`;
+        let countQuery = `SELECT COUNT(*) as count FROM ${quoteIdent(database)}.${quoteIdent(tableName)}`;
         
         // 检查表是否有大量列或是否是超大表
         // const isLargeTable = structure.columns.length > 50 || (structure.rows && structure.rows > 100000);
@@ -458,7 +467,7 @@ const TableDataPanel: React.FC<TableDataPanelProps> = ({
             console.log(`超大表加载监控 - 表[${database}.${tableName}]执行查询SQL长度: ${baseQuery.length}字符`);
             
             // 使用Promise.race实现查询超时控制
-            const dataResult = await Promise.race([
+            const dataResult: any = await Promise.race([
               window.electronAPI.executeQuery(poolId, baseQuery, []),
               timeoutPromise
             ]);

@@ -60,7 +60,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSaveDialog: (defaultFileName: string, format: string) => 
     ipcRenderer.invoke('show-save-dialog', { defaultFileName, format }),
   writeExportFile: (filePath: string, data: any, format: string, dbType?: string) =>
-    ipcRenderer.invoke('write-export-file', { filePath, data, format, dbType })
+    ipcRenderer.invoke('write-export-file', { filePath, data, format, dbType }),
+  // PostgreSQL 专用：模式列表与按模式查询
+  listSchemas: (connectionId: string) => ipcRenderer.invoke('list-schemas', connectionId),
+  listTablesWithSchema: (connectionId: string, schema: string) =>
+    ipcRenderer.invoke('list-tables-with-schema', { connectionId, schema }),
+  getTableStructureWithSchema: (connectionId: string, schema: string, tableName: string) =>
+    ipcRenderer.invoke('get-table-structure-with-schema', { connectionId, schema, tableName }),
 });
 
 // 类型定义在 src/renderer/types.ts 中

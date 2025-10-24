@@ -235,7 +235,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       let materializedViews: string[] = [];
                       if (connection.type === DbType.POSTGRESQL) {
                         try {
-                          const mViewQuery = "SELECT matviewname FROM pg_matviews WHERE schemaname = ?";
+                          const mViewQuery = "SELECT matviewname FROM pg_matviews WHERE schemaname = $1";
                           const mViewResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, mViewQuery, [schemaName]);
                           if (mViewResult && mViewResult.success && Array.isArray(mViewResult.data)) {
                             materializedViews = mViewResult.data.map((row: any) => row.matviewname);
@@ -249,7 +249,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       // 额外查询获取函数（为了兼容不同版本，使用更通用的查询）
                       let functions: string[] = [];
                       try {
-                        const funcQuery = "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = ? AND p.prokind = 'f'";
+                        const funcQuery = "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = $1 AND p.prokind = 'f'";
                         const functionResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, funcQuery, [schemaName]);
                         if (functionResult && functionResult.success && Array.isArray(functionResult.data)) {
                           functions = functionResult.data.map((row: any) => row.proname);

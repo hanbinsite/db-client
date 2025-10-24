@@ -44,6 +44,11 @@ declare global {
       connectDatabase: (config: any) => Promise<any>;
       disconnectDatabase: (connectionId: string) => Promise<any>;
       executeQuery: (connectionId: string, query: string, params?: any[]) => Promise<any>;
+      // 新增：批量执行（同一连接、MySQL 串行队列原子化）
+      executeBatch: (
+        connectionId: string,
+        queries: Array<{ query: string; params?: any[] }>
+      ) => Promise<{ success: boolean; results: QueryResult[]; message?: string }>;
       getDatabaseInfo: (connectionId: string) => Promise<any>;
       getTableStructure: (connectionId: string, tableName: string) => Promise<any>;
       listTables: (connectionId: string) => Promise<any>;

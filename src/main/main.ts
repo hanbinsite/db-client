@@ -353,6 +353,11 @@ class DBClientApp {
       return await this.handleQueryExecution(connectionId, query, params);
     });
 
+    // 新增：批量执行（保持同一连接、对 MySQL 走串行队列原子化）
+    ipcMain.handle('execute-batch', async (event, { connectionId, queries }) => {
+      return await this.handleExecuteBatch(connectionId, queries);
+    });
+
     ipcMain.handle('get-database-info', async (event, connectionId) => {
       return await this.handleGetDatabaseInfo(connectionId);
     });
@@ -506,6 +511,16 @@ class DBClientApp {
     try {
       const result = await this.databaseService.executeQuery(connectionId, query, params);
       return result;
+    } catch (error: any) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  // 新增：批量执行（保持同一连接、对 MySQL 走串行队列原子化）
+  private async handleExecuteBatch(connectionId: string, queries: Array<{query: string, params?: any[]}>): Promise<any> {
+    try {
+      const results = await this.databaseService.executeBatch(connectionId, queries || []);
+      return { success: true, results };
     } catch (error: any) {
       return { success: false, message: error.message };
     }

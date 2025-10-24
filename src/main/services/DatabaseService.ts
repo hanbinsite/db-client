@@ -525,6 +525,46 @@ export class DatabaseService extends EventEmitter {
     }
   }
 
+  // 执行批量（串行、同一连接、保持队列原子性）
+  async executeBatch(poolId: string, queries: Array<{query: string, params?: any[]}>): Promise<QueryResult[]> {
+    const pool = this.getConnectionPool(poolId);
+    if (!pool) {
+      throw new Error('连接池不存在');
+    }
+
+    // 对 MySQL 使用串行队列并在同一连接中顺序执行，确保 USE 与后续查询原子化
+    if (this.poolTypes.get(poolId) === 'mysql') {
+      return await this.enqueueQuery(poolId, async () => {
+        const connection = await pool.acquire();
+        try {
+          const results: QueryResult[] = [];
+          for (const { query, params } of queries) {
+            const res = await connection.executeQuery(query, params);
+            this.emit('queryExecuted', poolId, query, res.success);
+            results.push(res);
+          }
+          return results;
+        } finally {
+          pool.release(connection);
+        }
+      });
+    }
+
+    // 其他数据库类型在同一连接中顺序执行即可
+    const connection = await pool.acquire();
+    try {
+      const results: QueryResult[] = [];
+      for (const { query, params } of queries) {
+        const res = await connection.executeQuery(query, params);
+        this.emit('queryExecuted', poolId, query, res.success);
+        results.push(res);
+      }
+      return results;
+    } finally {
+      pool.release(connection);
+    }
+  }
+
   // 获取数据库信息
   async getDatabaseInfo(poolId: string): Promise<DatabaseInfo> {
     const pool = this.getConnectionPool(poolId);
@@ -771,13 +811,27 @@ class MySQLConnection extends BaseDatabaseConnection {
       const startTime = Date.now();
       let rows, fields;
       
-      // 检测是否为USE命令，MySQL的prepared statement不支持USE命令
-      const trimmedQuery = query.trim().toUpperCase();
-      if (trimmedQuery.startsWith('USE ') && !trimmedQuery.includes('?')) {
-        // 对于USE命令，使用普通的query方法而不是execute方法
+      // 根据指令类型选择执行协议：USE/SHOW/DESCRIBE/EXPLAIN 走 text 协议，其他走 prepared
+      const trimmed = query.trim();
+      const upper = trimmed.toUpperCase();
+      if (upper.startsWith('USE ') && !trimmed.includes('?')) {
+        // 优先使用 changeUser 切库，避免某些驱动/版本下 USE 对 prepared 的上下文不生效问题
+        const dbPart = trimmed.replace(/;$/, '').slice(3).trim(); // 去除 'USE '
+        const dbName = dbPart.replace(/^`|`$/g, '');
+        await this.connection.changeUser({ database: dbName });
+        rows = [];
+        fields = [];
+      } else if (
+        upper.startsWith('SHOW ') ||
+        upper.startsWith('DESCRIBE ') ||
+        upper.startsWith('EXPLAIN ') ||
+        // 关键：SELECT DATABASE() 强制使用 text 协议，确保读取当前会话库
+        /^SELECT\s+DATABASE\(\)\b/.test(upper)
+      ) {
+        // 在某些 MySQL 版本下使用 prepared 可能出现上下文异常
         [rows, fields] = await this.connection.query(query);
       } else {
-        // 其他命令使用prepared statement
+        // 其他命令使用 prepared statement
         [rows, fields] = await this.connection.execute(query, params || []);
       }
       

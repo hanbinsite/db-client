@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disconnectDatabase: (connectionId: string) => ipcRenderer.invoke('disconnect-database', connectionId),
   executeQuery: (connectionId: string, query: string, params?: any[]) => 
     ipcRenderer.invoke('execute-query', { connectionId, query, params }),
+  // 新增：批量执行（同一连接、MySQL 串行队列原子化）
+  executeBatch: (connectionId: string, queries: Array<{query: string; params?: any[]}>) =>
+    ipcRenderer.invoke('execute-batch', { connectionId, queries }),
   getDatabaseInfo: (connectionId: string) => ipcRenderer.invoke('get-database-info', connectionId),
   getTableStructure: (connectionId: string, tableName: string) => 
     ipcRenderer.invoke('get-table-structure', { connectionId, tableName }),

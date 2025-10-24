@@ -268,11 +268,10 @@ export class MySQLTableStructureStrategy implements TableStructureStrategy {
   
   async getIndexes(poolId: string, database: string, table: string): Promise<TableQueryResult<TableIndex[]>> {
     try {
-      // 先切换到正确的数据库
-      await window.electronAPI.executeQuery(poolId, `USE ${database}`);
-      
-      // 使用SHOW INDEX语句获取更完整的索引信息
-      const query = `SHOW INDEX FROM \`${table}\``;
+      // 使用 SHOW INDEX FROM <table> FROM <database> 显式指定数据库，避免会话级切库影响其他标签页/CLI
+      const qdb = `\`${String(database || '').replace(/`/g, '``')}\``;
+      const qtbl = `\`${String(table || '').replace(/`/g, '``')}\``;
+      const query = `SHOW INDEX FROM ${qtbl} FROM ${qdb}`;
       const result = await window.electronAPI.executeQuery(poolId, query, []);
       
       if (!result || !result.success) {

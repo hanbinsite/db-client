@@ -129,6 +129,9 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
   // 内部保存当前选中的数据库，用于正确执行USE命令后的查询
   const [currentDatabase, setCurrentDatabase] = useState(database || '');
   
+  // 新增：结果展示优化相关状态
+  const [compactMode, setCompactMode] = useState(true); // 紧凑模式：截断长文本
+  const [maxColumnWidth, setMaxColumnWidth] = useState(80); // 列宽上限
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
@@ -244,6 +247,40 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
   useEffect(() => {
     scrollToBottom();
   }, [terminalOutput, scrollToBottom]);
+  
+  // 新增：通用格式化函数，控制长文本/对象/BLOB显示
+  const isBlob = (v: any) => {
+    if (!v) return false;
+    if (typeof v === 'object' && v !== null) {
+      // 处理 Buffer 的序列化表现 { type: 'Buffer', data: [] }
+      if ((v as any).type === 'Buffer' && Array.isArray((v as any).data)) return true;
+      // 通用二进制类型判断（Uint8Array 等）
+      if ((v as any).byteLength !== undefined && (v as any).buffer !== undefined) return true;
+    }
+    return false;
+  };
+  const formatCell = (val: any, maxW: number) => {
+    let s = '';
+    if (val === null || val === undefined) {
+      s = 'NULL';
+    } else if (isBlob(val)) {
+      const len = (val?.length ?? val?.byteLength ?? (Array.isArray(val?.data) ? val.data.length : 0)) || 0;
+      s = `<BLOB ${len} bytes>`;
+    } else if (typeof val === 'object') {
+      try {
+        s = JSON.stringify(val);
+      } catch {
+        s = String(val);
+      }
+    } else {
+      s = String(val);
+    }
+    if (Number.isFinite(maxW) && maxW > 0 && s.length > maxW) {
+      const cut = Math.max(1, maxW - 1);
+      s = s.slice(0, cut) + '…';
+    }
+    return s;
+  };
   
   // 解析命令行
   const parseCommandLine = (line: string): { command: string; params: string } => {
@@ -438,31 +475,36 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
                                            (columns[0].includes('Database') || 
                                             columns[0].includes('Tables_in'));
               
+              const effectiveMax = compactMode ? maxColumnWidth : Number.POSITIVE_INFINITY;
+              
               if (isDatabaseOrTableList) {
                 // 显示列名 - 使用\r\n确保Windows系统上正确换行
-                resultContent += columns[0] + '\r\n';
-                resultContent += '-'.repeat(columns[0].length) + '\r\n';
+                const head = formatCell(columns[0], effectiveMax);
+                resultContent += head + '\r\n';
+                resultContent += '-'.repeat(head.length) + '\r\n';
                 
                 // 每个数据库/表名单独显示一行
                 rows.forEach((row: Record<string, any>) => {
                   const value = row[columns[0]];
-                  const valueStr = value === null ? 'NULL' : 
-                                 (typeof value === 'object' ? JSON.stringify(value) : String(value));
+                  const valueStr = formatCell(value, effectiveMax);
                   resultContent += valueStr + '\r\n';
                 });
                 resultContent += '\r\n';
               } else if (columns.length > 0) {
-                // 对于普通查询结果，使用表格格式显示
-                // 计算每列的最大宽度
-                const columnWidths = columns.map(col => col.length);
+                // 对于普通查询结果，使用表格格式显示（列宽受上限控制）
+                // 计算每列的最大宽度（包含列名与已截断的单元值）
+                const columnWidths = columns.map(col => {
+                  const header = formatCell(col, effectiveMax);
+                  return Math.min(header.length, Number.isFinite(effectiveMax) ? (effectiveMax as number) : header.length);
+                });
                 
-                // 计算数据行中每列的最大宽度
+                // 计算数据行中每列的最大宽度（基于截断后的值）
                 rows.forEach((row: Record<string, any>) => {
                   columns.forEach((col, index) => {
                     const value = row[col];
-                    const valueStr = value === null ? 'NULL' : 
-                                   (typeof value === 'object' ? JSON.stringify(value) : String(value));
-                    columnWidths[index] = Math.max(columnWidths[index], valueStr.length);
+                    const valueStr = formatCell(value, effectiveMax);
+                    const targetMax = Number.isFinite(effectiveMax) ? (effectiveMax as number) : valueStr.length;
+                    columnWidths[index] = Math.min(Math.max(columnWidths[index], valueStr.length), targetMax);
                   });
                 });
                 
@@ -476,7 +518,8 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
                 // 生成表头行
                 resultContent += '|';
                 columns.forEach((col, index) => {
-                  resultContent += ` ${col.padEnd(columnWidths[index])} |`;
+                  const head = formatCell(col, effectiveMax);
+                  resultContent += ` ${head.padEnd(columnWidths[index])} |`;
                 });
                 resultContent += '\r\n';
                 
@@ -492,8 +535,7 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
                   resultContent += '|';
                   columns.forEach((col, index) => {
                     const value = row[col];
-                    const valueStr = value === null ? 'NULL' : 
-                                   (typeof value === 'object' ? JSON.stringify(value) : String(value));
+                    const valueStr = formatCell(value, effectiveMax);
                     resultContent += ` ${valueStr.padEnd(columnWidths[index])} |`;
                   });
                   resultContent += '\r\n';
@@ -512,6 +554,9 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
               
               // 打印总行数 - 使用\r\n确保Windows系统上正确换行
               resultContent += `\r\n${rows.length} row${rows.length !== 1 ? 's' : ''} in set (${result.executionTime || 0} ms)`;
+              if (compactMode) {
+                resultContent += `\r\n提示: 已启用紧凑展示，列宽上限为 ${maxColumnWidth}，超长内容以 … 截断`;
+              }
             } else if (result.rowCount !== undefined) {
               // 对于非查询语句，显示受影响的行数
               resultContent = `Query OK, ${result.rowCount} row${result.rowCount !== 1 ? 's' : ''} affected (${result.executionTime || 0} ms)`;
@@ -895,6 +940,56 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
           <div>{getConnectionInfo()}</div>
           <Space size="small">
             <button 
+              onClick={() => setCompactMode(!compactMode)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#8B949E',
+                cursor: 'pointer',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '3px 8px',
+                borderRadius: '3px',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#21262D';
+                e.currentTarget.style.color = '#F0F6FC';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = '#8B949E';
+              }}
+            >
+              紧凑: {compactMode ? '开' : '关'}
+            </button>
+            <button 
+              onClick={() => setMaxColumnWidth(prev => (prev >= 120 ? 60 : prev >= 80 ? 120 : 80))}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#8B949E',
+                cursor: 'pointer',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '3px 8px',
+                borderRadius: '3px',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#21262D';
+                e.currentTarget.style.color = '#F0F6FC';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = '#8B949E';
+              }}
+            >
+              列宽: {maxColumnWidth}
+            </button>
+            <button 
               onClick={clearTerminal}
               style={{
                 background: 'none',
@@ -917,7 +1012,6 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
                 e.currentTarget.style.color = '#8B949E';
               }}
             >
-              <ClearOutlined style={{ marginRight: '2px', fontSize: '12px' }} />
               清空
             </button>
             <button 
@@ -943,7 +1037,6 @@ const MySqlCliPage: React.FC<Props> = ({ connection, database, darkMode = false,
                 e.currentTarget.style.color = '#8B949E';
               }}
             >
-              <HistoryOutlined style={{ marginRight: '2px', fontSize: '12px' }} />
               历史
             </button>
           </Space>

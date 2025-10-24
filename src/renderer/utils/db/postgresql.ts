@@ -22,10 +22,10 @@ export class PostgresDbUtils extends BaseDbUtils {
     const poolId = connection.connectionId || connection.id;
     if (!window.electronAPI || !poolId) return [];
     const currentSchema = schema || 'public';
-    const sql = `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name`;
-    const res = await window.electronAPI.executeQuery(poolId, sql, [currentSchema]);
+    // 使用专用IPC，避免在渲染进程拼SQL
+    const res = await window.electronAPI.listTablesWithSchema(poolId, currentSchema);
     if (res && res.success && Array.isArray(res.data)) {
-      return res.data.map((row: any) => row.table_name || Object.values(row)[0]);
+      return res.data.map((row: any) => row.table_name || Object.values(row)[0] || row);
     }
     return [];
   }
@@ -77,17 +77,10 @@ export class PostgresDbUtils extends BaseDbUtils {
   async getSchemas(connection: DatabaseConnection, databaseName: string): Promise<string[]> {
     const poolId = connection.connectionId || connection.id;
     if (!window.electronAPI || !poolId) return [];
-    const sqlPrimary = `SELECT schema_name FROM information_schema.schemata ORDER BY schema_name`;
-    const primary = await window.electronAPI.executeQuery(poolId, sqlPrimary);
-    if (primary && primary.success && Array.isArray(primary.data)) {
-      const schemas = primary.data.map((row: any) => row.schema_name || Object.values(row)[0]);
-      return schemas.filter((s: string) => !['pg_toast', 'pg_temp_1', 'pg_toast_temp_1'].includes(s));
-    }
-    const sqlFallback = `SELECT nspname AS schema_name FROM pg_namespace ORDER BY nspname`;
-    const fallback = await window.electronAPI.executeQuery(poolId, sqlFallback);
-    if (fallback && fallback.success && Array.isArray(fallback.data)) {
-      const schemas = fallback.data.map((row: any) => row.schema_name || row.nspname || Object.values(row)[0]);
-      return schemas.filter((s: string) => !['pg_toast', 'pg_temp_1', 'pg_toast_temp_1'].includes(s));
+    // 使用专用IPC，后端已做过滤
+    const res = await window.electronAPI.listSchemas(poolId);
+    if (res && res.success && Array.isArray(res.data)) {
+      return res.data.map((row: any) => row.schema_name || row.nspname || row.name || Object.values(row)[0] || row);
     }
     return [];
   }

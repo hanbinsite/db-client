@@ -262,53 +262,28 @@ const PostgreSqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, t
   // 获取表结构
   const getTableSchema = async (poolId: string) => {
     try {
-      // 在PostgreSQL中，我们通过查询pg_attribute表获取列信息
-      const schemaQuery = `SELECT a.attname as Field,
-                               pg_catalog.format_type(a.atttypid, a.atttypmod) as Type,
-                               (SELECT substring(pg_catalog.pg_get_expr(d.adbin, d.adrelid) for 128)
-                                FROM pg_catalog.pg_attrdef d
-                                WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) as Default,
-                               CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END as Null,
-                               CASE WHEN EXISTS(
-                                 SELECT 1
-                                 FROM pg_catalog.pg_index i
-                                 JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
-                                 JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
-                                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                                 WHERE i.indrelid = a.attrelid
-                                   AND a.attnum = ANY(i.indkey)
-                                   AND i.indisprimary
-                               ) THEN 'PRI' ELSE '' END as Key
-                        FROM pg_catalog.pg_attribute a
-                        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
-                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE c.relname = $1
-                          AND n.nspname = $2
-                          AND a.attnum > 0
-                          AND NOT a.attisdropped
-                        ORDER BY a.attnum;`;
-      
-      const schemaResult = await window.electronAPI.executeQuery(poolId, schemaQuery, [tableName, database]);
-      
-      if (schemaResult && schemaResult.success && Array.isArray(schemaResult.data)) {
-        // 构建schemaColumns，确保保存完整的数据库类型信息
-        const schemaColumns = schemaResult.data.map((col: any) => ({
-          title: col.Field,
-          dataIndex: col.Field,
-          key: col.Field,
-          type: col.Type.includes('int') || col.Type.includes('numeric') || 
-                col.Type.includes('float') || col.Type.includes('double precision') ||
-                col.Type.includes('decimal') ? 'number' : 'string',
-          dbType: col.Type, // 存储原始数据库字段类型
-          editable: col.Key !== 'PRI' && col.Field.toLowerCase().indexOf('created_at') === -1
+      // 使用主进程专用API获取包含schema的表结构
+      const schemaResult = await window.electronAPI.getTableStructureWithSchema(poolId, database, tableName);
+      if (schemaResult && schemaResult.success && schemaResult.structure && Array.isArray(schemaResult.structure.columns)) {
+        const schemaColumns = schemaResult.structure.columns.map((col: any) => ({
+          title: col.name,
+          dataIndex: col.name,
+          key: col.name,
+          type: typeof col.type === 'string' && (
+            col.type.toLowerCase().includes('int') ||
+            col.type.toLowerCase().includes('numeric') ||
+            col.type.toLowerCase().includes('float') ||
+            col.type.toLowerCase().includes('double') ||
+            col.type.toLowerCase().includes('decimal')
+          ) ? 'number' : 'string',
+          dbType: col.type,
+          editable: col.name && col.name.toLowerCase().indexOf('created_at') === -1
         }));
 
-        // 初始化可见列
         if (schemaColumns.length && visibleColumns.size === 0) {
           setVisibleColumns(new Set(schemaColumns.map((col: {key: string}) => col.key)));
         }
 
-        // 总是设置列配置，确保使用完整的表结构信息
         setColumns(schemaColumns);
       }
     } catch (error) {

@@ -374,6 +374,34 @@ class DBClientApp {
       return await this.handleListDatabases(connectionId);
     });
 
+    // PostgreSQL 专用：模式列表与按模式查询
+    ipcMain.handle('list-schemas', async (event, connectionId) => {
+      try {
+        const schemas = await this.databaseService.listSchemas(connectionId);
+        return { success: true, data: schemas };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('list-tables-with-schema', async (event, { connectionId, schema }) => {
+      try {
+        const tables = await this.databaseService.listTablesWithSchema(connectionId, schema);
+        return { success: true, data: tables };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('get-table-structure-with-schema', async (event, { connectionId, schema, tableName }) => {
+      try {
+        const structure = await this.databaseService.getTableStructureWithSchema(connectionId, schema, tableName);
+        return { success: true, structure };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
     // Redis 发布/订阅：订阅与取消订阅
     ipcMain.handle('redis-subscribe', async (event, { connectionId, channels, isPattern }) => {
       try {
@@ -553,6 +581,32 @@ class DBClientApp {
     }
   }
 
+  private async handleGetTableStructureWithSchema(connectionId: string, schema: string, tableName: string): Promise<any> {
+    try {
+      const structure = await this.databaseService.getTableStructureWithSchema(connectionId, schema, tableName);
+      return { success: true, structure };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
+
+  private async handleListSchemas(connectionId: string): Promise<any> {
+    try {
+      const schemas = await this.databaseService.listSchemas(connectionId);
+      return { success: true, data: schemas };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
+
+  private async handleListTablesWithSchema(connectionId: string, schema: string): Promise<any> {
+    try {
+      const tables = await this.databaseService.listTablesWithSchema(connectionId, schema);
+      return { success: true, data: tables };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
   private async handleListDatabases(connectionId: string): Promise<any> {
     try {
       const databases = await this.databaseService.listDatabases(connectionId);

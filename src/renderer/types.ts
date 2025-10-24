@@ -53,6 +53,10 @@ declare global {
       getTableStructure: (connectionId: string, tableName: string) => Promise<any>;
       listTables: (connectionId: string) => Promise<any>;
       listDatabases: (connectionId: string) => Promise<any>;
+      // PostgreSQL/GaussDB 专用：带 schema 的接口
+      listSchemas: (connectionId: string) => Promise<{ success: boolean; data: string[]; message?: string }>;
+      listTablesWithSchema: (connectionId: string, schema: string) => Promise<{ success: boolean; data: string[]; message?: string }>;
+      getTableStructureWithSchema: (connectionId: string, schema: string, tableName: string) => Promise<{ success: boolean; structure: TableStructure; message?: string }>;
       // 新增：连接池配置（返回配置对象或null）
       getConnectionPoolConfig: (connectionId: string) => Promise<{
         maxConnections: number;

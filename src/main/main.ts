@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
 import { autoUpdater } from 'electron-updater';
+import { DatabaseConnectionFactory } from './services/DatabaseService';
 
 class DBClientApp {
   private mainWindow: BrowserWindow | null = null;
@@ -11,8 +12,26 @@ class DBClientApp {
   private connectionStoreService: ConnectionStoreService = new ConnectionStoreService();
 
   constructor() {
-    this.setupApp();
+    // 仅注册IPC处理器，窗口创建在app ready后进行
     this.setupIpcHandlers();
+
+    app.on('ready', () => {
+      this.setupApp();
+      this.createMenu();
+      this.initAutoUpdate();
+    });
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        this.setupApp();
+      }
+    });
+
+    app.on('window-all-closed', () => {
+      if (process.platform !== 'darwin') {
+        app.quit();
+      }
+    });
   }
 
   private setupApp(): void {
@@ -29,35 +48,12 @@ class DBClientApp {
     const iconPath = process.platform === 'win32'
       ? (fs.existsSync(iconBase + '.ico') ? iconBase + '.ico' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'))
       : (fs.existsSync(iconBase + '.icns') ? iconBase + '.icns' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'));
-    const appIcon = nativeImage.createFromPath(iconPath);
-    app.dock?.setIcon(appIcon); // macOS
-    
-    app.whenReady().then(() => {
-      this.createMainWindow();
-      this.createMenu();
-      this.initAutoUpdate();
-    });
-
-    app.on('window-all-closed', () => {
-      if (process.platform !== 'darwin') {
-        app.quit();
-      }
-    });
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        this.createMainWindow();
-      }
-    });
-  }
-
-  private createMainWindow(): void {
-    // 确定图标路径 - 使用绝对路径确保正确加载（按平台选择best格式）
-    const iconBase = path.join(process.cwd(), 'assets', 'database-icon');
-    const iconPath = process.platform === 'win32'
-      ? (fs.existsSync(iconBase + '.ico') ? iconBase + '.ico' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'))
-      : (fs.existsSync(iconBase + '.icns') ? iconBase + '.icns' : (fs.existsSync(iconBase + '.png') ? iconBase + '.png' : iconBase + '.svg'));
     const icon = nativeImage.createFromPath(iconPath);
+
+    // 避免重复创建窗口
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      return;
+    }
 
     this.mainWindow = new BrowserWindow({
       width: 1400,
@@ -246,57 +242,35 @@ class DBClientApp {
                   const boolLike = typeof valStr === 'boolean' || (typeof valStr === 'string' && (valStr.toLowerCase() === 'true' || valStr.toLowerCase() === 'false'));
                   if (!boolLike) isBoolean = false;
                   
-                  // 数字检测
-                  const num = typeof valStr === 'number' ? valStr : parseFloat(valStr);
-                  const numOk = typeof num === 'number' && isFinite(num) && !(typeof valStr === 'string' && valStr === '');
-                  if (!numOk) {
+                  // 检查数字
+                  const num = Number(valStr);
+                  if (isNaN(num)) {
                     isNumber = false;
                   } else {
-                    if (String(valStr).includes('.')) hasDecimal = true;
+                    if (!Number.isInteger(num)) hasDecimal = true;
                   }
                   
-                  // 日期检测：常见格式用 dayjs 解析
-                  let dateOk = false;
-                  if ((valStr as any) instanceof Date) {
-                    dateOk = true;
-                    if (valStr.getHours() || valStr.getMinutes() || valStr.getSeconds()) sawTime = true;
-                  } else if (typeof valStr === 'string') {
-                    const candidates = [
-                      'YYYY-MM-DD',
-                      'YYYY/MM/DD',
-                      'YYYY-MM-DD HH:mm:ss',
-                      'YYYY/MM/DD HH:mm:ss'
-                    ];
-                    // 宽松：允许 dayjs 自动解析 ISO/UTC
-                    const d = dayjs(valStr);
-                    if (d.isValid()) {
-                      dateOk = true;
-                      if (!(valStr.length <= 10)) sawTime = true; // 粗略判断是否包含时间
+                  // 检查日期（支持yyyy-mm-dd、yyyy/mm/dd、yyyy-mm-dd HH:mm:ss）
+                  if (typeof valStr === 'string') {
+                    const datePatterns = [/^\d{4}[-/]\d{2}[-/]\d{2}$/];
+                    const dateTimePatterns = [/^\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2}$/];
+                    if (!datePatterns.some((re: RegExp) => re.test(valStr)) && !dateTimePatterns.some((re: RegExp) => re.test(valStr))) {
+                      isDate = false;
                     } else {
-                      // 尝试指定格式
-                      for (const fmt of candidates) {
-                        const dd = dayjs(valStr, fmt, true);
-                        if (dd.isValid()) { dateOk = true; if (fmt.includes('HH')) sawTime = true; break; }
+                      if (dateTimePatterns.some((re: RegExp) => re.test(valStr))) {
+                        sawTime = true;
                       }
                     }
-                  } else if (typeof valStr === 'number') {
-                    // Excel序列或时间戳（毫秒级）不强行当日期
-                    dateOk = false;
+                  } else if (!(valStr instanceof Date)) {
+                    isDate = false;
                   }
-                  if (!dateOk) isDate = false;
-                  
-                  // 早停优化
-                  if (!isNumber && !isBoolean && !isDate) break;
                 }
                 
-                if (!sawNonNull) {
-                  types[header] = { type: 'string' };
-                } else if (isBoolean) {
-                  types[header] = { type: 'boolean' };
-                } else if (isDate) {
-                  types[header] = { type: 'date', format: sawTime ? 'yyyy-mm-dd hh:mm:ss' : 'yyyy-mm-dd' };
-                } else if (isNumber) {
-                  types[header] = { type: 'number', format: hasDecimal ? '0.00' : '0' };
+                if (sawNonNull) {
+                  if (isBoolean) types[header] = { type: 'boolean' };
+                  else if (isDate) types[header] = { type: 'date', format: sawTime ? 'yyyy-mm-dd hh:mm:ss' : 'yyyy-mm-dd' };
+                  else if (isNumber) types[header] = { type: 'number', format: hasDecimal ? '0.00' : '0' };
+                  else types[header] = { type: 'string' };
                 } else {
                   types[header] = { type: 'string' };
                 }
@@ -304,144 +278,30 @@ class DBClientApp {
               return types;
             };
             
-            const columnTypes = inferColumnTypes(data, headers);
+            const types = inferColumnTypes(data, headers);
+            const worksheetData: any[] = [headers];
             
-            // 构建 AOA（数组的数组）：首行表头，其后数据行
-            const aoa: any[][] = [headers];
-            for (const row of data) {
-              const line = headers.map(h => row[h]);
-              aoa.push(line);
-            }
-            
-            // 创建工作簿与工作表
-            const workbook = XLSX.utils.book_new();
-            const worksheet = XLSX.utils.aoa_to_sheet(aoa);
-            
-            // 应用每列的类型和格式
-            for (let c = 0; c < headers.length; c++) {
-              const header = headers[c];
-              const colType = columnTypes[header];
-              for (let r = 1; r < aoa.length; r++) { // 从第2行开始是数据
-                const addr = XLSX.utils.encode_cell({ c, r });
-                const cell = worksheet[addr];
-                if (!cell) continue; // 空单元格
-                const raw: any = aoa[r][c];
-                
-                if (colType.type === 'date') {
-                  // 将可解析日期转为 Date 并设置格式
-                  let d: Date | null = null;
-                  if ((raw as any) instanceof Date) {
-                    d = raw as Date;
-                  } else if (typeof raw === 'string') {
-                    const parsed = dayjs(raw);
-                    d = parsed.isValid() ? parsed.toDate() : null;
-                  }
-                  if (d) {
-                    cell.v = d;
-                    cell.t = 'd';
-                    cell.z = colType.format || 'yyyy-mm-dd hh:mm:ss';
-                  } else {
-                    // 保留为字符串
-                    cell.v = raw == null ? '' : String(raw);
-                    cell.t = 's';
-                  }
-                } else if (colType.type === 'number') {
-                  const num = typeof raw === 'number' ? raw : parseFloat(String(raw));
-                  if (typeof num === 'number' && isFinite(num)) {
-                    cell.v = num;
-                    cell.t = 'n';
-                    cell.z = colType.format || '0';
-                  } else {
-                    cell.v = raw == null ? '' : String(raw);
-                    cell.t = 's';
-                  }
-                } else if (colType.type === 'boolean') {
-                  let b: boolean | null = null;
-                  if (typeof raw === 'boolean') b = raw;
-                  else if (typeof raw === 'string') {
-                    const s = raw.toLowerCase();
-                    if (s === 'true') b = true; else if (s === 'false') b = false;
-                  }
-                  if (b === null) {
-                    cell.v = raw == null ? '' : String(raw);
-                    cell.t = 's';
-                  } else {
-                    cell.v = b;
-                    cell.t = 'b';
-                  }
-                } else {
-                  cell.v = raw == null ? '' : String(raw);
-                  cell.t = 's';
-                }
-                worksheet[addr] = cell;
-              }
-            }
-            
-            // 添加工作表到工作簿
-            XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-            
-            // 生成Excel文件内容
-            const excelBuffer = XLSX.write(workbook, {
-              bookType: 'xlsx',
-              type: 'buffer'
-            });
-            
-            // 使用Node.js的fs写入文件
-            fs.writeFileSync(filePath, excelBuffer);
-          }
-        } else if (format === 'sql') {
-          // SQL格式处理：根据数据库类型生成INSERT语句
-          if (data && data.length > 0) {
-            const headers = Object.keys(data[0]);
-            const baseName = path.basename(filePath, '.sql');
-            // 解析文件名，将"database-table"格式转换为"database.table"格式
-            const tableName = baseName.includes('-') ? baseName.replace('-', '.') : baseName;
-            const sqlInserts: string[] = [];
-            
-            // 根据数据库类型选择合适的SQL语法
             for (const row of data) {
               const values = headers.map(header => {
-                let value = row[header];
-                
-                // 处理NULL值
-                if (value === null || value === undefined) {
-                  return 'NULL';
-                }
-                
-                // 根据数据库类型处理字符串值
-                if (typeof value === 'string') {
-                  // 转义单引号
-                  return `'${String(value).replace(/'/g, "''")}'`;
-                }
-                
-                if (typeof value === 'number') {
-                  return String(value);
-                }
-                
-                if (typeof value === 'boolean') {
-                  return value ? (dbType === 'postgresql' ? 'TRUE' : '1') : (dbType === 'postgresql' ? 'FALSE' : '0');
-                }
-                
-                if ((value as any) instanceof Date) {
-                  const formatted = dayjs(value).format('YYYY-MM-DD HH:mm:ss');
-                  return `'${formatted}'`;
-                }
-                
-                // 其他类型统一转字符串
-                return `'${String(value)}'`;
+                const t = types[header].type;
+                const v = row[header];
+                if (t === 'number') return Number(v);
+                if (t === 'boolean') return (typeof v === 'boolean') ? v : String(v).toLowerCase() === 'true';
+                if (t === 'date') return typeof v === 'string' ? new Date(v) : v;
+                return v == null ? '' : String(v);
               });
-              
-              const sql = `INSERT INTO ${tableName} (${headers.map(h => `\`${h}\``).join(', ')}) VALUES (${values.join(', ')});`;
-              sqlInserts.push(sql);
+              worksheetData.push(values);
             }
             
-            fs.writeFileSync(filePath, sqlInserts.join('\n'), 'utf8');
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+            XLSX.utils.book_append_sheet(wb, ws, `导出_${dayjs().format('YYYYMMDD_HHmmss')}`);
+            XLSX.writeFile(wb, filePath);
           }
         }
-        
         return { success: true };
       } catch (error) {
-        console.error('文件写入失败:', error);
+        console.error('写入导出文件失败:', error);
         return { success: false, error: (error as Error).message };
       }
     });
@@ -493,6 +353,11 @@ class DBClientApp {
       return await this.handleQueryExecution(connectionId, query, params);
     });
 
+    // 新增：批量执行（保持同一连接、对 MySQL 走串行队列原子化）
+    ipcMain.handle('execute-batch', async (event, { connectionId, queries }) => {
+      return await this.handleExecuteBatch(connectionId, queries);
+    });
+
     ipcMain.handle('get-database-info', async (event, connectionId) => {
       return await this.handleGetDatabaseInfo(connectionId);
     });
@@ -507,6 +372,62 @@ class DBClientApp {
 
     ipcMain.handle('list-databases', async (event, connectionId) => {
       return await this.handleListDatabases(connectionId);
+    });
+
+    // PostgreSQL 专用：模式列表与按模式查询
+    ipcMain.handle('list-schemas', async (event, connectionId) => {
+      try {
+        const schemas = await this.databaseService.listSchemas(connectionId);
+        return { success: true, data: schemas };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('list-tables-with-schema', async (event, { connectionId, schema }) => {
+      try {
+        const tables = await this.databaseService.listTablesWithSchema(connectionId, schema);
+        return { success: true, data: tables };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('get-table-structure-with-schema', async (event, { connectionId, schema, tableName }) => {
+      try {
+        const structure = await this.databaseService.getTableStructureWithSchema(connectionId, schema, tableName);
+        return { success: true, structure };
+      } catch (e: any) {
+        return { success: false, message: e?.message || String(e) };
+      }
+    });
+
+    // Redis 发布/订阅：订阅与取消订阅
+    ipcMain.handle('redis-subscribe', async (event, { connectionId, channels, isPattern }) => {
+      try {
+        const ok = await this.databaseService.redisSubscribe(connectionId, channels || [], !!isPattern);
+        return { success: ok };
+      } catch (e: any) {
+        return { success: false, error: e?.message || String(e) };
+      }
+    });
+
+    ipcMain.handle('redis-unsubscribe', async (event, { connectionId, channels, isPattern }) => {
+      try {
+        const ok = await this.databaseService.redisUnsubscribe(connectionId, channels || [], !!isPattern);
+        return { success: ok };
+      } catch (e: any) {
+        return { success: false, error: e?.message || String(e) };
+      }
+    });
+
+    // Redis 发布/订阅：主进程转发消息到渲染进程
+    this.databaseService.on('redisPubSubMessage', (connectionId: string, channel: string, message: string) => {
+      try {
+        this.mainWindow?.webContents.send('redis-pubsub-message', { connectionId, channel, message, ts: Date.now() });
+      } catch (e) {
+        console.error('Failed to send redis-pubsub-message:', e);
+      }
     });
 
     // 新增：获取连接池配置（用于渲染端动态并发）
@@ -623,6 +544,16 @@ class DBClientApp {
     }
   }
 
+  // 新增：批量执行（保持同一连接、对 MySQL 走串行队列原子化）
+  private async handleExecuteBatch(connectionId: string, queries: Array<{query: string, params?: any[]}>): Promise<any> {
+    try {
+      const results = await this.databaseService.executeBatch(connectionId, queries || []);
+      return { success: true, results };
+    } catch (error: any) {
+      return { success: false, message: error.message };
+    }
+  }
+
   private async handleGetDatabaseInfo(connectionId: string): Promise<any> {
     try {
       const info = await this.databaseService.getDatabaseInfo(connectionId);
@@ -650,6 +581,32 @@ class DBClientApp {
     }
   }
 
+  private async handleGetTableStructureWithSchema(connectionId: string, schema: string, tableName: string): Promise<any> {
+    try {
+      const structure = await this.databaseService.getTableStructureWithSchema(connectionId, schema, tableName);
+      return { success: true, structure };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
+
+  private async handleListSchemas(connectionId: string): Promise<any> {
+    try {
+      const schemas = await this.databaseService.listSchemas(connectionId);
+      return { success: true, data: schemas };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
+
+  private async handleListTablesWithSchema(connectionId: string, schema: string): Promise<any> {
+    try {
+      const tables = await this.databaseService.listTablesWithSchema(connectionId, schema);
+      return { success: true, data: tables };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
   private async handleListDatabases(connectionId: string): Promise<any> {
     try {
       const databases = await this.databaseService.listDatabases(connectionId);
@@ -660,87 +617,27 @@ class DBClientApp {
   }
 
   private async handleTestConnection(config: any): Promise<any> {
-    let poolId: string | undefined;
-    let testResult: any = null;
-    // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
-    const databaseName = config.database || ''; // 不使用默认数据库名，只使用配置中指定的数据库名
-    const generatedPoolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
-    
     try {
-      // 记录连接参数（包含密码以帮助调试）
-      console.log('开始测试数据库连接:', {
-        type: config.type,
-        host: config.host,
-        port: config.port,
-        database: config.database,
-        username: config.username,
-        password: config.password,
-        timeout: config.timeout,
-        ssl: config.ssl
-      });
-
-      // 首先检查连接池是否已经存在
-      if (this.databaseService.getConnectionPool(generatedPoolId)) {
-        console.log('连接池已存在，直接使用现有连接池进行测试');
-        poolId = generatedPoolId;
-      } else {
-        // 使用连接池测试连接 - 增加超时时间，改进测试连接配置
-        console.log('正在创建连接池...');
-        poolId = await this.databaseService.createConnectionPool(config, {
-          maxConnections: 2, // 增加一个连接以避免单点问题
-          minConnections: 1,
-          acquireTimeout: 60000, // 增加到60秒以适应较慢的连接
-          idleTimeout: 30000,
-          testOnBorrow: true
-        });
+      // 验证配置
+      const validation = DatabaseConnectionFactory.validateConnectionConfig(config);
+      if (!validation.valid) {
+        return { success: false, message: `配置验证失败: ${validation.errors.join(', ')}` };
       }
-
-      console.log('连接池创建成功，立即返回测试成功，不再执行测试查询');
-      testResult = { 
-        success: true, 
+  
+      // 使用临时连接进行测试，不创建或注册连接池
+      const factory = new DatabaseConnectionFactory();
+      const tempConn = factory.createConnection(config);
+      await tempConn.connect();
+      await tempConn.disconnect();
+  
+      return {
+        success: true,
         message: '连接测试成功',
         data: { success: true }
       };
-      return testResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorStack = error instanceof Error ? error.stack : '';
-      // 记录详细的错误信息到控制台
-      console.error('连接测试失败:', errorMessage);
-      console.error('错误堆栈:', errorStack);
-      
-      // 提供更详细的错误信息和建议
-      let detailedMessage = errorMessage;
-      if (errorMessage.includes('获取连接超时')) {
-        if (config.type === 'postgresql') {
-          detailedMessage = '连接PostgreSQL数据库超时：请检查网络连接、防火墙设置、数据库服务器状态以及连接配置是否正确。\n\n可能的解决方案：\n1. 确认PostgreSQL服务器正在运行并监听指定端口（默认5432）\n2. 检查防火墙设置是否允许连接\n3. 验证主机名、端口、用户名、密码和数据库名是否正确\n4. 确认PostgreSQL用户有足够的权限\n5. 检查网络连接稳定性';
-        } else {
-          detailedMessage = '连接数据库超时：请检查网络连接、防火墙设置、数据库服务器状态以及连接配置是否正确。\n\n可能的解决方案：\n1. 确认MySQL服务器正在运行并监听指定端口\n2. 检查防火墙设置是否允许连接\n3. 验证主机名、端口、用户名、密码和数据库名是否正确\n4. 确认MySQL用户有足够的权限\n5. 检查网络连接稳定性';
-        }
-      } else if (errorMessage.includes('连接池已存在')) {
-        detailedMessage = '连接池已存在：正在清理残留连接，请稍后重试。';
-      }
-      
-      testResult = { 
-        success: false, 
-        error: detailedMessage 
-      };
-      return testResult;
-    } finally {
-      // 只在测试失败时断开连接池，测试成功时保留连接池以便应用程序使用
-      if (!testResult || !testResult.success) {
-        try {
-          console.log('测试失败，正在清理测试连接池...');
-          // 优先使用实际创建的poolId，如果没有则使用生成的poolId
-          await this.databaseService.disconnect(poolId || generatedPoolId);
-          console.log('测试连接池清理完成');
-        } catch (disconnectError) {
-          console.debug('断开测试连接池失败:', disconnectError);
-          // 静默忽略断开错误，不影响测试结果
-        }
-      } else {
-        console.log('测试成功，保留连接池以便应用程序使用');
-      }
+      return { success: false, message: errorMessage, error: errorMessage };
     }
   }
 
@@ -766,4 +663,5 @@ class DBClientApp {
   }
 }
 
+// 启动应用
 new DBClientApp();

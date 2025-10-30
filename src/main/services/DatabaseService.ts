@@ -1,672 +1,159 @@
 import { EventEmitter } from 'events';
-import { DatabaseConnection, DatabaseType, QueryResult, DatabaseInfo, TableStructure } from '../../renderer/types';
-
-// 连接池配置接口
-export interface IConnectionPoolConfig {
-  maxConnections?: number;
-  minConnections?: number;
-  acquireTimeout?: number;
-  idleTimeout?: number;
-  testOnBorrow?: boolean;
-}
-
-// 连接池状态接口
-export interface IConnectionPoolStatus {
-  total: number;
-  active: number;
-  idle: number;
-  waiting: number;
-}
-
-// 数据库连接池接口
-export interface IDatabaseConnectionPool {
-  // 连接池管理
-  initialize(): Promise<void>;
-  destroy(): Promise<void>;
-  getStatus(): IConnectionPoolStatus;
-  
-  // 连接获取和释放
-  acquire(): Promise<IDatabaseConnection>;
-  release(connection: IDatabaseConnection): void;
-  
-  // 连接池配置
-  getConfig(): IConnectionPoolConfig;
-  updateConfig(config: Partial<IConnectionPoolConfig>): void;
-}
-
-// 数据库连接接口
-export interface IDatabaseConnection {
-  // 连接状态
-  connect(): Promise<boolean>;
-  disconnect(): Promise<void>;
-  isConnected(): boolean;
-  ping(): Promise<boolean>;
-  
-  // 数据操作
-  executeQuery(query: string, params?: any[]): Promise<QueryResult>;
-  executeTransaction(queries: Array<{query: string, params?: any[]}>): Promise<boolean>;
-  
-  // 元数据查询
-  getDatabaseInfo(): Promise<DatabaseInfo>;
-  getTableStructure(tableName: string): Promise<TableStructure>;
-  listTables(): Promise<string[]>;
-  listDatabases(): Promise<string[]>;
-  
-  // 连接信息
-  getId(): string;
-  getConfig(): DatabaseConnection;
-}
 
 // 数据库连接工厂接口
-export interface IDatabaseConnectionFactory {
+interface IDatabaseConnectionFactory {
   createConnection(config: DatabaseConnection): IDatabaseConnection;
   getSupportedTypes(): DatabaseType[];
 }
 
-// 抽象基础连接类
-export abstract class BaseDatabaseConnection implements IDatabaseConnection {
-  protected connection: any = null;
-  protected config: DatabaseConnection;
-  protected isConnecting: boolean = false;
+// 数据库连接接口
+interface IDatabaseConnection {
+  connect(): Promise<boolean>;
+  disconnect(): Promise<void>;
+  executeQuery(query: string, params?: any[]): Promise<QueryResult>;
+  getDatabaseInfo(): Promise<DatabaseInfo>;
+  getTableStructure(tableName: string): Promise<TableStructure>;
+}
 
-  constructor(config: DatabaseConnection) {
-    this.config = config;
-  }
+// 连接池状态接口
+interface IConnectionPoolStatus {
+  maxConnections: number;
+  minConnections: number;
+  acquireTimeout: number;
+  idleTimeout: number;
+  testOnBorrow: boolean;
+}
+
+// 连接池配置接口
+interface IConnectionPoolConfig {
+  maxConnections: number;
+  minConnections: number;
+  acquireTimeout: number;
+  idleTimeout: number;
+  testOnBorrow: boolean;
+}
+
+// 数据库类型
+type DatabaseType = 'mysql' | 'postgresql' | 'oracle' | 'gaussdb' | 'redis' | 'sqlite';
+
+// 数据库连接
+interface DatabaseConnection {
+  type: DatabaseType;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database?: string;
+  ssl?: boolean;
+  timeout?: number;
+  authType?: 'username_password' | 'password';
+}
+
+// 查询结果
+interface QueryResult {
+  success: boolean;
+  data?: any[];
+  columns?: string[];
+  rowCount?: number;
+  executionTime?: number;
+  error?: string; // 失败时的错误信息
+}
+
+// 数据库信息
+interface DatabaseInfo {
+  version: string;
+  uptime: number;
+  connections: number;
+  storage: { total: number; used: number; free: number };
+  storageInstance: { total: number; used: number; free: number };
+  performance: {
+    queriesPerSecond: number;
+    queriesPerSecondAvg?: number;
+    queriesPerSecondAvgWindowSize?: number;
+    slowQueries: number;
+    threadsRunning?: number;
+    openTables?: number;
+    innodbBufferPoolSize?: number;
+    innodbBufferPoolReads?: number;
+    innodbBufferPoolWriteRequests?: number;
+    innodbBufferPoolReadRequests?: number;
+  };
+}
+
+// 表结构
+interface TableStructure {
+  name: string;
+  schema?: string;
+  columns: TableColumn[];
+  indexes: TableIndex[];
+  foreignKeys: ForeignKey[];
+  rowCount: number;
+  size: number;
+}
+
+// 表列信息
+interface TableColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  defaultValue?: string;
+  primaryKey: boolean;
+  autoIncrement: boolean;
+  comment?: string;
+}
+
+// 表索引信息
+interface TableIndex {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  type: string;
+  comment: string;
+}
+
+// 外键信息
+interface ForeignKey {
+  name: string;
+  column: string;
+  referencedTable: string;
+  referencedColumn: string;
+  onDelete: string;
+  onUpdate: string;
+}
+
+// 抽象基类：统一持有连接与配置
+abstract class BaseDatabaseConnection implements IDatabaseConnection {
+  protected connection: any = null;
+  protected isConnecting: boolean = false;
+  protected config!: DatabaseConnection;
+
+  setConfig(config: DatabaseConnection) { this.config = config; }
+  getConfig(): DatabaseConnection { return this.config; }
+  isConnected(): boolean { return !!this.connection; }
 
   abstract connect(): Promise<boolean>;
   abstract disconnect(): Promise<void>;
   abstract executeQuery(query: string, params?: any[]): Promise<QueryResult>;
   abstract getDatabaseInfo(): Promise<DatabaseInfo>;
   abstract getTableStructure(tableName: string): Promise<TableStructure>;
-
-  isConnected(): boolean {
-    return this.connection !== null && !this.isConnecting;
-  }
-
-  async ping(): Promise<boolean> {
-    if (!this.isConnected()) {
-      return false;
-    }
-    
-    try {
-      // 默认实现：执行一个简单的查询来测试连接
-      const result = await this.executeQuery('SELECT 1');
-      return result.success;
-    } catch {
-      return false;
-    }
-  }
-
-  async executeTransaction(queries: Array<{query: string, params?: any[]}>): Promise<boolean> {
-    // 基础实现，子类可以重写
-    try {
-      for (const { query, params } of queries) {
-        const result = await this.executeQuery(query, params);
-        if (!result.success) {
-          return false;
-        }
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  listTables(): Promise<string[]> {
-    // 默认实现，子类需要重写
-    return Promise.resolve([]);
-  }
-
-  listDatabases(): Promise<string[]> {
-    // 默认实现，子类需要重写
-    return Promise.resolve([]);
-  }
-
-  getId(): string {
-    return this.config.id;
-  }
-
-  getConfig(): DatabaseConnection {
-    return { ...this.config };
-  }
 }
 
-// 通用连接池实现
-export class GenericConnectionPool implements IDatabaseConnectionPool {
-  private factory: IDatabaseConnectionFactory;
-  private config: DatabaseConnection;
-  private poolConfig: IConnectionPoolConfig;
-  private connections: IDatabaseConnection[] = [];
-  private idleConnections: IDatabaseConnection[] = [];
-  private waitingAcquires: Array<{resolve: (conn: IDatabaseConnection) => void, reject: (error: Error) => void}> = [];
-  private destroyed: boolean = false;
-
-  constructor(factory: IDatabaseConnectionFactory, config: DatabaseConnection, poolConfig?: IConnectionPoolConfig) {
-    this.factory = factory;
-    this.config = config;
-    this.poolConfig = {
-      maxConnections: poolConfig?.maxConnections || 10,
-      minConnections: poolConfig?.minConnections || 2,
-      acquireTimeout: poolConfig?.acquireTimeout || 30000,
-      idleTimeout: poolConfig?.idleTimeout || 60000,
-      testOnBorrow: poolConfig?.testOnBorrow || true,
-    };
-  }
-
-  async initialize(): Promise<void> {
-    // 初始化最小连接数
-    for (let i = 0; i < this.poolConfig.minConnections!; i++) {
-      await this.createAndAddConnection();
-    }
-  }
-
-  async destroy(): Promise<void> {
-    this.destroyed = true;
-    
-    // 拒绝所有等待的请求
-    this.waitingAcquires.forEach(({ reject }) => {
-      reject(new Error('连接池已销毁'));
-    });
-    this.waitingAcquires = [];
-
-    // 关闭所有连接
-    const closePromises = this.connections.map(conn => conn.disconnect());
-    await Promise.all(closePromises);
-    
-    this.connections = [];
-    this.idleConnections = [];
-  }
-
-  getStatus(): IConnectionPoolStatus {
-    return {
-      total: this.connections.length,
-      active: this.connections.length - this.idleConnections.length,
-      idle: this.idleConnections.length,
-      waiting: this.waitingAcquires.length
-    };
-  }
-
-  async acquire(): Promise<IDatabaseConnection> {
-    if (this.destroyed) {
-      throw new Error('连接池已销毁');
-    }
-
-    // 如果有空闲连接，直接返回
-    if (this.idleConnections.length > 0) {
-      const connection = this.idleConnections.pop()!;
-      
-      // 检查连接是否有效
-      if (this.poolConfig.testOnBorrow && !(await connection.ping())) {
-        // 连接无效，创建新连接
-        this.connections = this.connections.filter(conn => conn !== connection);
-        return this.createAndAcquireConnection();
-      }
-      
-      return connection;
-    }
-
-    // 如果还可以创建新连接
-    if (this.connections.length < this.poolConfig.maxConnections!) {
-      return this.createAndAcquireConnection();
-    }
-
-    // 等待空闲连接
-    return new Promise<IDatabaseConnection>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const index = this.waitingAcquires.findIndex(w => w.reject === reject);
-        if (index !== -1) {
-          this.waitingAcquires.splice(index, 1);
-        }
-        reject(new Error('获取连接超时'));
-      }, this.poolConfig.acquireTimeout!);
-
-      this.waitingAcquires.push({
-        resolve: (conn) => {
-          clearTimeout(timeout);
-          resolve(conn);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-    });
-  }
-
-  release(connection: IDatabaseConnection): void {
-    if (this.destroyed) {
-      return;
-    }
-
-    // 检查连接是否还在连接池中
-    if (!this.connections.includes(connection)) {
-      return;
-    }
-
-    // 如果有等待的请求，直接分配给等待者
-    if (this.waitingAcquires.length > 0) {
-      const { resolve } = this.waitingAcquires.shift()!;
-      resolve(connection);
-      return;
-    }
-
-    // 否则放回空闲连接池
-    this.idleConnections.push(connection);
-
-    // 清理过期的空闲连接
-    this.cleanupIdleConnections();
-  }
-
-  getConfig(): IConnectionPoolConfig {
-    return { ...this.poolConfig };
-  }
-
-  updateConfig(config: Partial<IConnectionPoolConfig>): void {
-    this.poolConfig = { ...this.poolConfig, ...config };
-  }
-
-  private async createAndAcquireConnection(): Promise<IDatabaseConnection> {
-    const connection = await this.createAndAddConnection();
-    return connection;
-  }
-
-  private async createAndAddConnection(): Promise<IDatabaseConnection> {
-    const connection = this.factory.createConnection(this.config);
-    
-    try {
-      await connection.connect();
-      this.connections.push(connection);
-      return connection;
-    } catch (error) {
-      // 增强错误处理，保留原始错误的详细信息
-      let errorMessage = '未知错误';
-      let detailedErrorInfo = '';
-      
-      // 尝试从不同角度提取错误信息
-      if (error instanceof Error) {
-        errorMessage = error.message;
-        
-        // 如果错误对象有额外的属性，也将它们包含进来
-        const errorObj = error as any;
-        if (errorObj.code) detailedErrorInfo += `[${errorObj.code}] `;
-        if (errorObj.detail) detailedErrorInfo += `详情: ${errorObj.detail} `;
-        if (errorObj.hint) detailedErrorInfo += `提示: ${errorObj.hint} `;
-        if (errorObj.address && errorObj.port) {
-          detailedErrorInfo += `地址: ${errorObj.address}:${errorObj.port} `;
-        }
-      } else if (typeof error === 'object' && error !== null) {
-        const errorObj = error as any;
-        errorMessage = errorObj.message || String(error);
-        detailedErrorInfo = JSON.stringify(errorObj);
-      } else {
-        errorMessage = String(error);
-      }
-      
-      // 记录完整的错误对象以便调试
-      console.error(`创建连接失败 - 数据库类型: ${this.config.type}, 主机: ${this.config.host}:${this.config.port}`);
-      console.error('连接错误详情:', error);
-      
-      // 抛出包含详细信息的新错误
-      const fullErrorMessage = `创建连接失败: ${errorMessage} ${detailedErrorInfo.trim()}`;
-      throw new Error(fullErrorMessage);
-    }
-  }
-
-  private cleanupIdleConnections(): void {
-    // 这里可以实现空闲连接清理逻辑
-    // 暂时留空，后续可以添加定时清理功能
-  }
-}
-
-// 数据库连接工厂实现
-export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
-  createConnection(config: DatabaseConnection): IDatabaseConnection {
-    switch (config.type) {
-      case 'mysql':
-        return new MySQLConnection(config);
-      case 'postgresql':
-        return new PostgreSQLConnection(config);
-      case 'oracle':
-        return new OracleConnection(config);
-      case 'gaussdb':
-        return new GaussDBConnection(config);
-      case 'redis':
-        return new RedisConnection(config);
-      case 'sqlite':
-        return new SQLiteConnection(config);
-      default:
-        throw new Error(`不支持的数据库类型: ${config.type}`);
-    }
-  }
-
-  getSupportedTypes(): DatabaseType[] {
-    return ['mysql', 'postgresql', 'oracle', 'gaussdb', 'redis', 'sqlite'];
-  }
-
-  // 验证数据库配置
-  static validateConnectionConfig(config: DatabaseConnection): { valid: boolean; errors: string[] } {
-    const errors: string[] = [];
-
-    if (!config.type) {
-      errors.push('数据库类型不能为空');
-    }
-
-    if (!config.host) {
-      errors.push('主机地址不能为空');
-    }
-
-    if (!config.port) {
-      errors.push('端口号不能为空');
-    } else if (config.port < 1 || config.port > 65535) {
-      errors.push('端口号必须在1-65535之间');
-    }
-
-    // 对于Redis类型的数据库，用户名是可选的
-    if (!config.username && config.type !== 'redis') {
-      errors.push('用户名不能为空');
-    }
-
-    // 数据库名称不再是必填项
-
-    return {
-      valid: errors.length === 0,
-      errors
-    };
-  }
-}
-
-// 数据库服务类
-export class DatabaseService extends EventEmitter {
-  private connectionPools: Map<string, GenericConnectionPool> = new Map();
-  private factory: IDatabaseConnectionFactory;
-  // 新增：记录连接池类型与查询串行队列
-  private poolTypes: Map<string, string> = new Map();
-  private queryChains: Map<string, Promise<void>> = new Map();
-
-  constructor() {
-    super();
-    this.factory = new DatabaseConnectionFactory();
-  }
-
-  // 新增：为Redis执行查询提供串行化队列，避免获取连接等待超时
-  private async enqueueRedis<T>(poolId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.queryChains.get(poolId) || Promise.resolve();
-    let result!: T;
-    const next = prev.then(async () => { result = await fn(); });
-    this.queryChains.set(poolId, next.catch(() => {}));
-    await next;
-    return result;
-  }
-
-  // 创建数据库连接池
-  async createConnectionPool(config: DatabaseConnection, poolConfig?: IConnectionPoolConfig): Promise<string> {
-    const poolId = this.generatePoolId(config);
-    
-    if (this.connectionPools.has(poolId)) {
-      throw new Error(`连接池已存在: ${poolId}`);
-    }
-
-    try {
-      // 验证配置
-      const validation = DatabaseConnectionFactory.validateConnectionConfig(config);
-      if (!validation.valid) {
-        throw new Error(`配置验证失败: ${validation.errors.join(', ')}`);
-      }
-
-      // 对Redis强制使用单连接池，确保SELECT后的db选择在同一连接上生效
-      const effectivePoolConfig: IConnectionPoolConfig | undefined = (() => {
-        if (config.type === 'redis') {
-          return {
-            maxConnections: 1,
-            minConnections: 1,
-            acquireTimeout: poolConfig?.acquireTimeout ?? 60000,
-            idleTimeout: poolConfig?.idleTimeout || 60000,
-            testOnBorrow: poolConfig?.testOnBorrow ?? true,
-          };
-        }
-        return poolConfig;
-      })();
-
-      const pool = new GenericConnectionPool(this.factory, config, effectivePoolConfig);
-      await pool.initialize();
-      
-      this.connectionPools.set(poolId, pool);
-      // 新增：记录连接池类型
-      this.poolTypes.set(poolId, config.type);
-      this.emit('connectionPoolCreated', config);
-      return poolId;
-    } catch (error) {
-      this.emit('connectionError', config, error);
-      throw error;
-    }
-  }
-
-  // 获取连接池
-  getConnectionPool(poolId: string): GenericConnectionPool | undefined {
-    return this.connectionPools.get(poolId);
-  }
-
-  // 断开连接池
-  async disconnect(poolId: string): Promise<void> {
-    const pool = this.connectionPools.get(poolId);
-    if (pool) {
-      await pool.destroy();
-      this.connectionPools.delete(poolId);
-      this.emit('connectionPoolClosed', poolId);
-    }
-  }
-
-  // 断开所有连接池
-  async disconnectAll(): Promise<void> {
-    const disconnectPromises = Array.from(this.connectionPools.keys()).map(
-      poolId => this.disconnect(poolId)
-    );
-    await Promise.all(disconnectPromises);
-  }
-
-  // 执行查询（使用连接池）
-  async executeQuery(poolId: string, query: string, params?: any[]): Promise<QueryResult> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-    // 新增：Redis单连接池下串行执行，避免并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
-        const connection = await pool.acquire();
-        try {
-          const result = await connection.executeQuery(query, params);
-          this.emit('queryExecuted', poolId, query, result.success);
-          return result;
-        } catch (error) {
-          this.emit('queryExecuted', poolId, query, false);
-          throw error as any;
-        } finally {
-          pool.release(connection);
-        }
-      });
-    }
-
-    // 非Redis数据库保持原有并发行为
-    const connection = await pool.acquire();
-    try {
-      const result = await connection.executeQuery(query, params);
-      this.emit('queryExecuted', poolId, query, result.success);
-      return result;
-    } catch (error) {
-      this.emit('queryExecuted', poolId, query, false);
-      throw error as any;
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 执行事务（使用连接池）
-  async executeTransaction(poolId: string, queries: Array<{query: string, params?: any[]}>): Promise<boolean> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-
-    const connection = await pool.acquire();
-    try {
-      return await connection.executeTransaction(queries);
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 获取数据库信息
-  async getDatabaseInfo(poolId: string): Promise<DatabaseInfo> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
-        const connection = await pool.acquire();
-        try {
-          return await connection.getDatabaseInfo();
-        } finally {
-          pool.release(connection);
-        }
-      });
-    }
-
-    const connection = await pool.acquire();
-    try {
-      return await connection.getDatabaseInfo();
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 获取表结构
-  async getTableStructure(poolId: string, tableName: string): Promise<TableStructure> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
-        const connection = await pool.acquire();
-        try {
-          return await connection.getTableStructure(tableName);
-        } finally {
-          pool.release(connection);
-        }
-      });
-    }
-
-    const connection = await pool.acquire();
-    try {
-      return await connection.getTableStructure(tableName);
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 获取表列表
-  async listTables(poolId: string): Promise<string[]> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
-        const connection = await pool.acquire();
-        try {
-          return await connection.listTables();
-        } finally {
-          pool.release(connection);
-        }
-      });
-    }
-
-    const connection = await pool.acquire();
-    try {
-      return await connection.listTables();
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 获取数据库列表
-  async listDatabases(poolId: string): Promise<string[]> {
-    const pool = this.getConnectionPool(poolId);
-    if (!pool) {
-      throw new Error('连接池不存在');
-    }
-
-    // 对 Redis 使用串行队列，避免与查询并发导致获取连接超时
-    if (this.poolTypes.get(poolId) === 'redis') {
-      return await this.enqueueRedis(poolId, async () => {
-        const connection = await pool.acquire();
-        try {
-          return await connection.listDatabases();
-        } finally {
-          pool.release(connection);
-        }
-      });
-    }
-
-    const connection = await pool.acquire();
-    try {
-      return await connection.listDatabases();
-    } finally {
-      pool.release(connection);
-    }
-  }
-
-  // 获取连接池状态
-  getConnectionPoolStatus(poolId: string): IConnectionPoolStatus | undefined {
-    const pool = this.getConnectionPool(poolId);
-    return pool?.getStatus();
-  }
-
-  // 更新连接池配置
-  updateConnectionPoolConfig(poolId: string, config: Partial<IConnectionPoolConfig>): void {
-    const pool = this.getConnectionPool(poolId);
-    if (pool) {
-      pool.updateConfig(config);
-      this.emit('connectionPoolStatusChanged', poolId, pool.getStatus());
-    }
-  }
-
-  // 获取所有连接池ID
-  getAllConnectionPoolIds(): string[] {
-    return Array.from(this.connectionPools.keys());
-  }
-
-  // 获取连接池配置
-  getConnectionPoolConfig(poolId: string): IConnectionPoolConfig | undefined {
-    const pool = this.getConnectionPool(poolId);
-    return pool?.getConfig();
-  }
-
-  // 生成连接池ID
-  private generatePoolId(config: DatabaseConnection): string {
-    // 不使用默认数据库名，只使用配置中指定的数据库名
-    const databaseName = config.database || '';
-    return `${config.type}_${config.host}_${config.port}_${databaseName}`;
-  }
-
-  // 获取支持的数据库类型
-  getSupportedDatabaseTypes(): string[] {
-    return this.factory.getSupportedTypes();
-  }
-}
 
 // MySQL 连接实现
 class MySQLConnection extends BaseDatabaseConnection {
+  private lastTotalQueries: number | null = null;
+  private lastQueriesTimestamp: number | null = null;
+  private preferredQueriesCounter: 'Queries' | 'Questions' | null = null;
+  private qpsRecent: number[] = [];
+  private qpsWindowSize: number = 5;
+
   async connect(): Promise<boolean> {
     try {
+      // 重置增量QPS状态
+      this.lastTotalQueries = null;
+      this.lastQueriesTimestamp = null;
+      this.preferredQueriesCounter = null;
+
       this.isConnecting = true;
       const mysql = require('mysql2/promise');
       this.connection = await mysql.createConnection({
@@ -674,7 +161,7 @@ class MySQLConnection extends BaseDatabaseConnection {
         port: this.config.port,
         user: this.config.username,
         password: this.config.password,
-        database: this.config.database,
+        // 移除默认数据库参数，允许通过USE命令自由切换数据库
         ssl: this.config.ssl ? {
           // 为了解决SSL握手失败问题，我们提供更完整的SSL配置
           rejectUnauthorized: false,
@@ -696,12 +183,41 @@ class MySQLConnection extends BaseDatabaseConnection {
       await this.connection.end();
       this.connection = null;
     }
+    // 断开时清空增量QPS状态
+    this.lastTotalQueries = null;
+    this.lastQueriesTimestamp = null;
+    this.preferredQueriesCounter = null;
   }
 
   async executeQuery(query: string, params?: any[]): Promise<QueryResult> {
     try {
       const startTime = Date.now();
-      const [rows, fields] = await this.connection.execute(query, params || []);
+      let rows, fields;
+      
+      // 根据指令类型选择执行协议：USE/SHOW/DESCRIBE/EXPLAIN 走 text 协议，其他走 prepared
+      const trimmed = query.trim();
+      const upper = trimmed.toUpperCase();
+      if (upper.startsWith('USE ') && !trimmed.includes('?')) {
+        // 优先使用 changeUser 切库，避免某些驱动/版本下 USE 对 prepared 的上下文不生效问题
+        const dbPart = trimmed.replace(/;$/, '').slice(3).trim(); // 去除 'USE '
+        const dbName = dbPart.replace(/^`|`$/g, '');
+        await this.connection.changeUser({ database: dbName });
+        rows = [];
+        fields = [];
+      } else if (
+        upper.startsWith('SHOW ') ||
+        upper.startsWith('DESCRIBE ') ||
+        upper.startsWith('EXPLAIN ') ||
+        // 关键：SELECT DATABASE() 强制使用 text 协议，确保读取当前会话库
+        /^SELECT\s+DATABASE\(\)\b/.test(upper)
+      ) {
+        // 在某些 MySQL 版本下使用 prepared 可能出现上下文异常
+        [rows, fields] = await this.connection.query(query);
+      } else {
+        // 其他命令使用 prepared statement
+        [rows, fields] = await this.connection.execute(query, params || []);
+      }
+      
       const executionTime = Date.now() - startTime;
 
       return {
@@ -722,20 +238,122 @@ class MySQLConnection extends BaseDatabaseConnection {
 
   async getDatabaseInfo(): Promise<DatabaseInfo> {
     try {
-      const [versionResult] = await this.connection.execute('SELECT VERSION() as version');
-      const [statusResult] = await this.connection.execute('SHOW STATUS LIKE \'Uptime\'');
-      const [connectionsResult] = await this.connection.execute('SHOW STATUS LIKE \'Threads_connected\'');
-      
-      const version = versionResult[0]?.version || 'Unknown';
-      const uptime = parseInt(statusResult[0]?.Value || '0');
-      const connections = parseInt(connectionsResult[0]?.Value || '0');
+      // 基本信息
+      const [versionResult]: any = await this.connection.execute("SELECT VERSION() as version");
+      const [uptimeResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Uptime'");
+      const [threadsConnectedResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Threads_connected'");
+      const version = versionResult?.[0]?.version || 'Unknown';
+      const uptime = parseInt((uptimeResult?.[0]?.Value ?? '0') as string, 10);
+      const connections = parseInt((threadsConnectedResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 性能指标：QPS、慢查询与更多状态（基于增量计算QPS）
+      const [queriesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Queries'");
+      const [questionsResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Questions'");
+      const [slowQueriesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Slow_queries'");
+      const [threadsRunningResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Threads_running'");
+      const [openTablesResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Open_tables'");
+
+      const queriesVal = parseInt((queriesResult?.[0]?.Value ?? 'NaN') as string, 10);
+      const questionsVal = parseInt((questionsResult?.[0]?.Value ?? 'NaN') as string, 10);
+      const counterUsed: 'Queries' | 'Questions' = (!Number.isNaN(queriesVal) && queriesVal > 0) ? 'Queries' : 'Questions';
+      const totalQueries = counterUsed === 'Queries'
+        ? (Number.isNaN(queriesVal) ? 0 : queriesVal)
+        : (Number.isNaN(questionsVal) ? 0 : questionsVal);
+
+      const slowQueries = parseInt((slowQueriesResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 增量QPS计算，优先使用相同计数器的差值（防止在Queries和Questions之间切换导致错误）
+      let queriesPerSecond = 0;
+      const nowTs = Date.now();
+      if (this.lastTotalQueries !== null && this.lastQueriesTimestamp !== null && this.preferredQueriesCounter === counterUsed) {
+        const elapsedMs = nowTs - this.lastQueriesTimestamp;
+        const delta = totalQueries - this.lastTotalQueries;
+        if (elapsedMs > 0) {
+          if (delta >= 0) {
+            queriesPerSecond = Math.round((delta * 1000) / elapsedMs);
+            // 记录样本用于短期滑动平均
+            if (queriesPerSecond >= 0) {
+              this.qpsRecent.push(queriesPerSecond);
+              if (this.qpsRecent.length > this.qpsWindowSize) {
+                this.qpsRecent = this.qpsRecent.slice(this.qpsRecent.length - this.qpsWindowSize);
+              }
+            }
+          } else {
+            // 异常保护：负delta（回绕或重启），重置基线并清空样本
+            this.lastTotalQueries = totalQueries;
+            this.lastQueriesTimestamp = nowTs;
+            this.qpsRecent = [];
+            queriesPerSecond = 0;
+          }
+        }
+      } else {
+        // 首次或计数器切换，使用基于Uptime的近似值以避免跳变
+        queriesPerSecond = uptime > 0 ? Math.round(totalQueries / uptime) : 0;
+        this.preferredQueriesCounter = counterUsed;
+        // 初始化样本
+        if (queriesPerSecond > 0) {
+          this.qpsRecent = [queriesPerSecond];
+        } else {
+          this.qpsRecent = [];
+        }
+      }
+      // 更新状态用于下次增量计算
+      this.lastTotalQueries = totalQueries;
+      this.lastQueriesTimestamp = nowTs;
+
+      const threadsRunning = parseInt((threadsRunningResult?.[0]?.Value ?? '0') as string, 10);
+      const openTables = parseInt((openTablesResult?.[0]?.Value ?? '0') as string, 10);
+
+      // InnoDB缓冲池相关
+      const [bpSizeVars]: any = await this.connection.execute("SHOW VARIABLES LIKE 'innodb_buffer_pool_size'");
+      const [bpReadsResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_reads'");
+      const [bpReadReqResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_read_requests'");
+      const [bpWriteReqResult]: any = await this.connection.execute("SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_write_requests'");
+      const innodbBufferPoolSize = parseInt((bpSizeVars?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolReads = parseInt((bpReadsResult?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolReadRequests = parseInt((bpReadReqResult?.[0]?.Value ?? '0') as string, 10);
+      const innodbBufferPoolWriteRequests = parseInt((bpWriteReqResult?.[0]?.Value ?? '0') as string, 10);
+
+      // 存储信息：当前数据库（schema=DATABASE()）与全实例（所有库）
+      const [dbRows]: any = await this.connection.execute(
+        `SELECT 
+           IFNULL(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS used_bytes,
+           IFNULL(SUM(DATA_FREE), 0) AS free_bytes
+         FROM information_schema.tables 
+         WHERE table_schema = DATABASE()`
+      );
+      const usedBytesDb = Number(dbRows?.[0]?.used_bytes || 0);
+      const freeBytesDb = Number(dbRows?.[0]?.free_bytes || 0);
+      const totalBytesDb = usedBytesDb + freeBytesDb;
+
+      const [instRows]: any = await this.connection.execute(
+        `SELECT 
+           IFNULL(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS used_bytes,
+           IFNULL(SUM(DATA_FREE), 0) AS free_bytes
+         FROM information_schema.tables`
+      );
+      const usedBytesInst = Number(instRows?.[0]?.used_bytes || 0);
+      const freeBytesInst = Number(instRows?.[0]?.free_bytes || 0);
+      const totalBytesInst = usedBytesInst + freeBytesInst;
 
       return {
         version,
         uptime,
         connections,
-        storage: { total: 0, used: 0, free: 0 },
-        performance: { queriesPerSecond: 0, slowQueries: 0 }
+        storage: { total: totalBytesDb, used: usedBytesDb, free: freeBytesDb },
+        storageInstance: { total: totalBytesInst, used: usedBytesInst, free: freeBytesInst },
+        performance: { 
+          queriesPerSecond, 
+          queriesPerSecondAvg: this.qpsRecent.length > 0 ? Math.round(this.qpsRecent.reduce((a, b) => a + b, 0) / this.qpsRecent.length) : queriesPerSecond,
+          queriesPerSecondAvgWindowSize: this.qpsRecent.length,
+          slowQueries,
+          threadsRunning,
+          openTables,
+          innodbBufferPoolSize,
+          innodbBufferPoolReads,
+          innodbBufferPoolReadRequests,
+          innodbBufferPoolWriteRequests
+        }
       };
     } catch (error) {
       return {
@@ -743,6 +361,7 @@ class MySQLConnection extends BaseDatabaseConnection {
         uptime: 0,
         connections: 0,
         storage: { total: 0, used: 0, free: 0 },
+        storageInstance: { total: 0, used: 0, free: 0 },
         performance: { queriesPerSecond: 0, slowQueries: 0 }
       };
     }
@@ -964,6 +583,7 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
         uptime,
         connections,
         storage: { total: 0, used: 0, free: 0 },
+        storageInstance: { total: 0, used: 0, free: 0 },
         performance: { queriesPerSecond: 0, slowQueries: 0 }
       };
     } catch (error) {
@@ -972,6 +592,7 @@ class PostgreSQLConnection extends BaseDatabaseConnection {
         uptime: 0,
         connections: 0,
         storage: { total: 0, used: 0, free: 0 },
+        storageInstance: { total: 0, used: 0, free: 0 },
         performance: { queriesPerSecond: 0, slowQueries: 0 }
       };
     }
@@ -1098,23 +719,25 @@ class OracleConnection extends BaseDatabaseConnection {
   // Oracle连接实现（需要oracledb驱动）
   async connect(): Promise<boolean> { return false; }
   async disconnect(): Promise<void> {}
-  async executeQuery(): Promise<QueryResult> { return { success: false, error: 'Oracle连接未实现' }; }
+  async executeQuery(query: string, params?: any[]): Promise<QueryResult> { return { success: false, error: 'Oracle连接未实现' }; }
   async getDatabaseInfo(): Promise<DatabaseInfo> { throw new Error('未实现'); }
-  async getTableStructure(): Promise<TableStructure> { throw new Error('未实现'); }
+  async getTableStructure(tableName: string): Promise<TableStructure> { throw new Error('未实现'); }
 }
 
 class GaussDBConnection extends BaseDatabaseConnection {
   // GaussDB连接实现
   async connect(): Promise<boolean> { return false; }
   async disconnect(): Promise<void> {}
-  async executeQuery(): Promise<QueryResult> { return { success: false, error: 'GaussDB连接未实现' }; }
+  async executeQuery(query: string, params?: any[]): Promise<QueryResult> { return { success: false, error: 'GaussDB连接未实现' }; }
   async getDatabaseInfo(): Promise<DatabaseInfo> { throw new Error('未实现'); }
-  async getTableStructure(): Promise<TableStructure> { throw new Error('未实现'); }
+  async getTableStructure(tableName: string): Promise<TableStructure> { throw new Error('未实现'); }
 }
 
 class RedisConnection extends BaseDatabaseConnection {
   private client: any = null;
   protected isConnecting: boolean = false;
+  private subscriber: any = null;
+  private subscribedChannels: Set<string> = new Set();
 
   // Redis连接实现
   async connect(): Promise<boolean> {
@@ -1131,23 +754,42 @@ class RedisConnection extends BaseDatabaseConnection {
       const redisOptions: any = {
         socket: {
           host: config.host,
-          port: config.port,
+          port: Number(config.port) || 6379,
           connectTimeout: (config.timeout || 30) * 1000
         }
       };
 
-      // 如果提供了用户名和密码，添加认证信息
-      if (config.username && config.username.trim()) {
-        redisOptions.username = config.username;
-      }
-      if (config.password && config.password.trim()) {
-        redisOptions.password = config.password;
+      // 根据认证类型设置认证信息（并对缺省authType且提供了密码的情况做兼容）
+      const hasPassword = typeof config.password === 'string' && config.password.trim().length > 0;
+      const hasUsername = typeof config.username === 'string' && config.username.trim().length > 0;
+      if (config.authType === 'username_password') {
+        if (hasUsername) {
+          redisOptions.username = config.username;
+        }
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
+      } else if (config.authType === 'password') {
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
+      } else {
+        // 兼容：如果未声明认证类型但给了密码（目标实例未启用ACL，仅requirepass），仍然传入password
+        if (hasPassword) {
+          redisOptions.password = config.password;
+        }
       }
 
       // 如果提供了默认数据库，选择数据库
       if (config.database && !isNaN(Number(config.database))) {
         this.selectedDb = Number(config.database);
       }
+
+      // 记录简化后的连接选项（不打印敏感字段）便于诊断
+      try {
+        const safeOpts = { socket: redisOptions.socket, username: !!redisOptions.username, passwordPresent: !!redisOptions.password };
+        console.log('[REDIS MAIN] createClient options:', JSON.stringify(safeOpts));
+      } catch {}
 
       // 创建Redis客户端
       this.client = createClient(redisOptions);
@@ -1163,7 +805,7 @@ class RedisConnection extends BaseDatabaseConnection {
 
       // 如果有默认数据库，切换到该数据库
       if (this.selectedDb !== undefined) {
-        await this.client.select(String(this.selectedDb));
+        await this.client.select(this.selectedDb);
       }
 
       this.isConnecting = false;
@@ -1190,26 +832,34 @@ class RedisConnection extends BaseDatabaseConnection {
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
-      if (!this.client || !this.isConnected()) {
-        throw new Error('Redis client not connected');
-      }
+      // 移除冗长的命令执行日志，避免Terminal刷屏
 
+      if (!this.client || !this.isConnected()) {
+         // 尝试重新连接
+         console.log(`[REDIS MAIN] 客户端未连接，尝试重新连接`);
+         const reconnected = await this.connect();
+         if (!reconnected || !this.isConnected()) {
+           console.error(`[REDIS MAIN] 重新连接失败`);
+           throw new Error('Redis client not connected');
+         }
+       }
+      
       // 将命令转换为小写
       const cmd = command.toLowerCase();
       
       // 根据Redis命令执行相应操作
       let result: any;
       switch (cmd) {
-        case 'info':
-          // 获取Redis信息
-          if (params && params.length > 0 && params[0] === 'keyspace') {
-            // 只获取keyspace信息
-            const info = await this.client.info('keyspace');
-            result = info;
+        case 'info': {
+          // 获取Redis信息（静默执行，移除噪音日志）
+          const section = (params && params.length > 0 && typeof params[0] === 'string') ? params[0] : undefined;
+          if (section) {
+            result = await this.client.info(section);
           } else {
             result = await this.client.info();
           }
           break;
+        }
         case 'select':
           // 切换数据库
           if (params && params.length > 0) {
@@ -1353,6 +1003,61 @@ class RedisConnection extends BaseDatabaseConnection {
           result = await this.client.zAdd(key, entries);
           break;
         }
+        case 'pubsub': {
+          const subcmd = String(params?.[0] ?? '').toLowerCase();
+          if (subcmd === 'channels') {
+            const pattern = (params && params.length > 1 && typeof params[1] === 'string') ? String(params[1]) : undefined;
+            if (typeof (this.client as any).pubSubChannels === 'function') {
+              result = await (this.client as any).pubSubChannels(pattern);
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              const args = ['PUBSUB', 'CHANNELS'];
+              if (pattern) args.push(pattern);
+              result = await (this.client as any).sendCommand(args);
+            } else {
+              throw new Error('PUBSUB CHANNELS not supported by client');
+            }
+          } else if (subcmd === 'numsub') {
+            const channels = params?.slice(1)?.map((c: any) => String(c)) || [];
+            if (typeof (this.client as any).pubSubNumSub === 'function') {
+              result = await (this.client as any).pubSubNumSub(channels);
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              const args = ['PUBSUB', 'NUMSUB', ...channels];
+              result = await (this.client as any).sendCommand(args);
+            } else {
+              throw new Error('PUBSUB NUMSUB not supported by client');
+            }
+          } else if (subcmd === 'numpat') {
+            if (typeof (this.client as any).pubSubNumPat === 'function') {
+              result = await (this.client as any).pubSubNumPat();
+            } else if (typeof (this.client as any).sendCommand === 'function') {
+              result = await (this.client as any).sendCommand(['PUBSUB', 'NUMPAT']);
+            } else {
+              throw new Error('PUBSUB NUMPAT not supported by client');
+            }
+          } else {
+            throw new Error(`Unsupported PUBSUB subcommand: ${subcmd}`);
+          }
+          break;
+        }
+        case 'slowlog': {
+          const subcmd = String(params?.[0] ?? '').toLowerCase();
+          if (typeof (this.client as any).sendCommand !== 'function') {
+            throw new Error('SLOWLOG not supported by client');
+          }
+          if (subcmd === 'get') {
+            const count = params?.[1];
+            const args = ['SLOWLOG', 'GET'];
+            if (typeof count !== 'undefined') args.push(String(count));
+            result = await (this.client as any).sendCommand(args);
+          } else if (subcmd === 'len') {
+            result = await (this.client as any).sendCommand(['SLOWLOG', 'LEN']);
+          } else if (subcmd === 'reset') {
+            result = await (this.client as any).sendCommand(['SLOWLOG', 'RESET']);
+          } else {
+            throw new Error(`Unsupported SLOWLOG subcommand: ${subcmd}`);
+          }
+          break;
+        }
         default:
           // 尝试直接执行命令（仅当存在同名方法）
           if (typeof (this.client as any)[cmd] === 'function') {
@@ -1402,6 +1107,7 @@ class RedisConnection extends BaseDatabaseConnection {
           used: parseInt(infoObj['used_memory'] || '0'),
           free: 0 // Redis不直接提供空闲内存信息
         },
+        storageInstance: { total: 0, used: 0, free: 0 },
         performance: {
           queriesPerSecond: parseInt(infoObj['instantaneous_ops_per_sec'] || '0'),
           slowQueries: parseInt(infoObj['slowlog_length'] || '0')
@@ -1484,18 +1190,23 @@ class RedisConnection extends BaseDatabaseConnection {
     // 获取Redis数据库列表
     try {
       if (!this.client || !this.isConnected()) {
-        return [];
+        // 尝试重新连接
+        await this.connect();
+        if (!this.isConnected()) {
+          return ['db0'];
+        }
       }
 
       const info = await this.client.info('keyspace');
       const dbNames: string[] = [];
       
-      // 解析info keyspace输出，提取数据库名称
-      const lines = info.split('\r\n');
+      // 增强的解析逻辑，支持不同的换行符格式
+      const lines = String(info || '').split(/\r?\n/);
       lines.forEach((line: string) => {
-        if (line.startsWith('db')) {
-          const dbName = line.split(':')[0];
-          dbNames.push(dbName);
+        // 更精确的数据库名匹配
+        const match = line.match(/^db(\d+)/);
+        if (match) {
+          dbNames.push(match[0]);
         }
       });
       
@@ -1504,15 +1215,30 @@ class RedisConnection extends BaseDatabaseConnection {
         return ['db0'];
       }
       
-      return dbNames.sort();
+      // 按数字顺序排序
+      return dbNames.sort((a, b) => {
+        const numA = parseInt(a.replace('db', ''), 10);
+        const numB = parseInt(b.replace('db', ''), 10);
+        return numA - numB;
+      });
     } catch (error) {
       console.error('Failed to list Redis databases:', error);
+      // 即使出错也尝试通过dbsize获取当前数据库信息
+      try {
+        if (this.isConnected()) {
+          await this.client.dbSize();
+          return ['db0'];
+        }
+      } catch (innerError) {
+        console.error('Failed to get current Redis DB size:', innerError);
+      }
       return ['db0'];
     }
   }
 
   isConnected(): boolean {
-    return this.client !== null && this.client.isReady;
+    // 增强连接状态检测，增加更多条件确保准确性
+    return this.client !== null && typeof this.client.isReady === 'boolean' && this.client.isReady;
   }
 
   async ping(): Promise<boolean> {
@@ -1548,6 +1274,85 @@ class RedisConnection extends BaseDatabaseConnection {
     return [result];
   }
 
+  // Pub/Sub：确保订阅客户端
+  private async ensureSubscriber(): Promise<any> {
+    if (this.subscriber && this.subscriber.isReady) return this.subscriber;
+    const { createClient } = require('redis');
+    const cfg = this.getConfig();
+    const opts: any = {
+      socket: {
+        host: cfg.host,
+        port: Number(cfg.port) || 6379,
+        connectTimeout: (cfg.timeout || 30) * 1000
+      }
+    };
+    const hasPassword = typeof cfg.password === 'string' && cfg.password.trim().length > 0;
+    const hasUsername = typeof cfg.username === 'string' && cfg.username.trim().length > 0;
+    if (cfg.authType === 'username_password') {
+      if (hasUsername) opts.username = cfg.username;
+      if (hasPassword) opts.password = cfg.password;
+    } else if (cfg.authType === 'password') {
+      if (hasPassword) opts.password = cfg.password;
+    } else {
+      if (hasPassword) opts.password = cfg.password;
+    }
+    this.subscriber = createClient(opts);
+    this.subscriber.on('error', (err: Error) => console.error('Redis subscriber error:', err));
+    await this.subscriber.connect();
+    if (this.selectedDb !== undefined) {
+      try { await this.subscriber.select(this.selectedDb); } catch {}
+    }
+    return this.subscriber;
+  }
+
+  // 订阅普通频道
+  async subscribeChannels(channels: string[], onMessage: (channel: string, message: string) => void): Promise<void> {
+    const sub = await this.ensureSubscriber();
+    for (const ch of channels) {
+      const name = String(ch).trim();
+      if (!name) continue;
+      if (!this.subscribedChannels.has(name)) {
+        await sub.subscribe(name, (msg: string) => onMessage(name, msg));
+        this.subscribedChannels.add(name);
+      }
+    }
+  }
+
+  // 订阅模式频道（PSUBSCRIBE）
+  async psubscribePatterns(patterns: string[], onMessage: (channel: string, message: string) => void): Promise<void> {
+    const sub = await this.ensureSubscriber();
+    for (const p of patterns) {
+      const pat = String(p).trim();
+      if (!pat) continue;
+      if (!this.subscribedChannels.has(pat)) {
+        await sub.pSubscribe(pat, (msg: string, ch: string) => onMessage(ch, msg));
+        this.subscribedChannels.add(pat);
+      }
+    }
+  }
+
+  // 取消订阅
+  async unsubscribeChannels(channels: string[], isPattern: boolean = false): Promise<void> {
+    if (!this.subscriber) return;
+    for (const ch of channels) {
+      const name = String(ch).trim();
+      if (!name) continue;
+      try {
+        if (isPattern) {
+          await this.subscriber.pUnsubscribe(name);
+        } else {
+          await this.subscriber.unsubscribe(name);
+        }
+      } catch {}
+      this.subscribedChannels.delete(name);
+    }
+    // 如果没有订阅，释放订阅连接
+    if (this.subscribedChannels.size === 0) {
+      try { await this.subscriber.quit(); } catch {}
+      this.subscriber = null;
+    }
+  }
+
   // 存储当前选择的数据库
   private selectedDb?: number;
 }
@@ -1556,7 +1361,217 @@ class SQLiteConnection extends BaseDatabaseConnection {
   // SQLite连接实现
   async connect(): Promise<boolean> { return false; }
   async disconnect(): Promise<void> {}
-  async executeQuery(): Promise<QueryResult> { return { success: false, error: 'SQLite连接未实现' }; }
+  async executeQuery(query: string, params?: any[]): Promise<QueryResult> { return { success: false, error: 'SQLite连接未实现' }; }
   async getDatabaseInfo(): Promise<DatabaseInfo> { throw new Error('未实现'); }
-  async getTableStructure(): Promise<TableStructure> { throw new Error('未实现'); }
+  async getTableStructure(tableName: string): Promise<TableStructure> { throw new Error('未实现'); }
+}
+
+// ... 数据库连接工厂（恢复主进程依赖）
+export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
+  createConnection(config: DatabaseConnection): IDatabaseConnection {
+    let conn: IDatabaseConnection;
+    switch (config.type) {
+      case 'mysql':
+        conn = new MySQLConnection();
+        break;
+      case 'postgresql':
+        conn = new PostgreSQLConnection();
+        break;
+      case 'oracle':
+        conn = new OracleConnection();
+        break;
+      case 'gaussdb':
+        conn = new GaussDBConnection();
+        break;
+      case 'redis':
+        conn = new RedisConnection();
+        break;
+      case 'sqlite':
+        conn = new SQLiteConnection();
+        break;
+      default:
+        throw new Error(`不支持的数据库类型: ${config.type}`);
+    }
+    // 将配置注入到连接实例（基类持有 config 属性）
+    (conn as any).config = config;
+    return conn;
+  }
+
+  getSupportedTypes(): DatabaseType[] {
+    return ['mysql', 'postgresql', 'oracle', 'gaussdb', 'redis', 'sqlite'];
+  }
+
+  static validateConnectionConfig(config: DatabaseConnection): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!config.type) errors.push('数据库类型不能为空');
+    if (!config.host) errors.push('主机地址不能为空');
+    if (!config.port) errors.push('端口号不能为空');
+    if (config.port && (config.port < 1 || config.port > 65535)) errors.push('端口号必须在1-65535之间');
+    if (config.type !== 'redis' && !config.username) errors.push('用户名不能为空');
+    return { valid: errors.length === 0, errors };
+  }
+}
+
+// 简易连接池（单连接）服务，满足主进程调用需求
+export class DatabaseService extends EventEmitter {
+  private connections: Map<string, IDatabaseConnection> = new Map();
+  private configs: Map<string, DatabaseConnection> = new Map();
+  private poolTypes: Map<string, DatabaseType> = new Map();
+
+  constructor() { super(); }
+
+  private generatePoolId(config: DatabaseConnection): string {
+    const databaseName = config.database || '';
+    return `${config.type}_${config.host}_${config.port}_${databaseName}`;
+  }
+
+  async createConnectionPool(config: DatabaseConnection, _poolConfig?: Partial<IConnectionPoolConfig>): Promise<string> {
+    const poolId = this.generatePoolId(config);
+    if (this.connections.has(poolId)) return poolId;
+    const factory = new DatabaseConnectionFactory();
+    const conn = factory.createConnection(config);
+    await conn.connect();
+    this.connections.set(poolId, conn);
+    this.configs.set(poolId, config);
+    this.poolTypes.set(poolId, config.type);
+    return poolId;
+  }
+
+  getConnectionPool(poolId: string): IDatabaseConnection | undefined {
+    return this.connections.get(poolId);
+  }
+
+  async disconnect(poolId: string): Promise<void> {
+    const conn = this.connections.get(poolId);
+    if (conn) {
+      try { await conn.disconnect(); } finally {
+        this.connections.delete(poolId);
+        this.configs.delete(poolId);
+        this.poolTypes.delete(poolId);
+      }
+    }
+  }
+
+  async disconnectAll(): Promise<void> {
+    const ids = Array.from(this.connections.keys());
+    for (const id of ids) await this.disconnect(id);
+  }
+
+  async executeQuery(poolId: string, query: string, params?: any[]): Promise<QueryResult> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    const result = await conn.executeQuery(query, params);
+    this.emit('queryExecuted', poolId, query, result.success);
+    return result;
+  }
+
+  async executeBatch(poolId: string, queries: Array<{query: string, params?: any[]}>): Promise<QueryResult[]> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    const results: QueryResult[] = [];
+    for (const { query, params } of queries) {
+      const res = await conn.executeQuery(query, params);
+      this.emit('queryExecuted', poolId, query, res.success);
+      results.push(res);
+    }
+    return results;
+  }
+
+  async getDatabaseInfo(poolId: string): Promise<DatabaseInfo> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    return await conn.getDatabaseInfo();
+  }
+
+  async getTableStructure(poolId: string, tableName: string): Promise<TableStructure> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    return await conn.getTableStructure(tableName);
+  }
+
+  async listTables(poolId: string): Promise<string[]> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    return await (conn as any).listTables();
+  }
+
+  async listDatabases(poolId: string): Promise<string[]> {
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    return await (conn as any).listDatabases();
+  }
+
+  // Redis 发布/订阅
+  async redisSubscribe(poolId: string, channels: string[], isPattern: boolean = false): Promise<boolean> {
+    const conn = this.getConnectionPool(poolId) as any;
+    if (!conn || typeof conn.subscribeChannels !== 'function') return false;
+    if (isPattern && typeof conn.psubscribePatterns === 'function') {
+      await conn.psubscribePatterns(channels, (ch: string, msg: string) => this.emit('redisPubSubMessage', poolId, ch, msg));
+      return true;
+    } else {
+      await conn.subscribeChannels(channels, (ch: string, msg: string) => this.emit('redisPubSubMessage', poolId, ch, msg));
+      return true;
+    }
+  }
+
+  async redisUnsubscribe(poolId: string, channels: string[], isPattern: boolean = false): Promise<boolean> {
+    const conn = this.getConnectionPool(poolId) as any;
+    if (!conn || typeof conn.unsubscribeChannels !== 'function') return false;
+    await conn.unsubscribeChannels(channels, isPattern);
+    return true;
+  }
+
+  // 连接池状态与配置（最小实现）
+  getConnectionPoolStatus(_poolId: string): IConnectionPoolStatus | undefined {
+    return { maxConnections: 1, minConnections: 1, acquireTimeout: 60000, idleTimeout: 60000, testOnBorrow: true };
+  }
+  updateConnectionPoolConfig(_poolId: string, _config: Partial<IConnectionPoolConfig>): void {}
+  getAllConnectionPoolIds(): string[] { return Array.from(this.connections.keys()); }
+  getConnectionPoolConfig(_poolId: string): IConnectionPoolConfig | undefined {
+    return { maxConnections: 1, minConnections: 1, acquireTimeout: 60000, idleTimeout: 60000, testOnBorrow: true };
+  }
+
+  // PostgreSQL 专用方法（仅对 pgsql 类型优化）
+  async listSchemas(poolId: string): Promise<string[]> {
+    const t = this.poolTypes.get(poolId);
+    if (t !== 'postgresql' && t !== 'gaussdb') return [];
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    const res = await conn.executeQuery('SELECT schema_name FROM information_schema.schemata ORDER BY schema_name');
+    const schemas = (res?.data || []).map((row: any) => row.schema_name || Object.values(row)[0]);
+    // 过滤系统schema
+    return schemas.filter((s: string) => !['pg_toast', 'pg_temp_1', 'pg_toast_temp_1'].includes(s));
+  }
+
+  async listTablesWithSchema(poolId: string, schema: string): Promise<string[]> {
+    const t = this.poolTypes.get(poolId);
+    if (t !== 'postgresql' && t !== 'gaussdb') return [];
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    const res = await conn.executeQuery('SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name', [schema]);
+    return (res?.data || []).map((row: any) => row.table_name || Object.values(row)[0]);
+  }
+
+  async getTableStructureWithSchema(poolId: string, schema: string, tableName: string): Promise<TableStructure> {
+    const t = this.poolTypes.get(poolId);
+    if (t !== 'postgresql' && t !== 'gaussdb') return await this.getTableStructure(poolId, tableName);
+    const conn = this.getConnectionPool(poolId);
+    if (!conn) throw new Error('连接池不存在');
+    const columnsRes = await conn.executeQuery(
+      'SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = $1 AND table_schema = $2',
+      [tableName, schema]
+    );
+    const indexesRes = await conn.executeQuery(
+      'SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 AND tablename = $2',
+      [schema, tableName]
+    );
+    const columns = (columnsRes?.data || []).map((col: any) => ({
+      name: col.column_name,
+      type: col.data_type,
+      nullable: col.is_nullable === 'YES',
+      default: col.column_default
+    }));
+    const indexes = (indexesRes?.data || []).map((idx: any) => ({ name: idx.indexname, definition: idx.indexdef }));
+    return { name: tableName, schema, columns, indexes, foreignKeys: [], rowCount: 0, size: 0 } as any;
+  }
 }

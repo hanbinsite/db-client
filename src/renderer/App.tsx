@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Tabs, message, Button, Tooltip, Dropdown, Badge, Menu } from 'antd';
+import RedisQueryPage from './components/redis/RedisQueryPage';
 import {
   PlusOutlined, DatabaseOutlined, UserOutlined,
   FileTextOutlined, BankOutlined, 
@@ -20,6 +21,14 @@ import './App.css';
 import RedisDataBrowser from './components/data-view/RedisDataBrowser';
 import RedisActions from './components/redis/RedisActions';
 import RedisServiceInfoPage from './components/redis/RedisServiceInfoPage';
+import RedisSlowlogPage from './components/redis/RedisSlowlogPage';
+import RedisCliPage from './components/redis/RedisCliPage';
+import RedisPubSubPage from './components/redis/RedisPubSubPage';
+import MySqlActions from './components/mysql/MySqlActions';
+import MySqlServiceInfoPage from './components/mysql/MySqlServiceInfoPage';
+import MySqlUsersPage from './components/mysql/MySqlUsersPage';
+import MySqlCliPage from './components/mysql/MySqlCliPage';
+import MySqlSlowlogPage from './components/mysql/MySqlSlowlogPage';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -83,15 +92,25 @@ const AppContent: React.FC = () => {
 
   // 初始化
   useEffect(() => {
+    console.log('[APP INIT] 开始初始化应用');
+    
     // 从连接存储服务加载连接列表
     const loadConnections = async () => {
+      console.log('[APP INIT] 开始加载连接列表');
       if (window.electronAPI) {
         try {
           const result = await window.electronAPI.getAllConnections();
           if (result.success) {
             // 只加载连接列表，但不自动设置活动连接
             setConnections(result.connections);
+            console.log('[APP INIT] 连接列表加载成功，共加载', result.connections.length, '个连接');
             // 初始化时不自动选择任何连接，保持activeConnection为null
+            
+            // 添加Redis数据库加载相关的全局日志点
+            const redisConnections = result.connections.filter(conn => conn.type === 'redis');
+            if (redisConnections.length > 0) {
+              console.log('[APP INIT] 发现Redis连接，共', redisConnections.length, '个');
+            }
           } else {
             console.error('加载连接列表失败:', result.message);
             message.error('加载连接列表失败');
@@ -100,6 +119,8 @@ const AppContent: React.FC = () => {
           console.error('加载连接列表异常:', error);
           message.error('加载连接列表异常');
         }
+      } else {
+        console.log('[APP INIT] electronAPI不可用，无法加载连接列表');
       }
     };
 
@@ -107,16 +128,31 @@ const AppContent: React.FC = () => {
 
     // 监听菜单事件
     if (window.electronAPI) {
+      console.log('[APP INIT] 设置菜单事件监听器');
       window.electronAPI.onMenuNewConnection(() => {
         // 触发新建连接逻辑
         createNewConnection();
       });
     }
 
+    // 检查是否有Redis连接相关的工具可用
+    try {
+      if (typeof window !== 'undefined') {
+        console.log('[APP INIT] Window对象可用，准备Redis连接');
+        // 确保localStorage可用
+        if (typeof localStorage !== 'undefined') {
+          console.log('[APP INIT] localStorage可用，可以用于缓存管理');
+        }
+      }
+    } catch (error) {
+      console.error('[APP INIT] 检查环境时出错:', error);
+    }
+
     return () => {
       if (window.electronAPI) {
         window.electronAPI.removeAllListeners('menu-new-connection');
       }
+      console.log('[APP INIT] 清理资源');
     };
   }, []);
 
@@ -174,37 +210,46 @@ const AppContent: React.FC = () => {
     // 用户第一次点击连接时，尝试连接到数据库并设置连接状态
     try {
       if (window.electronAPI && connection.id) {
-        // 使用connectDatabase创建持久连接，而不是testConnection
-        const connectResult = await window.electronAPI.connectDatabase(connection);
-        
-        if (connectResult && connectResult.success) {
-          // 更新连接的状态为已连接，并保存返回的connectionId
-          const updatedConnection = { 
-            ...connection, 
-            isConnected: true, 
-            connectionId: connectResult.connectionId // 保存真实的连接池ID
-          };
-          setActiveConnection(updatedConnection);
-          
-          // 更新连接列表中的状态
-          setConnections(prev => 
-            prev.map(conn => conn.id === connection.id ? updatedConnection : conn)
-          );
-          
-          console.log('数据库连接成功并保持持久连接，现在将尝试获取真实数据');
-          // 让DatabasePanel组件的自动选择逻辑工作，不手动选择数据库
+        // 先测试连接并尝试复用/保留测试创建的连接池
+        const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+        const testResult = await window.electronAPI.testConnection(connection);
+        if (testResult && testResult.success) {
+          // 测试成功后检查是否已存在连接池配置（复用测试创建的池）
+          const cfgRes = await window.electronAPI.getConnectionPoolConfig(generatedId);
+          if (cfgRes) {
+            const updatedConnection = {
+              ...connection,
+              isConnected: true,
+              connectionId: generatedId
+            };
+            setActiveConnection(updatedConnection);
+            setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
+            console.log('测试连接成功并复用/保留连接池，设置poolId:', generatedId);
+          } else {
+            // 未检测到连接池配置，回退到创建持久连接
+            const connectResult = await window.electronAPI.connectDatabase(connection);
+            if (connectResult && connectResult.success) {
+              const updatedConnection = {
+                ...connection,
+                isConnected: true,
+                connectionId: connectResult.connectionId
+              };
+              setActiveConnection(updatedConnection);
+              setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
+              console.log('连接池未检测到，创建持久连接成功，poolId:', connectResult.connectionId);
+            } else {
+              console.warn('连接数据库失败:', connectResult?.message);
+              setActiveConnection({ ...connection, isConnected: false });
+              setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
+              message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
+            }
+          }
         } else {
-          console.warn('连接数据库失败:', connectResult?.message);
-          
-          // 连接失败时，保持未连接状态
+          // 测试失败，保持未连接状态并提示
+          console.warn('测试连接失败:', (testResult && testResult.error) || '未知错误');
           setActiveConnection({ ...connection, isConnected: false });
-          
-          // 更新连接列表中的状态
-          setConnections(prev => 
-            prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
-          );
-          
-          message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
+          setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
+          message.error('连接测试失败: ' + ((testResult && testResult.error) || '未知错误'));
         }
       } else {
         // 开发环境或无法使用electronAPI时，设置为未连接状态
@@ -213,15 +258,8 @@ const AppContent: React.FC = () => {
       }
     } catch (error) {
       console.error('连接数据库时出错:', error);
-      
-      // 出错时，设置为未连接状态
       setActiveConnection({ ...connection, isConnected: false });
-      
-      // 更新连接列表中的状态
-      setConnections(prev => 
-        prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn)
-      );
-      
+      setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
       message.error('连接数据库时发生错误');
     }
   };
@@ -283,6 +321,51 @@ const AppContent: React.FC = () => {
     } catch (error) {
       console.error('删除连接异常:', error);
       message.error('删除连接异常');
+    }
+  };
+
+  // 新增：断开连接并清理相关页面与状态
+  const handleConnectionDisconnect = async (connection: DatabaseConnection) => {
+    try {
+      const poolId = connection.connectionId || `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
+      if (window.electronAPI && connection.isConnected && poolId) {
+        await window.electronAPI.disconnectDatabase(poolId);
+      }
+
+      // 先计算新标签页集合，移除该连接的所有相关页面
+      const newDbTabs = databaseTabs.filter(t => t.connection.id !== connection.id);
+      const newQueryTabs = queryTabs.filter(t => (t.connection?.id || '') !== connection.id);
+      const newTableDataTabs = tableDataTabs.filter(t => t.connection.id !== connection.id);
+      const newTableDesignTabs = tableDesignTabs.filter(t => t.connection.id !== connection.id);
+
+      setDatabaseTabs(newDbTabs);
+      setQueryTabs(newQueryTabs);
+      setTableDataTabs(newTableDataTabs);
+      setTableDesignTabs(newTableDesignTabs);
+
+      // 更新连接状态为未连接并清除连接池ID
+      setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false, connectionId: undefined } : conn));
+
+      // 如当前活动连接为该连接，则清空右侧上下文并重置活动标签
+      if (activeConnection && activeConnection.id === connection.id) {
+        const updatedActive = { ...connection, isConnected: false, connectionId: undefined };
+        setActiveConnection(updatedActive);
+        setActiveDatabase('');
+        setActiveTable('');
+
+        const nextTabsOrder = [
+          ...newDbTabs,
+          ...newQueryTabs,
+          ...newTableDataTabs,
+          ...newTableDesignTabs
+        ];
+        setActiveTabKey(nextTabsOrder.length > 0 ? nextTabsOrder[0].key : '');
+      }
+
+      message.success('连接已断开，已关闭相关页面并清理数据');
+    } catch (error) {
+      console.error('断开连接异常:', error);
+      message.error('断开连接时发生错误');
     }
   };
 
@@ -440,11 +523,20 @@ const AppContent: React.FC = () => {
     const tabKey = `query-${Date.now()}`;
     // 使用传入的数据库名称或当前活动数据库
     const targetDatabase = databaseName || activeDatabase;
-    // 生成基本查询语句，如果有数据库名则包含数据库前缀
-    let defaultQuery = '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n';
-    if (targetDatabase) {
-      defaultQuery = `-- 输入SQL查询语句\n-- 例如: SELECT * FROM \`${targetDatabase}\`\`.table_name LIMIT 100;\n\n`;
+    
+    // 根据连接类型生成不同的默认查询内容
+    let defaultQuery = '';
+    if (activeConnection?.type === 'redis') {
+      // Redis连接的默认内容
+      defaultQuery = '# Redis命令示例\n# 输入命令执行，例如:\n# KEYS * - 列出所有键\n# GET key_name - 获取键值\n# SET key_name value - 设置键值\n\n';
+    } else {
+      // SQL数据库的默认内容
+      defaultQuery = '-- 输入SQL查询语句\n-- 例如: SELECT * FROM table_name LIMIT 100;\n\n';
+      if (targetDatabase) {
+        defaultQuery = `-- 输入SQL查询语句\n-- 例如: SELECT * FROM \`${targetDatabase}\`\`.table_name LIMIT 100;\n\n`;
+      }
     }
+    
     const newTab: QueryTab = {
       key: tabKey,
       label: '查询 ' + (queryTabs.length + 1),
@@ -594,9 +686,23 @@ const AppContent: React.FC = () => {
             activeDatabase={activeDatabase}
             darkMode={darkMode}
             onOpenServiceInfo={handleOpenRedisServiceInfo}
+            onOpenSlowlog={handleOpenRedisSlowlog}
+            onOpenCli={handleOpenRedisCli}
+            onOpenPubSub={handleOpenRedisPubSub}
           />
         )}
-        
+        {activeConnection?.type === 'mysql' && (
+          <MySqlActions
+            connection={activeConnection}
+            activeDatabase={activeDatabase}
+            darkMode={darkMode}
+            onOpenServiceInfo={handleOpenMySqlServiceInfo}
+            onOpenUsers={handleOpenMySqlUsers}
+            onOpenCli={handleOpenMySqlCli}
+            onOpenSlowlog={handleOpenMySqlSlowlog}
+          />
+        )}
+
         <div className="toolbar-section" style={{ marginLeft: 'auto' }}>
           <Tooltip title={darkMode ? '切换为亮色模式' : '切换为暗色模式'}>
             <Button 
@@ -637,6 +743,212 @@ const AppContent: React.FC = () => {
     }
     setActiveTabKey(key);
   };
+
+  // 打开 Redis 慢日志标签页
+  const handleOpenRedisSlowlog = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-slowlog-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 慢日志',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 打开 Redis 命令行标签页
+  const handleOpenRedisCli = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-cli-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 命令行',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 打开 Redis 发布/订阅标签页
+  const handleOpenRedisPubSub = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个Redis连接');
+      return;
+    }
+    const dbName = activeDatabase || 'db0';
+    const key = `redis-pubsub-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'Redis 发布/订阅',
+        connection: activeConnection,
+        database: dbName,
+        type: 'redis' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 服务信息
+  const handleOpenMySqlServiceInfo = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'information_schema';
+    const key = `mysql-service-info-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 服务信息',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 用户信息
+  const handleOpenMySqlUsers = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-users-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 用户信息',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 命令行
+  const handleOpenMySqlCli = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-cli-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 命令行',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 慢日志
+  const handleOpenMySqlSlowlog = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'mysql';
+    const key = `mysql-slowlog-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 慢日志',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // 全局函数：从服务信息页等位置打开指定Redis数据库的键浏览器标签
+  useEffect(() => {
+    (window as any).__openRedisDbTab = (dbName: string) => {
+      if (!activeConnection) {
+        message.warning('请先选择一个Redis连接');
+        return;
+      }
+      const tabKey = `db-${activeConnection.id}-${dbName}`;
+      const exists = databaseTabs.find(t => t.key === tabKey);
+      if (!exists) {
+        const newTab: DatabaseTab = {
+          key: tabKey,
+          label: `${activeConnection.name} - ${dbName}`,
+          connection: activeConnection,
+          database: dbName,
+          type: 'redis' as DatabaseType
+        };
+        setDatabaseTabs(prev => [...prev, newTab]);
+      }
+      setActiveTabKey(tabKey);
+    };
+    (window as any).__locateRedisDbInSidebar = (dbName: string) => {
+      if (!activeConnection) {
+        message.warning('请先选择一个Redis连接');
+        return;
+      }
+      setActiveDatabase(dbName);
+      message.success(`定位到侧边栏数据库: ${dbName}`);
+    };
+    (window as any).__exportCmdStatsCsv = (rows: any[]) => {
+      try {
+        const header = ['cmd','calls','usec','usecPerCall','windowCalls','windowUsecPerCall','windowRate'];
+        const lines = [header.join(',')].concat((rows||[]).map(r => header.map(h => r[h] ?? '').join(',')));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `redis-command-stats-${Date.now()}.csv`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        console.error('导出CSV失败', e);
+        message.error('导出失败');
+      }
+    };
+    return () => { 
+      try { delete (window as any).__openRedisDbTab; } catch {}
+      try { delete (window as any).__locateRedisDbInSidebar; } catch {}
+      try { delete (window as any).__exportCmdStatsCsv; } catch {}
+    };
+  }, [activeConnection, databaseTabs]);
 
   // 渲染底部状态栏
   const renderStatusBar = () => {
@@ -716,6 +1028,7 @@ const AppContent: React.FC = () => {
             onConnectionSelect={handleConnectionSelect}
             onConnectionEdit={handleConnectionEdit}
             onConnectionDelete={handleConnectionDelete}
+            onConnectionDisconnect={handleConnectionDisconnect}
             activeConnection={activeConnection}
             darkMode={darkMode}
           />
@@ -766,6 +1079,41 @@ const AppContent: React.FC = () => {
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                     {/* 根据数据库类型渲染不同的面板组件 */}
                     {tab.type === 'mysql' ? (
+                      tab.key?.startsWith('mysql-service-info-') ? (
+                        <MySqlServiceInfoPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('mysql-users-') ? (
+                        <MySqlUsersPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('mysql-cli-') ? (
+                        <MySqlCliPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                          onDatabaseChange={(newDatabase) => {
+                            // 更新标签页的数据库信息
+                            setDatabaseTabs(prev => prev.map(t => 
+                              t.key === tab.key ? { ...t, database: newDatabase } : t
+                            ));
+                            // 更新全局活动数据库状态
+                            if (tab.connection.id === activeConnection?.id) {
+                              setActiveDatabase(newDatabase);
+                            }
+                          }}
+                        />
+                      ) : tab.key?.startsWith('mysql-slowlog-') ? (
+                        <MySqlSlowlogPage
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : (
                       <MySqlDatabaseTabPanel
                         connection={tab.connection}
                         database={tab.database}
@@ -774,6 +1122,7 @@ const AppContent: React.FC = () => {
                         onTableSelect={handleTableSelect}
                         onTableDesign={handleTableDesign}
                       />
+                      )
                     ) : tab.type === 'postgresql' || tab.type === 'gaussdb' ? (
                       <PostgreSqlDatabaseTabPanel
                         connection={tab.connection}
@@ -786,6 +1135,24 @@ const AppContent: React.FC = () => {
                     ) : tab.type === 'redis' ? (
                       tab.key?.startsWith('redis-service-info-') ? (
                         <RedisServiceInfoPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-slowlog-') ? (
+                        <RedisSlowlogPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-cli-') ? (
+                        <RedisCliPage
+                          connection={tab.connection}
+                          database={tab.database}
+                          darkMode={darkMode}
+                        />
+                      ) : tab.key?.startsWith('redis-pubsub-') ? (
+                        <RedisPubSubPage
                           connection={tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
@@ -811,7 +1178,9 @@ const AppContent: React.FC = () => {
                 </TabPane>
               ))}
               
-              {queryTabs.map(tab => (
+              {queryTabs.map(tab => {
+                const tabConnection = tab.connection || activeConnection;
+                return (
                 <TabPane 
                   key={tab.key} 
                   tab={<span><DatabaseOutlined style={{marginRight: 4}} />{tab.label}</span>}
@@ -819,13 +1188,14 @@ const AppContent: React.FC = () => {
                 >
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                     <QueryPanel
-                      connection={tab.connection || activeConnection}
+                      connection={tabConnection}
                       database={tab.database || activeDatabase}
                       darkMode={darkMode}
                     />
                   </div>
                 </TabPane>
-              ))}
+                );
+              })}
               
               {tableDataTabs.map(tab => (
                 <TabPane 

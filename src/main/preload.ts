@@ -12,17 +12,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disconnectDatabase: (connectionId: string) => ipcRenderer.invoke('disconnect-database', connectionId),
   executeQuery: (connectionId: string, query: string, params?: any[]) => 
     ipcRenderer.invoke('execute-query', { connectionId, query, params }),
+  // 新增：批量执行（同一连接、MySQL 串行队列原子化）
+  executeBatch: (connectionId: string, queries: Array<{query: string; params?: any[]}>) =>
+    ipcRenderer.invoke('execute-batch', { connectionId, queries }),
   getDatabaseInfo: (connectionId: string) => ipcRenderer.invoke('get-database-info', connectionId),
   getTableStructure: (connectionId: string, tableName: string) => 
     ipcRenderer.invoke('get-table-structure', { connectionId, tableName }),
   listTables: (connectionId: string) => ipcRenderer.invoke('list-tables', connectionId),
   listDatabases: (connectionId: string) => ipcRenderer.invoke('list-databases', connectionId),
-  // 新增：获取连接池配置（动态并发）
-  getConnectionPoolConfig: (connectionId: string) => ipcRenderer.invoke('get-connection-pool-config', connectionId),
+  // 新增：获取连接池配置（动态并发），直接返回配置对象或null
+  getConnectionPoolConfig: async (connectionId: string) => {
+    const res = await ipcRenderer.invoke('get-connection-pool-config', connectionId);
+    return res && res.success ? res.config : null;
+  },
+  
+  // Redis 发布/订阅
+  redisSubscribe: (connectionId: string, channels: string[], isPattern?: boolean) =>
+    ipcRenderer.invoke('redis-subscribe', { connectionId, channels, isPattern }),
+  redisUnsubscribe: (connectionId: string, channels: string[], isPattern?: boolean) =>
+    ipcRenderer.invoke('redis-unsubscribe', { connectionId, channels, isPattern }),
+  onRedisPubSubMessage: (callback: (payload: { connectionId: string; channel: string; message: string; ts: number }) => void) => {
+    ipcRenderer.on('redis-pubsub-message', (_event, payload) => callback(payload));
+  },
   
   // 连接测试
   testConnection: (config: any) => ipcRenderer.invoke('test-connection', config),
   closeTestConnection: (config: any) => ipcRenderer.invoke('close-test-connection', config),
+
+  // 检查更新（仅打包后可用）
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   
   // 菜单事件监听
   onMenuNewConnection: (callback: () => void) => {
@@ -42,7 +60,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSaveDialog: (defaultFileName: string, format: string) => 
     ipcRenderer.invoke('show-save-dialog', { defaultFileName, format }),
   writeExportFile: (filePath: string, data: any, format: string, dbType?: string) =>
-    ipcRenderer.invoke('write-export-file', { filePath, data, format, dbType })
+    ipcRenderer.invoke('write-export-file', { filePath, data, format, dbType }),
+  // PostgreSQL 专用：模式列表与按模式查询
+  listSchemas: (connectionId: string) => ipcRenderer.invoke('list-schemas', connectionId),
+  listTablesWithSchema: (connectionId: string, schema: string) =>
+    ipcRenderer.invoke('list-tables-with-schema', { connectionId, schema }),
+  getTableStructureWithSchema: (connectionId: string, schema: string, tableName: string) =>
+    ipcRenderer.invoke('get-table-structure-with-schema', { connectionId, schema, tableName }),
 });
 
 // 类型定义在 src/renderer/types.ts 中

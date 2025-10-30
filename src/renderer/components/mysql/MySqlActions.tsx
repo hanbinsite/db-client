@@ -1,29 +1,29 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Button, Space } from 'antd';
-import { DatabaseConnection } from '../../types';
-interface RedisActionsProps {
+import type { DatabaseConnection } from '../../types';
+
+interface MySqlActionsProps {
   connection?: DatabaseConnection;
   activeDatabase?: string;
   darkMode?: boolean;
   onOpenServiceInfo?: () => void;
-  onOpenSlowlog?: () => void;
+  onOpenUsers?: () => void;
   onOpenCli?: () => void;
-  onOpenPubSub?: () => void;
+  onOpenSlowlog?: () => void;
 }
 
-const RedisActions: React.FC<RedisActionsProps> = ({ connection, activeDatabase, darkMode, onOpenServiceInfo, onOpenSlowlog, onOpenCli, onOpenPubSub }) => {
+const MySqlActions: React.FC<MySqlActionsProps> = ({ connection, activeDatabase, darkMode, onOpenServiceInfo, onOpenUsers, onOpenCli, onOpenSlowlog }) => {
   if (!connection) return null;
-
   return (
     <div className="toolbar-section">
       <Space>
         <Button onClick={onOpenServiceInfo}>服务信息</Button>
+        <Button onClick={onOpenUsers}>用户信息</Button>
         <Button onClick={onOpenCli}>命令行</Button>
         <Button onClick={onOpenSlowlog}>慢日志</Button>
-        <Button onClick={onOpenPubSub}>发布/订阅</Button>
       </Space>
     </div>
   );
 };
 
-export default RedisActions;
+export default MySqlActions;

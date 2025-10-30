@@ -884,6 +884,29 @@ export default DataPanel;
 
 const resolvePoolId = async (conn: any): Promise<string | undefined> => {
   let pid: string | undefined = conn?.connectionId;
+  const generatedId = conn ? `${conn.type}_${conn.host}_${conn.port}_${conn.database || ''}` : '';
+  // 先测试连接并尝试复用/保留测试创建的连接池
+  if (!pid && (window as any).electronAPI?.testConnection && conn) {
+    try {
+      await (window as any).electronAPI.testConnection(conn);
+    } catch {
+      // 测试失败不抛出，继续尝试创建或复用
+    }
+  }
+  // 测试后优先复用现有连接池
+  if (!pid && generatedId) {
+    try {
+      const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+      if (cfgRes) {
+        pid = generatedId;
+        conn.connectionId = pid;
+        conn.isConnected = true;
+      }
+    } catch {
+      // no-op
+    }
+  }
+  // 若仍无pid，回退到创建持久连接
   if (!pid && (window as any).electronAPI?.connectDatabase && conn) {
     try {
       const res = await (window as any).electronAPI.connectDatabase(conn);
@@ -891,20 +914,15 @@ const resolvePoolId = async (conn: any): Promise<string | undefined> => {
         pid = res.connectionId;
         conn.connectionId = pid;
         conn.isConnected = true;
-      }
-    } catch (e) {
-      // 忽略，继续尝试生成ID检查
-    }
-  }
-  if (!pid && conn) {
-    const generatedId = `${conn.type}_${conn.host}_${conn.port}_${conn.database || ''}`;
-    try {
-      const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
-      if (cfgRes && cfgRes.success) {
-        pid = generatedId;
+      } else if (generatedId) {
+        // 最后再检查一次是否已有池
+        const cfgRes2 = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+        if (cfgRes2) {
+          pid = generatedId;
+        }
       }
     } catch {
-      // no-op
+      // ignore
     }
   }
   return pid;

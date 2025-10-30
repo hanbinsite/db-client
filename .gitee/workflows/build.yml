@@ -1,0 +1,229 @@
+name: Build & Release (master)
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+# 全局加速与镜像设置（Electron/Electron Builder）
+env:
+  ELECTRON_MIRROR: https://cdn.npmmirror.com/binaries/electron/
+  ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+
+jobs:
+  build-linux:
+    name: Linux build (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Set npm registry (China mirror)
+        run: npm config set registry https://registry.npmmirror.com/
+
+      - name: Cache node_modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Electron (linux)
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer & main
+        run: npm run build
+
+      - name: Package Linux
+        run: npm run pack:linux
+
+      - name: Upload artifacts (Linux)
+        uses: actions/upload-artifact@v3
+        with:
+          name: db-client-linux
+          path: release/*-linux.*
+
+  build-windows:
+    name: Windows build (NSIS)
+    # 注意：Gitee 默认仅提供 Linux Runner。若需 Windows 构建，请在 Gitee Go 中注册自托管 Windows Runner。
+    # 如果已注册自托管 Runner，请将 runs-on 调整为对应标签，例如 [self-hosted, windows, x64]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Set npm registry (China mirror)
+        run: npm config set registry https://registry.npmmirror.com/
+
+      - name: Cache node_modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Electron (windows)
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ env.USERPROFILE }}\AppData\Local\electron\Cache
+            ${{ env.USERPROFILE }}\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer & main
+        run: npm run build
+
+      - name: Package Windows
+        run: npm run pack:win
+
+      - name: Upload artifacts (Windows)
+        uses: actions/upload-artifact@v3
+        with:
+          name: db-client-windows
+          path: release/*-win.*
+
+  build-macos:
+    name: macOS build (DMG)
+    # 注意：Gitee 默认仅提供 Linux Runner。若需 macOS 构建，请在 Gitee Go 中注册自托管 macOS Runner。
+    # 如果已注册自托管 Runner，请将 runs-on 调整为对应标签，例如 [self-hosted, macOS, ARM64] 或 [self-hosted, macOS, x64]
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Set npm registry (China mirror)
+        run: npm config set registry https://registry.npmmirror.com/
+
+      - name: Cache node_modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Electron (macos)
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer & main
+        run: npm run build
+
+      - name: Package macOS
+        run: npm run pack:mac
+
+      - name: Upload artifacts (macOS)
+        uses: actions/upload-artifact@v3
+        with:
+          name: db-client-macos
+          path: release/*-mac.*
+
+  release:
+    name: Create Gitee Release & upload assets
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-windows
+      - build-macos
+    # 请在 Gitee Go 的仓库设置中配置以下机密：
+    # - GITEE_TOKEN: 个人访问令牌（repo 权限）
+    # 可选变量：GITEE_OWNER/GITEE_REPO（默认从当前仓库派生）
+    env:
+      GITEE_OWNER: hanbinsite
+      GITEE_REPO: db-client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Read version from package.json
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Version: $VERSION"
+
+      - name: Create tag and push to Gitee
+        env:
+          VERSION: ${{ env.VERSION }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          git config user.name "gitee-ci"
+          git config user.email "ci@gitee.local"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}" || echo "tag exists"
+          # 使用令牌推送标签（HTTPS）
+          REPO_URL="https://oauth2:${GITEE_TOKEN}@gitee.com/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}.git"
+          git push "$REPO_URL" --tags
+
+      - name: Create Release via Gitee API
+        id: create_release
+        env:
+          VERSION: ${{ env.VERSION }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          API="https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases"
+          DATA=$(jq -n --arg tag "v${VERSION}" --arg name "DB Client v${VERSION}" --arg body "Auto release by CI" '{tag_name: $tag, name: $name, body: $body}')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -d "$DATA" -G --data-urlencode "access_token=${GITEE_TOKEN}")
+          echo "$RESP" | jq '.'
+          RELEASE_ID=$(echo "$RESP" | jq -r '.id')
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+            echo "Failed to create release" >&2
+            exit 1
+          fi
+          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+
+      - name: Upload assets to Gitee Release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_ID: ${{ env.RELEASE_ID }}
+        run: |
+          API="https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/${RELEASE_ID}/assets"
+          shopt -s nullglob
+          for f in artifacts/**/*; do
+            fname=$(basename "$f")
+            echo "Uploading $fname"
+            curl -s -X POST "$API" -G --data-urlencode "access_token=${GITEE_TOKEN}" -F "name=$fname" -F "label=$fname" -F "file=@$f" | jq '.'
+          done

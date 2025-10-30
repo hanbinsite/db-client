@@ -14,6 +14,7 @@ interface ConnectionPanelProps {
   onConnectionSelect: (connection: DatabaseConnection) => void;
   onConnectionEdit: (connection: DatabaseConnection) => void;
   onConnectionDelete: (connectionId: string) => void;
+  onConnectionDisconnect: (connection: DatabaseConnection) => void;
   activeConnection: DatabaseConnection | null;
   darkMode: boolean;
 }
@@ -24,6 +25,7 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
   onConnectionSelect,
   onConnectionEdit,
   onConnectionDelete,
+  onConnectionDisconnect,
   activeConnection,
   darkMode
 }) => {
@@ -349,6 +351,13 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
         label: '刷新连接',
         icon: <RestOutlined />,
         onClick: () => handleRefreshConnection(connection)
+      },
+      {
+        key: 'disconnect',
+        label: '断开连接',
+        icon: <CloseCircleOutlined />,
+        disabled: !connection.isConnected,
+        onClick: () => onConnectionDisconnect(connection)
       }
     ]
   });
@@ -727,17 +736,6 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
 
   return (
     <div className={`connection-panel ${darkMode ? 'dark' : ''}`}>
-      <div className="connection-header">
-        <Button 
-          type="primary" 
-          icon={<PlusOutlined />} 
-          onClick={handleCreateConnection} 
-          style={{ width: '100%' }} 
-          size="small"
-        >
-          新建连接
-        </Button>
-      </div>
       <div className="connection-list">
         {connections.length > 0 ? (
           <List
@@ -748,18 +746,15 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
               return (
                 <Dropdown menu={getConnectionMenu(connection)} trigger={['contextMenu']}>
                   <List.Item
-                    className={`connection-item ${activeConnection?.id === connection.id ? 'active' : ''} ${darkMode ? 'dark' : ''}`}
+                    className={`connection-item ${activeConnection?.id === connection.id ? 'active' : ''} ${connection.isConnected ? 'connected' : 'disconnected'} ${darkMode ? 'dark' : ''}`}
                     onClick={() => onConnectionSelect(connection)}
                   >
-                    <div style={{ width: '100%', display: 'flex', alignItems: 'center' }}>
-                      <span className="connection-name text-ellipsis">
-                        {connection.name}
-                      </span>
-                      {connection.isConnected && (
-                        <Tooltip title="已连接">
-                          <span className="connection-success-indicator"></span>
-                        </Tooltip>
-                      )}
+                    <div className="connection-item-content">
+                      <span className="db-icon-wrapper">{icon}</span>
+                      <span className="connection-name text-ellipsis">{connection.name}</span>
+                      <Tooltip title={connection.isConnected ? '已连接' : '未连接'}>
+                        <span className={`connection-status-badge ${connection.isConnected ? 'connected' : 'disconnected'}`}></span>
+                      </Tooltip>
                     </div>
                   </List.Item>
                 </Dropdown>

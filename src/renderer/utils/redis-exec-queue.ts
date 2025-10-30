@@ -19,9 +19,19 @@ async function getMaxConnections(poolId: string): Promise<number> {
   }
 }
 
-export async function execRedisQueued(poolId: string, query: string, params?: ExecParams): Promise<any> {
+export async function execRedisQueued(poolId: string, query: string, params?: ExecParams, timeoutMs: number = 5000): Promise<any> {
   const max = await getMaxConnections(poolId);
-  const run = async () => (window as any).electronAPI?.executeQuery(poolId, query, params);
+  const run = async () => {
+    // 增加超时机制
+    if (timeoutMs > 0) {
+      return await Promise.race([
+        (window as any).electronAPI?.executeQuery(poolId, query, params),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Redis命令执行超时')), timeoutMs))
+      ]);
+    }
+    return await (window as any).electronAPI?.executeQuery(poolId, query, params);
+  };
+  
   if (max <= 1) {
     let result: any;
     const prev = poolChains[poolId] || Promise.resolve();

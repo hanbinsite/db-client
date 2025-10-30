@@ -65,6 +65,21 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
       return;
     }
 
+    // 断开状态下直接清空列表并终止加载，避免占位数据与交互
+    if (!connection.isConnected) {
+      console.log('DATABASE DATA LOADER - 连接已断开，清空数据库列表并停止加载');
+      const cachePrefix = `${connection.id}_${connection.type}_`;
+      // 清除该连接相关缓存（包括connected/disconnected前缀）
+      Object.keys(databaseListCache).forEach((k) => {
+        if (k.startsWith(cachePrefix)) {
+          delete databaseListCache[k];
+        }
+      });
+      onDataLoaded([], []);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       console.log('DATABASE DATA LOADER - 开始加载数据库列表，连接ID:', connection.id || '模拟', '连接状态:', connection.isConnected, '数据库类型:', connection.type);
@@ -108,18 +123,26 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
           
           console.log('DATABASE DATA LOADER - 成功获取数据库列表:', databases);
           
-          // 更新缓存：Redis只有在已连接且获得到的列表有效时缓存；其他数据库正常缓存
-          const shouldCache = hasRealData && databases.length > 0 && (
-            connection.type !== 'redis' || (connection.type === 'redis' && connection.isConnected)
-          );
+          // 更新缓存：对于Redis数据库，完全禁用缓存，确保每次都获取最新数据
+          let shouldCache = false;
+          
+          if (connection.type === 'redis') {
+            // Redis数据库完全禁用缓存
+            shouldCache = false;
+            console.log(`DATABASE DATA LOADER - Redis连接缓存已禁用，将始终重新获取数据库列表`);
+          } else {
+            // 非Redis数据库使用原有缓存逻辑
+            shouldCache = hasRealData && databases.length > 0;
+          }
+          
           if (shouldCache) {
             databaseListCache[cacheKey] = {
               databases: databases,
               timestamp: now
             };
-            console.log('DATABASE DATA LOADER - 数据库列表已缓存, cacheKey:', cacheKey);
+            console.log(`DATABASE DATA LOADER - 数据库列表已缓存, cacheKey: ${cacheKey}, 类型: ${connection.type}`);
           } else {
-            console.log('DATABASE DATA LOADER - 跳过缓存（未连接或占位数据）');
+            console.log(`DATABASE DATA LOADER - 跳过缓存: ${connection.type === 'redis' ? 'Redis数据库' : '非Redis数据库'} (条件不满足)`);
           }
         } catch (error) {
           console.error('DATABASE DATA LOADER - 获取数据库列表失败:', error);
@@ -187,6 +210,8 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
         let totalViews = 0;
         let totalProcedures = 0;
         let totalFunctions = 0;
+        // 对于Redis，保留初始键数量，用于右侧数据库列表显示
+        let keyCount = (connection.type === DbType.REDIS) && typeof dbInfo === 'object' ? (dbInfo.keyCount || 0) : 0;
         
         console.log(`DATABASE DATA LOADER - 开始获取数据库 ${dbName} 的对象信息`);
         
@@ -210,7 +235,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       let materializedViews: string[] = [];
                       if (connection.type === DbType.POSTGRESQL) {
                         try {
-                          const mViewQuery = "SELECT matviewname FROM pg_matviews WHERE schemaname = ?";
+                          const mViewQuery = "SELECT matviewname FROM pg_matviews WHERE schemaname = $1";
                           const mViewResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, mViewQuery, [schemaName]);
                           if (mViewResult && mViewResult.success && Array.isArray(mViewResult.data)) {
                             materializedViews = mViewResult.data.map((row: any) => row.matviewname);
@@ -224,7 +249,7 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       // 额外查询获取函数（为了兼容不同版本，使用更通用的查询）
                       let functions: string[] = [];
                       try {
-                        const funcQuery = "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = ? AND p.prokind = 'f'";
+                        const funcQuery = "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = $1 AND p.prokind = 'f'";
                         const functionResult = await window.electronAPI.executeQuery(connection.connectionId || connection.id, funcQuery, [schemaName]);
                         if (functionResult && functionResult.success && Array.isArray(functionResult.data)) {
                           functions = functionResult.data.map((row: any) => row.proname);
@@ -244,21 +269,19 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       totalViews += views.length;
                       totalProcedures += procedures.length;
                       totalFunctions += functions.length;
-                        
-                      console.log(`DATABASE DATA LOADER - 模式 ${schemaName} 的对象数量: 表 ${tables.length}, 视图 ${views.length}, 实体化视图 ${materializedViews.length}, 存储过程 ${procedures.length}, 函数 ${functions.length}`);
-                        
+                      
                       return {
-                        name: schemaName,
-                        tables: tables,
-                        views: views,
-                        materializedViews: materializedViews,
-                        procedures: procedures,
-                        functions: functions
+                        schemaName,
+                        tables,
+                        views,
+                        materializedViews,
+                        procedures,
+                        functions
                       };
-                    } catch (schemaError) {
-                      console.warn(`DATABASE DATA LOADER - 获取模式 ${schemaName} 的对象信息失败`, schemaError);
+                    } catch (error) {
+                      console.warn(`获取模式 ${schemaName} 的对象信息失败:`, error);
                       return {
-                        name: schemaName,
+                        schemaName,
                         tables: [],
                         views: [],
                         materializedViews: [],
@@ -267,248 +290,196 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                       };
                     }
                   });
-                    
-                  schemas = await Promise.all(schemaPromises);
+                  
+                  const schemaResults = await Promise.all(schemaPromises);
+                  schemas = schemaResults.map(r => ({
+                    name: r.schemaName,
+                    tables: r.tables,
+                    views: r.views,
+                    materializedViews: r.materializedViews,
+                    procedures: r.procedures,
+                    functions: r.functions
+                  }));
                 }
-            } else {
-              if ((connection as any).type === DbType.REDIS || (connection as any).type === 'redis') {
-                 tables = [];
-                 views = [];
-                 procedures = [];
-                 functions = [];
-                 
-                 totalTables = 0;
-                 totalViews = 0;
-                 totalProcedures = 0;
-                 totalFunctions = 0;
-                 
-                 console.log(`DATABASE DATA LOADER - 跳过Redis对象读取: ${dbName}`);
-               } else {
-                // 对于其他数据库类型，直接获取所有对象
-                const dbObjects = await getAllDatabaseObjects(connection, dbName);
-                tables = dbObjects.tables;
-                views = dbObjects.views;
-                procedures = dbObjects.procedures;
-                functions = dbObjects.functions;
-                
+              } else {
+                // 其他数据库类型使用统一方法获取对象
+                const result = await getAllDatabaseObjects(connection, dbName);
+                tables = result.tables || [];
+                views = result.views || [];
+                procedures = result.procedures || [];
+                functions = result.functions || [];
                 totalTables = tables.length;
                 totalViews = views.length;
                 totalProcedures = procedures.length;
                 totalFunctions = functions.length;
-                
-                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的对象数量: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
-                console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的表列表: ${JSON.stringify(tables)}`);
               }
-            }
           } catch (error) {
-            console.warn(`DATABASE DATA LOADER - 获取数据库${dbName}的对象信息失败`, error);
-            // 使用默认值继续
-            if (typeof dbInfo === 'object') {
-              tables = dbInfo.tables || [];
-              views = dbInfo.views || [];
-              procedures = dbInfo.procedures || [];
-              functions = dbInfo.functions || [];
-              schemas = dbInfo.schemas || [];
-              
-              totalTables = tables.length;
-              totalViews = views.length;
-              totalProcedures = procedures.length;
-              totalFunctions = functions.length;
-            } else {
-              // 如果没有连接信息，显示空列表
-              tables = [];
-              totalTables = tables.length;
-            }
+            console.warn(`获取数据库 ${dbName} 的对象信息失败:`, error);
           }
-        } else if (typeof dbInfo === 'object') {
-          // 只使用dbInfo中的实际数据
-          tables = dbInfo.tables || [];
-          views = dbInfo.views || [];
-          procedures = dbInfo.procedures || [];
-          functions = dbInfo.functions || [];
-          schemas = dbInfo.schemas || [];
-          
-          totalTables = tables.length;
-          totalViews = views.length;
-          totalProcedures = procedures.length;
-          totalFunctions = functions.length;
         } else {
-          // 没有连接信息，显示空列表
-          tables = [];
-          totalTables = tables.length;
+          console.log('DATABASE DATA LOADER - 无法获取真实对象信息（未连接或缺少API），保持占位数据');
         }
-        
-        if (!(((connection as any).type === DbType.REDIS) || ((connection as any).type === 'redis'))) {
-           console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 最终统计: 表 ${totalTables}, 视图 ${totalViews}, 存储过程 ${totalProcedures}, 函数 ${totalFunctions}`);
-         }
-        
-        // 构建树节点
-        const dbNode: TreeNode = {
-          key: `db-${dbName}`,
-          title: dbName,
-          type: 'database' as const,
-          children: []
+
+        return {
+          dbName,
+          tables,
+          views,
+          procedures,
+          functions,
+          schemas,
+          totalTables,
+          totalViews,
+          totalProcedures,
+          totalFunctions,
+          keyCount
         };
-        
-        // 对于Redis数据库，添加keyCount属性
-        if (connection.type === 'redis' && typeof dbInfo === 'object' && dbInfo !== null) {
-          (dbNode as any).keyCount = dbInfo.keyCount || 0;
-          console.log(`DATABASE DATA LOADER - 设置Redis数据库 ${dbName} 的键数量: ${(dbNode as any).keyCount}`);
-        }
-        
-        // 如果是PostgreSQL或GaussDB，确保总是显示schema层级
-        if ((connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB)) {
-          console.log(`DATABASE DATA LOADER - 处理PostgreSQL/GaussDB数据库 ${dbName} 的schema层级`);
-          
-          // 确保总是有schema层级，即使是空的或获取失败
-          if (!schemas || schemas.length === 0) {
-            console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 没有获取到schema信息，添加默认public模式`);
-            // 添加默认public模式
-            schemas = [{ name: 'public', tables: [], views: [], procedures: [], functions: [] }];
-          }
-          
-          console.log(`DATABASE DATA LOADER - 数据库 ${dbName} 的schema列表:`, schemas.map(s => s.name));
-          
-          dbNode.children = schemas.map((schema: any) => {
-              console.log(`处理schema: ${schema.name} - 表数量: ${schema.tables?.length || 0}, 视图数量: ${schema.views?.length || 0}, 实体化视图数量: ${schema.materializedViews?.length || 0}, 存储过程数量: ${schema.procedures?.length || 0}, 函数数量: ${schema.functions?.length || 0}`);
-              
-              // 计算总数用于显示
-              const totalCount = (schema.tables?.length || 0) + 
-                                (schema.views?.length || 0) + 
-                                (schema.materializedViews?.length || 0) + 
-                                (schema.procedures?.length || 0) + 
-                                (schema.functions?.length || 0);
-              
-              return {
-                key: `schema-${dbName}-${schema.name}`,
-                title: `${schema.name} (${totalCount})`, // 更新标题显示总数
-                type: 'schema' as const,
-                children: [
-                  // 表节点 - 总是显示
-                  {
-                    key: `tables-${dbName}-${schema.name}`,
-                    title: `表 (${schema.tables?.length || 0})`,
-                    children: (schema.tables && schema.tables.length > 0) ? 
-                      schema.tables.map((table: string) => ({
-                        key: `table-${dbName}-${schema.name}-${table}`,
-                        title: table,
-                        isLeaf: true,
-                        type: 'table' as const
-                      })) : []
-                  },
-                  // 视图节点 - 总是显示
-                  {
-                    key: `views-${dbName}-${schema.name}`,
-                    title: `视图 (${schema.views?.length || 0})`,
-                    children: (schema.views && schema.views.length > 0) ? 
-                      schema.views.map((view: string) => ({
-                        key: `view-${dbName}-${schema.name}-${view}`,
-                        title: view,
-                        isLeaf: true,
-                        type: 'view' as const
-                      })) : []
-                  },
-                  // 实体化视图节点 - 总是显示
-                  {
-                    key: `materialized-views-${dbName}-${schema.name}`,
-                    title: `实体化视图 (${schema.materializedViews?.length || 0})`,
-                    children: (schema.materializedViews && schema.materializedViews.length > 0) ? 
-                      schema.materializedViews.map((view: string) => ({
-                        key: `materialized-view-${dbName}-${schema.name}-${view}`,
-                        title: view,
-                        isLeaf: true,
-                        type: 'materialized-view' as const
-                      })) : []
-                  },
-                  // 函数节点 - 总是显示，合并存储过程和函数
-                  {
-                    key: `functions-${dbName}-${schema.name}`,
-                    title: `函数 (${(schema.functions?.length || 0) + (schema.procedures?.length || 0)})`,
-                    children: [
-                      ...(schema.functions || []).map((func: string) => ({
-                        key: `function-${dbName}-${schema.name}-${func}`,
-                        title: func,
-                        isLeaf: true,
-                        type: 'function' as const
-                      })),
-                      ...(schema.procedures || []).map((proc: string) => ({
-                        key: `procedure-${dbName}-${schema.name}-${proc}`,
-                        title: proc,
-                        isLeaf: true,
-                        type: 'procedure' as const
-                      }))
-                    ]
-                  }
-                ]
-              };
-            });
-        } else {
-          // 对于非PG/GaussDB，构建常规对象节点
-          const addGroup = (name: string, items: string[], type: 'table' | 'view' | 'procedure' | 'function') => ({
-            key: `${name}-${dbName}`,
-            title: `${name} (${items.length})`,
-            children: items.map((item: string) => ({
-              key: `${type}-${dbName}-${item}`,
-              title: item,
-              isLeaf: true,
-              type
-            }))
-          });
-          
-          dbNode.children = [
-            addGroup('表', tables, 'table'),
-            addGroup('视图', views, 'view'),
-            addGroup('存储过程', procedures, 'procedure'),
-            addGroup('函数', functions, 'function')
-          ];
-        }
-        
-        return dbNode;
       });
 
-      const data = await Promise.all(dataPromises);
-      let expandedKeys: string[] = [];
+      const results = await Promise.all(dataPromises);
+      console.log('DATABASE DATA LOADER - 对象信息获取完成，准备构建树结构');
 
-      if (data.length > 0) {
-        // 默认展开所有数据库节点
-        expandedKeys = data.map(node => node.key);
-        console.log('DATABASE DATA LOADER - 已生成树节点数据，默认展开所有数据库节点');
-      } else {
-        console.warn('DATABASE DATA LOADER - 未生成任何树节点数据');
-        // 不提供任何默认数据库，必须从数据库中获得正确的数据库列表
-        console.log('所有备用方法都失败，必须从数据库中获得正确的数据库列表');
-        onDataLoaded([], []);
+      // 构建树结构
+      const treeData: TreeNode[] = results.map(result => {
+        const children: TreeNode[] = [];
 
-    // 注意：刷新触发器由父组件控制，这里不需要重置
-        return;
-      }
+        // PostgreSQL/GaussDB: 使用schema视图
+        if (connection.type === DbType.POSTGRESQL || connection.type === DbType.GAUSSDB) {
+          // 模式节点
+          const schemaNodes: TreeNode[] = result.schemas.map((schema: any) => ({
+            key: `${result.dbName}/schema/${schema.name}`,
+            title: `${schema.name}`,
+            type: 'schema' as const,
+            children: [
+              // 表节点
+              {
+                key: `${result.dbName}/schema/${schema.name}/tables`,
+                title: `表 (${schema.tables.length})`,
+                type: 'table' as const,
+                children: schema.tables.map((t: string) => ({
+                  key: `${result.dbName}/schema/${schema.name}/table/${t}`,
+                  title: t,
+                  isLeaf: true
+                }))
+              },
+              // 视图节点
+              {
+                key: `${result.dbName}/schema/${schema.name}/views`,
+                title: `视图 (${schema.views.length})`,
+                type: 'view' as const,
+                children: schema.views.map((v: string) => ({
+                  key: `${result.dbName}/schema/${schema.name}/view/${v}`,
+                  title: v,
+                  isLeaf: true
+                }))
+              },
+              // 实体化视图（PostgreSQL）
+              ...(connection.type === DbType.POSTGRESQL ? [{
+                key: `${result.dbName}/schema/${schema.name}/materialized-views`,
+                title: `实体化视图 (${schema.materializedViews.length})`,
+                type: 'materialized-view' as const,
+                children: schema.materializedViews.map((mv: string) => ({
+                  key: `${result.dbName}/schema/${schema.name}/materialized-view/${mv}`,
+                  title: mv,
+                  isLeaf: true
+                }))
+              }] : []),
+              // 过程节点
+              {
+                key: `${result.dbName}/schema/${schema.name}/procedures`,
+                title: `过程 (${schema.procedures.length})`,
+                type: 'procedure' as const,
+                children: schema.procedures.map((p: string) => ({
+                  key: `${result.dbName}/schema/${schema.name}/procedure/${p}`,
+                  title: p,
+                  isLeaf: true
+                }))
+              },
+              // 函数节点
+              {
+                key: `${result.dbName}/schema/${schema.name}/functions`,
+                title: `函数 (${schema.functions.length})`,
+                type: 'function' as const,
+                children: schema.functions.map((f: string) => ({
+                  key: `${result.dbName}/schema/${schema.name}/function/${f}`,
+                  title: f,
+                  isLeaf: true
+                }))
+              }
+            ]
+          }));
 
-      onDataLoaded(data, expandedKeys);
+          children.push({
+            key: `${result.dbName}/schemas`,
+            title: `模式 (${result.schemas.length})`,
+            type: 'schema' as const,
+            children: schemaNodes
+          });
+        } else {
+          // 通用对象视图
+          children.push(
+            {
+              key: `${result.dbName}/tables`,
+              title: `表 (${result.totalTables})`,
+              type: 'table' as const,
+              children: result.tables.map(t => ({ key: `${result.dbName}/table/${t}`, title: t, isLeaf: true }))
+            },
+            {
+              key: `${result.dbName}/views`,
+              title: `视图 (${result.totalViews})`,
+              type: 'view' as const,
+              children: result.views.map(v => ({ key: `${result.dbName}/view/${v}`, title: v, isLeaf: true }))
+            },
+            {
+              key: `${result.dbName}/procedures`,
+              title: `过程 (${result.totalProcedures})`,
+              type: 'procedure' as const,
+              children: result.procedures.map(p => ({ key: `${result.dbName}/procedure/${p}`, title: p, isLeaf: true }))
+            },
+            {
+              key: `${result.dbName}/functions`,
+              title: `函数 (${result.totalFunctions})`,
+              type: 'function' as const,
+              children: result.functions.map(f => ({ key: `${result.dbName}/function/${f}`, title: f, isLeaf: true }))
+            }
+          );
+        }
+
+        return {
+          key: result.dbName,
+          title: result.dbName,
+          type: 'database' as const,
+          children,
+          // 对于Redis，将键数量透出到节点，便于右侧列表显示
+          ...(connection.type === DbType.REDIS ? { keyCount: result.keyCount || 0 } : {})
+        };
+      });
+
+      // 默认展开第一个数据库节点
+      const expandedKeys = treeData.length > 0 ? [treeData[0].key] : [];
+
+      // 通知父组件数据已加载完成
+      onDataLoaded(treeData, expandedKeys);
+      setLoading(false);
     } catch (error) {
       console.error('DATABASE DATA LOADER - 加载数据库结构失败:', error);
       onDataLoaded([], []);
-    } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    console.log('DATABASE DATA LOADER - connection状态变化或刷新触发:', connection, 'refreshTrigger:', refreshTrigger);
     loadDatabaseStructure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, refreshTrigger]);
 
-  // 导出清除缓存的方法，供外部调用
   useImperativeHandle(ref, () => ({
     clearCache: () => {
-      const cacheKey = connection ? `${connection.id}_${connection.type}_${connection.isConnected ? (connection.connectionId || 'connected') : 'disconnected'}` : '';
-      if (cacheKey && databaseListCache[cacheKey]) {
-        delete databaseListCache[cacheKey];
-        console.log('DATABASE DATA LOADER - 缓存已清除');
-      }
+      console.log('DATABASE DATA LOADER - 手动清除数据库列表缓存');
+      Object.keys(databaseListCache).forEach(key => delete databaseListCache[key]);
     }
   }));
 
-  return null; // 这个组件不渲染任何UI，只是数据加载服务
+  return null;
 });
 
 export default DatabaseDataLoader;

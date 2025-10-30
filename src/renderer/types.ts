@@ -44,10 +44,39 @@ declare global {
       connectDatabase: (config: any) => Promise<any>;
       disconnectDatabase: (connectionId: string) => Promise<any>;
       executeQuery: (connectionId: string, query: string, params?: any[]) => Promise<any>;
+      // 新增：批量执行（同一连接、MySQL 串行队列原子化）
+      executeBatch: (
+        connectionId: string,
+        queries: Array<{ query: string; params?: any[] }>
+      ) => Promise<{ success: boolean; results: QueryResult[]; message?: string }>;
       getDatabaseInfo: (connectionId: string) => Promise<any>;
       getTableStructure: (connectionId: string, tableName: string) => Promise<any>;
       listTables: (connectionId: string) => Promise<any>;
       listDatabases: (connectionId: string) => Promise<any>;
+      // PostgreSQL/GaussDB 专用：带 schema 的接口
+      listSchemas: (connectionId: string) => Promise<{ success: boolean; data: string[]; message?: string }>;
+      listTablesWithSchema: (connectionId: string, schema: string) => Promise<{ success: boolean; data: string[]; message?: string }>;
+      getTableStructureWithSchema: (connectionId: string, schema: string, tableName: string) => Promise<{ success: boolean; structure: TableStructure; message?: string }>;
+      // 新增：连接池配置（返回配置对象或null）
+      getConnectionPoolConfig: (connectionId: string) => Promise<{
+        maxConnections: number;
+        idleTimeoutMs?: number;
+      } | null>;
+
+      // Redis 发布/订阅
+      redisSubscribe: (
+        connectionId: string,
+        channels: string[],
+        isPattern?: boolean
+      ) => Promise<{ success: boolean; error?: string }>;
+      redisUnsubscribe: (
+        connectionId: string,
+        channels: string[],
+        isPattern?: boolean
+      ) => Promise<{ success: boolean; error?: string }>;
+      onRedisPubSubMessage: (
+        callback: (payload: { connectionId: string; channel: string; message: string; ts: number }) => void
+      ) => void;
       
       // 连接测试
       testConnection: (config: any) => Promise<any>;
@@ -57,11 +86,14 @@ declare global {
       exportQueryResult: (connectionId: string, query: string, format: string) => Promise<any>;
       exportTableData: (connectionId: string, tableName: string, format: string) => Promise<any>;
       showSaveDialog: (defaultFileName: string, format: string) => Promise<any>;
-  writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
+      writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
       
       // 菜单事件监听
       onMenuNewConnection: (callback: () => void) => void;
       removeAllListeners: (channel: string) => void;
+
+      // 新增：检查更新（打包后使用）
+      checkForUpdates: () => Promise<{ ok: boolean; result?: any; message?: string }>;
     };
   }
 }
@@ -76,9 +108,25 @@ export interface DatabaseInfo {
     used: number;
     free: number;
   };
+  // 新增：全实例存储统计（可选）
+  storageInstance?: {
+    total: number;
+    used: number;
+    free: number;
+  };
   performance: {
     queriesPerSecond: number;
+    // 短期滑动平均QPS（可选）
+    queriesPerSecondAvg?: number;
+    // 最近采样窗口大小（样本数，可选）
+    queriesPerSecondAvgWindowSize?: number;
     slowQueries: number;
+    threadsRunning?: number;
+    openTables?: number;
+    innodbBufferPoolSize?: number;
+    innodbBufferPoolReads?: number;
+    innodbBufferPoolWriteRequests?: number;
+    innodbBufferPoolReadRequests?: number; // 新增：用于计算缓冲池命中率
   };
 }
 

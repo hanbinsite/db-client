@@ -1,0 +1,47 @@
+kind: pipeline
+type: docker
+name: master-pipeline
+
+trigger:
+  branch:
+    include:
+      - master
+
+steps:
+  - name: build-linux
+    image: node:18
+    environment:
+      ELECTRON_MIRROR: https://cdn.npmmirror.com/binaries/electron/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+    commands:
+      - node -v && npm -v
+      - npm config set registry https://registry.npmmirror.com/
+      - npm ci
+      - npm run build
+      - npm run pack:linux
+
+  - name: release-gitee
+    image: alpine:3.18
+    environment:
+      GITEE_OWNER: hanbinsite
+      GITEE_REPO: db-client
+      GITEE_TOKEN:
+        from_secret: GITEE_TOKEN
+    commands:
+      - apk add --no-cache curl jq git
+      - VERSION=$(jq -r .version package.json)
+      - echo "Release version: ${VERSION}"
+      - git config --global user.name "gitee-ci"
+      - git config --global user.email "ci@gitee.local"
+      - git tag -a "v${VERSION}" -m "Release v${VERSION}" || true
+      - REPO_URL="https://oauth2:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+      - git push "$REPO_URL" --tags
+      - API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases"
+      - DATA=$(jq -n --arg tag "v${VERSION}" --arg name "DB Client v${VERSION}" --arg body "Auto release by CI" '{tag_name:$tag,name:$name,body:$body}')
+      - RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -d "$DATA" -G --data-urlencode "access_token=${GITEE_TOKEN}")
+      - echo "$RESP" | jq '.'
+      - RELEASE_ID=$(echo "$RESP" | jq -r '.id')
+      - if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then echo "Failed to create release" >&2; exit 1; fi
+      - echo "Release ID: $RELEASE_ID"
+      - ASSET_API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}/assets"
+      - for f in release/*-linux.*; do echo "Uploading $(basename "$f")"; curl -s -X POST "$ASSET_API" -G --data-urlencode "access_token=${GITEE_TOKEN}" -F "name=$(basename "$f")" -F "label=$(basename "$f")" -F "file=@$f" | jq '.'; done

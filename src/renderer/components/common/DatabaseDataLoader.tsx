@@ -228,8 +228,8 @@ const DatabaseDataLoader = forwardRef<DatabaseDataLoaderRef, DatabaseDataLoaderP
                   // 为每个schema获取表、视图、实体化视图、函数等信息
                   const schemaPromises = schemaList.map(async (schemaName: string) => {
                     try {
-                      // 使用getAllDatabaseObjects方法获取当前schema的基本对象
-                      const schemaObjects = await getAllDatabaseObjects(connection, schemaName, schemaName);
+                      // 使用getAllDatabaseObjects方法获取当前schema的基本对象 - 修复参数顺序，第一个参数应为数据库名
+                      const schemaObjects = await getAllDatabaseObjects(connection, dbName, schemaName);
                         
                       // 额外获取实体化视图
                       let materializedViews: string[] = [];

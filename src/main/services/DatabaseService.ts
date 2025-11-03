@@ -1537,7 +1537,8 @@ export class DatabaseService extends EventEmitter {
     if (t !== 'postgresql' && t !== 'gaussdb') return [];
     const conn = this.getConnectionPool(poolId);
     if (!conn) throw new Error('连接池不存在');
-    const res = await conn.executeQuery('SELECT schema_name FROM information_schema.schemata ORDER BY schema_name');
+    // 修改查询以只返回当前数据库的模式
+    const res = await conn.executeQuery('SELECT schema_name FROM information_schema.schemata WHERE catalog_name = current_database() ORDER BY schema_name');
     const schemas = (res?.data || []).map((row: any) => row.schema_name || Object.values(row)[0]);
     // 过滤系统schema
     return schemas.filter((s: string) => !['pg_toast', 'pg_temp_1', 'pg_toast_temp_1'].includes(s));

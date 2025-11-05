@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Empty, Typography, Spin, Tag, Button, Modal, Form, Input, Checkbox, message, Space, Popconfirm } from 'antd';
+import { Card, Table, Empty, Typography, Spin, Tag, Button, Modal, Form, Input, Checkbox, message, Space, Popconfirm, Select, TreeSelect } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DatabaseConnection } from '../../types';
 import { getDbUtils } from '../../utils/db';
@@ -8,6 +8,7 @@ import './MySqlUsersPage.css';
 import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
+const { Option } = Select;
 
 interface MySqlUsersPageProps {
   connection: DatabaseConnection;
@@ -31,6 +32,16 @@ interface Privilege {
   category: string;
 }
 
+interface DatabasePrivilege {
+  database: string;
+  privileges: string[];
+}
+
+interface DatabaseInfo {
+  name: string;
+  tables?: string[];
+}
+
 const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, darkMode }) => {
   const [userData, setUserData] = useState<UserData[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -43,6 +54,11 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
   const [form] = Form.useForm();
   const [privileges, setPrivileges] = useState<Privilege[]>([]);
   const [selectedPrivileges, setSelectedPrivileges] = useState<string[]>([]);
+  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
+  const [selectedDatabase, setSelectedDatabase] = useState<string>('*'); // 默认选择所有数据库
+  const [serverPrivileges, setServerPrivileges] = useState<string[]>([]);
+  const [databasePrivileges, setDatabasePrivileges] = useState<DatabasePrivilege[]>([]);
+  const [isServerPrivilegeMode, setIsServerPrivilegeMode] = useState<boolean>(false);
 
   // 获取用户列表
   const fetchUsers = async () => {
@@ -58,7 +74,7 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
             key: `${user.user}@${user.host}`,
             username: user.user,
             host: user.host,
-            privileges: user.privileges,
+            privileges: user.privileges || '无权限',
           }));
           setUserData(formattedUsers);
         }
@@ -69,10 +85,137 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
       setLoading(false);
     }
   };
+  
+  // 获取数据库列表
+  const fetchDatabases = async () => {
+    try {
+      const dbUtils = getDbUtils('mysql') as MySqlDbUtils;
+      const dbItems = await dbUtils.getDatabases(connection);
+      const formattedDatabases = dbItems.map(dbItem => ({ name: dbItem.name }));
+      setDatabases(formattedDatabases);
+    } catch (err) {
+      console.error('获取数据库列表失败:', err);
+      message.error('获取数据库列表失败');
+    }
+  };
+  
+  // 获取用户在指定数据库上的权限
+  const fetchDatabasePrivileges = async (username: string, host: string, database: string) => {
+    try {
+      const poolId = connection.connectionId || connection.id;
+      
+      // 关键改进：对于服务器权限，直接查询mysql.user表获取更准确的权限信息
+      if (database === '*') {
+        // 先尝试直接查询mysql.user表
+        const serverPrivilegesSql = `SELECT * FROM mysql.user WHERE user = '${username}' AND host = '${host}'`;
+        try {
+          const userResult = await window.electronAPI.executeQuery(poolId, serverPrivilegesSql);
+          
+          if (userResult && userResult.success && Array.isArray(userResult.data) && userResult.data.length > 0) {
+            const userRow = userResult.data[0];
+            const privilegesSet = new Set<string>();
+            const allDefinedPrivileges = getMysqlPrivileges().map(p => p.name);
+            
+            // 直接检查用户表中的权限字段
+            allDefinedPrivileges.forEach(privilege => {
+              // 特殊处理ALL权限
+              if (privilege === 'ALL') {
+                // 检查Super_priv是否为Y，作为ALL权限的判断依据
+                if (userRow['Super_priv'] === 'Y' || userRow['SUPER_PRIV'] === 'Y') {
+                  privilegesSet.add('ALL');
+                }
+              } else {
+                // 将权限名转换为mysql.user表中的字段名格式
+                const fieldNameBase = privilege.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+                // 尝试多种可能的字段名格式
+                const possibleFieldNames = [
+                  fieldNameBase + '_priv',
+                  fieldNameBase.toLowerCase() + '_priv',
+                  fieldNameBase.toUpperCase() + '_priv',
+                  // 针对一些特殊权限的常见命名变体
+                  privilege.toUpperCase() + '_PRIV',
+                  privilege.toLowerCase() + '_priv'
+                ];
+                
+                // 检查是否有任何一个可能的字段名存在且值为Y
+                for (const fieldName of possibleFieldNames) {
+                  if (userRow[fieldName] === 'Y') {
+                    privilegesSet.add(privilege);
+                    break;
+                  }
+                }
+              }
+            });
+            
+            // 如果从mysql.user表成功获取到权限，直接返回
+            return Array.from(privilegesSet);
+          }
+        } catch (userErr) {
+          // 如果查询mysql.user表失败，回退到SHOW GRANTS方式
+        }
+      }
+      
+      // 回退方案：使用SHOW GRANTS查询
+      const sql = database === '*' 
+          ? `SHOW GRANTS FOR '${username}'@'${host}'`
+          : `SHOW GRANTS FOR '${username}'@'${host}' LIKE '${database}.*'`;
+      
+      const result = await window.electronAPI.executeQuery(poolId, sql);
+      const privilegesSet = new Set<string>();
+      const allDefinedPrivileges = getMysqlPrivileges().map(p => p.name);
+      
+      if (result && result.success && Array.isArray(result.data)) {
+        result.data.forEach((row: any) => {
+          const grantKey = Object.keys(row).find(key => key.toLowerCase().includes('grant'));
+          if (grantKey) {
+            const grantStr = row[grantKey] as string;
+            
+            // 检查ALL权限
+            if (grantStr.toUpperCase().includes('ALL PRIVILEGES') || grantStr.toUpperCase().includes('ALL')) {
+              privilegesSet.add('ALL');
+            }
+            
+            // 对每个预定义的权限进行宽松匹配
+            allDefinedPrivileges.forEach(privilege => {
+              if (privilege === 'ALL') return; // 已经处理过
+              
+              // 非常宽松的匹配方式：只要权限名称的单词出现在GRANT语句中
+              const words = privilege.split(/\s+/);
+              // 检查是否所有单词都在GRANT语句中出现（大小写不敏感）
+              if (words.every(word => grantStr.toUpperCase().includes(word.toUpperCase()))) {
+                privilegesSet.add(privilege);
+              }
+            });
+          }
+        });
+      }
+      
+      return Array.from(privilegesSet);
+    } catch (err) {
+      console.error(`获取用户在数据库 ${database} 上的权限失败:`, err);
+      return [];
+    }
+  };
+  
+  // 获取用户的服务器级别权限
+  const fetchServerPrivileges = async (username: string, host: string) => {
+    console.log(`获取服务器权限 - 用户名: ${username}, 主机: ${host}`);
+    const privileges = await fetchDatabasePrivileges(username, host, '*');
+    console.log(`服务器权限获取完成，权限列表:`, privileges);
+    return privileges;
+  };
 
   useEffect(() => {
     fetchUsers();
+    fetchDatabases();
   }, [connection]);
+  
+  useEffect(() => {
+    // 当选择的数据库改变时，重新加载该数据库的权限
+    if (selectedUser && !isServerPrivilegeMode) {
+      loadDatabasePrivileges();
+    }
+  }, [selectedDatabase, selectedUser, isServerPrivilegeMode]);
 
   // 数据库级别权限更新功能将在后续实现
 
@@ -161,25 +304,80 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
     ];
   };
 
+  // 加载数据库权限
+  const loadDatabasePrivileges = async () => {
+    if (!selectedUser) return;
+    
+    try {
+      const privilegesList = await fetchDatabasePrivileges(selectedUser.username, selectedUser.host, selectedDatabase);
+      setSelectedPrivileges(privilegesList);
+    } catch (err) {
+      console.error('加载数据库权限失败:', err);
+      setSelectedPrivileges([]);
+    }
+  };
+  
+  // 加载服务器权限
+  const loadServerPrivileges = async () => {
+    if (!selectedUser) return;
+    
+    try {
+      console.log(`开始加载服务器权限，选中用户:`, selectedUser);
+      const privilegesList = await fetchServerPrivileges(selectedUser.username, selectedUser.host);
+      console.log(`设置服务器权限状态:`, privilegesList);
+      setServerPrivileges(privilegesList);
+    } catch (err) {
+      console.error('加载服务器权限失败:', err);
+      setServerPrivileges([]);
+    }
+  };
+  
   // 处理权限变更
   const handlePrivilegeChange = async () => {
     if (!selectedUser) return;
     
     try {
       const dbUtils = getDbUtils('mysql') as MySqlDbUtils;
-      await dbUtils.updateUserPrivileges(connection, selectedUser.username, selectedUser.host, selectedPrivileges);
+      const poolId = connection.connectionId || connection.id;
+      
+      if (isServerPrivilegeMode) {
+        // 服务器级别权限 - 使用现有的updateUserPrivileges方法
+        await dbUtils.updateUserPrivileges(connection, selectedUser.username, selectedUser.host, serverPrivileges);
+      } else {
+        // 数据库级别权限 - 手动执行GRANT/REVOKE语句
+        
+        // 先撤销该数据库上的所有权限
+        await window.electronAPI.executeQuery(poolId, 
+          `REVOKE ALL PRIVILEGES ON ${selectedDatabase}.* FROM '${selectedUser.username}'@'${selectedUser.host}'`);
+        
+        // 如果有权限需要授予
+        if (selectedPrivileges.length > 0) {
+          const privilegesStr = selectedPrivileges.join(', ');
+          await window.electronAPI.executeQuery(poolId, 
+            `GRANT ${privilegesStr} ON ${selectedDatabase}.* TO '${selectedUser.username}'@'${selectedUser.host}'`);
+        }
+        
+        // 刷新权限
+        await window.electronAPI.executeQuery(poolId, 'FLUSH PRIVILEGES');
+      }
+      
       message.success('权限更新成功');
-        setIsPrivilegeModalVisible(false);
-        fetchUsers();
+      setIsPrivilegeModalVisible(false);
+      fetchUsers();
     } catch (err) {
       console.error('更新权限失败:', err);
       message.error('更新权限失败，请检查权限');
     }
   };
 
-  // 处理权限选择变化
+  // 处理数据库权限选择变化
   const onPrivilegeChange = (checkedValues: string[]) => {
     setSelectedPrivileges(checkedValues);
+  };
+  
+  // 处理服务器权限选择变化
+  const onServerPrivilegeChange = (checkedValues: string[]) => {
+    setServerPrivileges(checkedValues);
   };
 
   const columns: ColumnsType<UserData> = [
@@ -225,22 +423,27 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
           <Button 
             type="link" 
             icon={<KeyOutlined />} 
-            onClick={() => {
+            onClick={async () => {
               setSelectedUser(record);
               setSelectedRowKeys([record.key]);
-              setPrivileges(getMysqlPrivileges());
-              // 设置已选中的权限
-              if (record.privileges && record.privileges !== '权限信息') {
-                // 使用更健壮的方式处理权限字符串
-                const privilegesList = record.privileges
-                  .split(',')
-                  .map(priv => priv.trim())
-                  .filter(priv => priv);
-                setSelectedPrivileges(privilegesList);
-              } else {
-                setSelectedPrivileges([]);
+              // 只在首次需要时获取权限列表，避免重复设置
+              if (privileges.length === 0) {
+                setPrivileges(getMysqlPrivileges());
               }
-              setIsPrivilegeModalVisible(true);
+              setIsServerPrivilegeMode(false);
+              setSelectedDatabase('*'); // 默认选择所有数据库
+              
+              // 先加载权限，再显示弹窗
+              try {
+                const privilegesList = await fetchDatabasePrivileges(record.username, record.host, '*');
+                setSelectedPrivileges(privilegesList);
+                // 权限加载完成后再显示弹窗
+                setIsPrivilegeModalVisible(true);
+              } catch (err) {
+                console.error('加载数据库权限失败:', err);
+                setSelectedPrivileges([]);
+                setIsPrivilegeModalVisible(true);
+              }
             }}
             size="small"
           >
@@ -300,26 +503,36 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
             </Button>
             <Button 
               icon={<KeyOutlined />}
-              onClick={() => {
+              onClick={async () => {
                 // 检查是否有选中的用户
                 if (!selectedUser) {
                   message.warning('请先选择一个用户');
                   return;
                 }
-                // 打开权限管理弹窗
-                setPrivileges(getMysqlPrivileges());
-                // 设置已选中的权限
-                if (selectedUser.privileges && selectedUser.privileges !== '权限信息') {
-                  // 使用更健壮的方式处理权限字符串
-                  const privilegesList = selectedUser.privileges
-                    .split(',')
-                    .map(priv => priv.trim())
-                    .filter(priv => priv);
-                  setSelectedPrivileges(privilegesList);
-                } else {
-                  setSelectedPrivileges([]);
+                
+                console.log('点击服务器权限按钮，选中用户:', selectedUser);
+                
+                // 设置为服务器权限模式
+                setIsServerPrivilegeMode(true);
+                // 只在首次需要时获取权限列表，避免重复设置
+                if (privileges.length === 0) {
+                  setPrivileges(getMysqlPrivileges());
                 }
-                setIsPrivilegeModalVisible(true);
+                
+                // 先加载权限，再显示弹窗
+                try {
+                  console.log('开始获取服务器权限...');
+                  const privilegesList = await fetchServerPrivileges(selectedUser.username, selectedUser.host);
+                  console.log('服务器权限获取完成，设置权限状态:', privilegesList);
+                  setServerPrivileges(privilegesList);
+                  // 权限加载完成后再显示弹窗
+                  console.log('打开权限弹窗，服务器权限模式');
+                  setIsPrivilegeModalVisible(true);
+                } catch (err) {
+                  console.error('加载服务器权限失败:', err);
+                  setServerPrivileges([]);
+                  setIsPrivilegeModalVisible(true);
+                }
               }}
             >
               服务器权限
@@ -511,19 +724,39 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
         </Form>
       </Modal>
 
-      {/* 权限管理弹窗 - 数据库级别 */}
+      {/* 权限管理弹窗 - 支持数据库级别和服务器级别 */}
       <Modal
-        title={`${selectedUser?.username}@${selectedUser?.host} 数据库级别权限管理`}
+        title={isServerPrivilegeMode 
+          ? `${selectedUser?.username}@${selectedUser?.host} 服务器级别权限管理`
+          : `${selectedUser?.username}@${selectedUser?.host} 数据库级别权限管理`}
         open={isPrivilegeModalVisible}
         onCancel={() => setIsPrivilegeModalVisible(false)}
         footer={null}
         width={900}
-        height={600}
       >
-        <div style={{ padding: '10px 0' }}>
+        {/* 数据库选择器 - 仅在数据库级别权限模式下显示 */}
+        {!isServerPrivilegeMode && (
+          <div style={{ marginBottom: 20 }}>
+            <Form.Item label="选择数据库" name="database">
+              <Select
+                value={selectedDatabase}
+                onChange={(value) => setSelectedDatabase(value)}
+                style={{ width: 300 }}
+                placeholder="请选择数据库"
+              >
+                <Option value="*">所有数据库 (*)</Option>
+                {databases.map(db => (
+                  <Option key={db.name} value={db.name}>{db.name}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          </div>
+        )}
+        
+        <div style={{ padding: '10px 0', maxHeight: 400, overflowY: 'auto' }}>
           <Checkbox.Group 
-            value={selectedPrivileges} 
-            onChange={onPrivilegeChange}
+            value={isServerPrivilegeMode ? serverPrivileges : selectedPrivileges} 
+            onChange={isServerPrivilegeMode ? onServerPrivilegeChange : onPrivilegeChange}
             style={{ width: '100%' }}
           >
             {privileges.reduce((acc, privilege) => {
@@ -545,7 +778,36 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
                 <div style={{ paddingLeft: 16 }}>
                   {group.items.map(item => (
                     <div key={item.name} style={{ marginBottom: 8 }}>
-                      <Checkbox value={item.name}>
+                      <Checkbox 
+                        value={item.name} 
+                        checked={isServerPrivilegeMode 
+                          ? serverPrivileges.some(priv => {
+                              // 更宽松的权限匹配方式
+                              // 1. 如果是ALL权限，直接选中所有权限
+                              if (priv.toUpperCase() === 'ALL') {
+                                return true;
+                              }
+                              // 2. 检查权限名称的包含关系，双向匹配
+                              const privUpper = priv.toUpperCase();
+                              const itemNameUpper = item.name.toUpperCase();
+                              // 检查权限名称是否完全匹配或相互包含
+                              return privUpper === itemNameUpper || 
+                                     privUpper.includes(itemNameUpper) || 
+                                     itemNameUpper.includes(privUpper);
+                            })
+                          : selectedPrivileges.some(priv => {
+                              // 数据库权限也使用相同的宽松匹配方式
+                              if (priv.toUpperCase() === 'ALL') {
+                                return true;
+                              }
+                              const privUpper = priv.toUpperCase();
+                              const itemNameUpper = item.name.toUpperCase();
+                              return privUpper === itemNameUpper || 
+                                     privUpper.includes(itemNameUpper) || 
+                                     itemNameUpper.includes(privUpper);
+                            })
+                        }
+                      >
                         <span>
                           <strong>{item.name}</strong>
                           <Text type="secondary"> - {item.description}</Text>
@@ -558,10 +820,13 @@ const MySqlUsersPage: React.FC<MySqlUsersPageProps> = ({ connection, database, d
             ))}
           </Checkbox.Group>
         </div>
+        
         <div style={{ marginTop: 16, textAlign: 'right' }}>
           <Space>
             <Button onClick={() => setIsPrivilegeModalVisible(false)}>取消</Button>
-            <Button type="primary" onClick={handlePrivilegeChange}>保存权限</Button>
+            <Button type="primary" onClick={handlePrivilegeChange}>
+              保存权限
+            </Button>
           </Space>
         </div>
       </Modal>

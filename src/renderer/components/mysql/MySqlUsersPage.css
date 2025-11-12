@@ -169,6 +169,108 @@
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
 }
 
+/* 数据库下拉框样式优化 */
+.mysql-users-page .ant-select {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.mysql-users-page .ant-select-selector {
+  border-radius: 8px !important;
+  border: 1px solid #d9d9d9;
+  transition: all 0.3s ease;
+  box-shadow: none;
+}
+
+.mysql-users-page .ant-select-selector:hover {
+  border-color: #007BFF;
+  box-shadow: 0 0 0 1px rgba(0, 123, 255, 0.1);
+}
+
+.mysql-users-page .ant-select-focused .ant-select-selector {
+  border-color: #007BFF !important;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2) !important;
+}
+
+.mysql-users-page .ant-select-dropdown {
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid #f0f0f0;
+  animation: dropdownSlideIn 0.2s ease;
+}
+
+.mysql-users-page .ant-select-item {
+  padding: 8px 12px;
+  margin: 2px 4px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.mysql-users-page .ant-select-item:hover {
+  background-color: rgba(0, 123, 255, 0.08);
+  transform: translateX(2px);
+}
+
+.mysql-users-page .ant-select-item-selected {
+  background-color: rgba(0, 123, 255, 0.12);
+}
+
+.mysql-users-page .ant-select-item-selected:hover {
+  background-color: rgba(0, 123, 255, 0.16);
+}
+
+/* 暗黑模式下的下拉框样式 */
+.mysql-users-page.dark-mode .ant-select-selector {
+  background-color: #16213E !important;
+  border-color: #0F3460 !important;
+  color: #e0e0e0;
+}
+
+.mysql-users-page.dark-mode .ant-select-selector:hover {
+  border-color: #007BFF;
+  box-shadow: 0 0 0 1px rgba(0, 123, 255, 0.2);
+}
+
+.mysql-users-page.dark-mode .ant-select-focused .ant-select-selector {
+  border-color: #007BFF !important;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2) !important;
+}
+
+.mysql-users-page.dark-mode .ant-select-dropdown {
+  background-color: #1A1A2E;
+  border-color: #0F3460;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.mysql-users-page.dark-mode .ant-select-item {
+  color: #e0e0e0;
+}
+
+.mysql-users-page.dark-mode .ant-select-item:hover {
+  background-color: rgba(0, 123, 255, 0.2);
+}
+
+.mysql-users-page.dark-mode .ant-select-item-selected {
+  background-color: rgba(0, 123, 255, 0.3);
+  color: #ffffff;
+}
+
+.mysql-users-page.dark-mode .ant-select-item-selected:hover {
+  background-color: rgba(0, 123, 255, 0.4);
+}
+
+/* 下拉框动画 */
+@keyframes dropdownSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 权限弹窗样式 */
 .privilege-modal-content {
   max-height: 500px;

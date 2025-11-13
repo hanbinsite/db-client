@@ -12,14 +12,29 @@ export class ConnectionStoreService {
   private isLoaded: boolean = false;
 
   constructor() {
+    // 检查是否运行在便携模式
+    const exePath = app.getPath('exe');
+    const appDirectory = path.dirname(exePath);
+    const portableMarkerPath = path.join(appDirectory, 'portable.ini');
+    const isPortable = fs.existsSync(portableMarkerPath);
+    
+    console.log(`Portable mode: ${isPortable}`);
+    console.log(`App directory: ${appDirectory}`);
+    console.log(`Portable marker path: ${portableMarkerPath}`);
+    
     // 获取应用的数据目录
-    const userDataPath = app.getPath('userData');
+    let userDataPath = isPortable ? appDirectory : app.getPath('userData');
+    
+    console.log(`UserData path: ${userDataPath}`);
+    
     // 确保目录存在
     if (!fs.existsSync(userDataPath)) {
       fs.mkdirSync(userDataPath, { recursive: true });
     }
     // 设置存储文件路径
     this.storeFilePath = path.join(userDataPath, 'connections.json');
+    
+    console.log(`Store file path: ${this.storeFilePath}`);
   }
 
   /**
@@ -69,6 +84,7 @@ export class ConnectionStoreService {
         JSON.stringify(connectionsToSave, null, 2),
         'utf-8'
       );
+      console.log(`Saved connections to: ${this.storeFilePath}`);
     } catch (error) {
       console.error('保存连接列表失败:', error);
       throw new Error('保存连接列表失败');

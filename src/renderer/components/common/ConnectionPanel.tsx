@@ -1,4 +1,4 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, forwardRef, useImperativeHandle } from 'react';
 import { Button, List, Modal, Form, Input, Select, Switch, message, Tooltip, Dropdown, Empty, Row, Col, Card } from 'antd';
 import { PlusOutlined, DatabaseOutlined, DatabaseFilled, CheckCircleOutlined, CloseCircleOutlined, EditOutlined, DeleteOutlined, CopyOutlined, MoreOutlined, RestOutlined, ArrowRightOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { DatabaseConnection, DatabaseType } from '../../types';
@@ -19,7 +19,7 @@ interface ConnectionPanelProps {
   darkMode: boolean;
 }
 
-const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
+const ConnectionPanel = forwardRef<{ handleCreateConnection: () => void }, ConnectionPanelProps>(({
   connections,
   onConnectionCreate,
   onConnectionSelect,
@@ -28,7 +28,7 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
   onConnectionDisconnect,
   activeConnection,
   darkMode
-}) => {
+}, ref) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [currentStep, setCurrentStep] = useState(1); // 1: 选择数据库类型, 2: 输入连接信息
   const [form] = Form.useForm();
@@ -265,6 +265,11 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
   const handleCreateConnection = () => {
     setIsModalVisible(true);
   };
+  
+  // 暴露方法给父组件
+  useImperativeHandle(ref, () => ({
+    handleCreateConnection
+  }));
 
   // 处理连接刷新
   const handleRefreshConnection = async (connection: DatabaseConnection) => {
@@ -973,6 +978,6 @@ const ConnectionPanel: React.FC<ConnectionPanelProps> = ({
       </Modal>
     </div>
   );
-};
+});
 
 export default ConnectionPanel;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout, Tabs, message, Button, Tooltip, Dropdown, Badge, Menu } from 'antd';
 import RedisQueryPage from './components/redis/RedisQueryPage';
 import {
@@ -159,11 +159,16 @@ const AppContent: React.FC = () => {
   // 连接管理
   const handleConnectionCreate = async (connection: DatabaseConnection) => {
     try {
+      // 确保connection是一个完整的DatabaseConnection实例
+      const newConnection: DatabaseConnection = {
+        ...connection,
+        isConnected: false
+      };
       if (window.electronAPI) {
-        const result = await window.electronAPI.saveConnection(connection);
+        const result = await window.electronAPI.saveConnection(newConnection);
         if (result.success) {
-          setConnections(prev => [...prev, connection]);
-          setActiveConnection(connection);
+          setConnections(prev => [...prev, newConnection]);
+          setActiveConnection(newConnection);
           message.success(result.message || '连接创建成功');
         } else {
           console.error('保存连接失败:', result.message);
@@ -171,8 +176,8 @@ const AppContent: React.FC = () => {
         }
       } else {
         // 开发环境下的备选方案
-        setConnections(prev => [...prev, connection]);
-        setActiveConnection(connection);
+        setConnections(prev => [...prev, newConnection]);
+        setActiveConnection(newConnection);
         message.success('连接创建成功（模拟）');
       }
     } catch (error) {
@@ -369,15 +374,14 @@ const AppContent: React.FC = () => {
     }
   };
 
+  // ConnectionPanel ref用于直接调用新建连接方法
+  const connectionPanelRef = useRef<{ handleCreateConnection: () => void }>(null);
+
   // 创建新连接
   const createNewConnection = () => {
-    // 触发ConnectionPanel中的新建连接逻辑
-    const connectionPanel = document.querySelector('.connection-panel') as HTMLElement;
-    if (connectionPanel) {
-      const createButton = connectionPanel.querySelector('button') as HTMLElement;
-      if (createButton) {
-        createButton.click();
-      }
+    // 使用ref直接调用ConnectionPanel的方法打开新建连接模态框
+    if (connectionPanelRef.current) {
+      connectionPanelRef.current.handleCreateConnection();
     }
   };
 
@@ -1023,6 +1027,7 @@ const AppContent: React.FC = () => {
           collapsedWidth={64}
         >
           <ConnectionPanel
+            ref={connectionPanelRef}
             connections={connections}
             onConnectionCreate={handleConnectionCreate}
             onConnectionSelect={handleConnectionSelect}

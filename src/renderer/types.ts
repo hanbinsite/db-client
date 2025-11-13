@@ -13,12 +13,14 @@ export interface DatabaseConnection {
   database?: string;
   schema?: string; // PostgreSQL模式
   ssl?: boolean;
+  sslmode?: string;
   timeout?: number;
   isConnected: boolean;
   lastConnectTime?: Date;
   connectionId?: string; // 真实的连接池ID
   authType?: 'none' | 'password' | 'username_password'; // Redis认证类型
   redisType?: 'standalone' | 'cluster' | 'sentinel'; // Redis部署类型
+  applicationName?: string;
 }
 
 // Electron API 类型定义

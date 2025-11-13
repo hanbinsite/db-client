@@ -45,8 +45,10 @@ interface DatabaseConnection {
   password: string;
   database?: string;
   ssl?: boolean;
+  sslmode?: string;
   timeout?: number;
   authType?: 'username_password' | 'password';
+  applicationName?: string;
 }
 
 // 查询结果
@@ -724,13 +726,82 @@ class OracleConnection extends BaseDatabaseConnection {
   async getTableStructure(tableName: string): Promise<TableStructure> { throw new Error('未实现'); }
 }
 
-class GaussDBConnection extends BaseDatabaseConnection {
-  // GaussDB连接实现
-  async connect(): Promise<boolean> { return false; }
-  async disconnect(): Promise<void> {}
-  async executeQuery(query: string, params?: any[]): Promise<QueryResult> { return { success: false, error: 'GaussDB连接未实现' }; }
-  async getDatabaseInfo(): Promise<DatabaseInfo> { throw new Error('未实现'); }
-  async getTableStructure(tableName: string): Promise<TableStructure> { throw new Error('未实现'); }
+class GaussDBConnection extends PostgreSQLConnection {
+  // GaussDB连接实现 - 复用PostgreSQL的大部分功能
+  async connect(): Promise<boolean> {
+    try {
+      // GaussDB使用与PostgreSQL兼容的驱动，只需稍作调整
+      const { Client } = require('pg');
+      this.connection = new Client({
+        host: this.config.host,
+        port: this.config.port,
+        user: this.config.username,
+        password: this.config.password,
+        database: this.config.database,
+        ssl: this.config.ssl ? {
+          // 为了解决SSL握手失败问题，我们提供更完整的SSL配置
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined // 忽略主机名验证
+        } : undefined,
+        connectionTimeoutMillis: this.config.timeout ? this.config.timeout * 1000 : 30000,
+        // GaussDB特有配置
+        application_name: this.config.applicationName || 'db-client',
+        sslmode: this.config.sslmode || 'disable'
+      });
+      
+      await this.connection.connect();
+      this.isConnecting = false;
+      return true;
+    } catch (error) {
+      this.isConnecting = false;
+      // 增强错误处理，提取更多的错误信息
+      let errorMessage = '未知错误';
+      let detailedErrorInfo = '';
+      
+      // 尝试从不同角度提取错误信息
+      if (typeof error === 'object' && error !== null) {
+        const errorObj = error as any;
+        
+        // 首先获取基本的错误消息
+        if (error instanceof Error) {
+          errorMessage = error.message;
+        } else {
+          errorMessage = errorObj.message || String(error);
+        }
+        
+        // 然后尝试提取所有可能的错误属性
+        if (errorObj.code) detailedErrorInfo += `[${errorObj.code}] `;
+        if (errorObj.address && errorObj.port) {
+          detailedErrorInfo += `连接到 ${errorObj.address}:${errorObj.port} 失败 `;
+        }
+        if (errorObj.errno) detailedErrorInfo += `错误号: ${errorObj.errno} `;
+        if (errorObj.syscall) detailedErrorInfo += `系统调用: ${errorObj.syscall} `;
+        if (errorObj.hostname) detailedErrorInfo += `主机名: ${errorObj.hostname} `;
+        if (errorObj.detail) detailedErrorInfo += `详情: ${errorObj.detail} `;
+        if (errorObj.hint) detailedErrorInfo += `提示: ${errorObj.hint} `;
+        
+        // 尝试获取原始错误信息
+        if (errorObj.originalError) {
+          const originalError = errorObj.originalError as any;
+          detailedErrorInfo += `原始错误: ${originalError.message || String(originalError)} `;
+          if (originalError.code) detailedErrorInfo += `[原始错误代码: ${originalError.code}] `;
+        }
+      } else {
+        errorMessage = String(error);
+      }
+      
+      // 记录完整的错误对象以便调试
+      console.error('GaussDB连接错误详情:', JSON.stringify(error));
+      
+      // 构建包含详细信息的完整错误消息
+      const fullErrorMessage = detailedErrorInfo ? `${errorMessage} ${detailedErrorInfo.trim()}` : errorMessage;
+      
+      // 抛出包含详细信息的错误
+      throw new Error(`GaussDB连接失败: ${fullErrorMessage}`);
+    }
+  }
+  
+  // 根据需要可以覆盖其他方法以适配GaussDB特有功能
 }
 
 class RedisConnection extends BaseDatabaseConnection {

@@ -38,6 +38,8 @@ const QueryPanelFactory: React.FC<QueryPanelFactoryProps> = ({
         return MySqlQueryPanel;
       case 'postgresql':
         return PostgreSqlQueryPanel;
+      case 'gaussdb':
+        return PostgreSqlQueryPanel;
       case 'redis':
         return RedisQueryPanel;
       default:

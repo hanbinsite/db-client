@@ -23,117 +23,55 @@ export class RedisDbUtils extends BaseDbUtils {
    * 采用双路径策略：首先尝试INFO keyspace命令，失败则使用SELECT/DBSIZE命令逐个查询
    */
   async getDatabases(connection: DatabaseConnection): Promise<DatabaseItem[]> {
-    console.log('[REDIS DB UTILS] =============== 获取数据库列表开始 ===============');
-    
     // 验证连接信息
     if (!connection) {
-      console.error('[REDIS DB UTILS] 错误: 无效的连接信息');
       return this.getDefaultDatabases();
     }
     
     // 确保连接池ID（优先创建/复用主进程连接池）
     const ensuredPoolId = await this.ensurePoolId(connection);
     const connectionId = ensuredPoolId || connection.connectionId || connection.id;
-    console.log('[REDIS DB UTILS] 连接信息 JSON:', JSON.stringify({
-      connectionId,
-      host: connection.host,
-      port: connection.port,
-      isConnected: connection.isConnected
-    }));
     if (!connectionId) {
-      console.warn('[REDIS DB UTILS] 无法获取有效的连接池ID，返回默认数据库列表');
       return this.getDefaultDatabases();
     }
     
-    // 清除所有可能的缓存
-    this.clearCaches();
-    
     try {
       // 首先尝试使用INFO keyspace命令（首选方法）
-      console.log('[REDIS DB UTILS] 尝试方法1: 使用INFO keyspace命令');
       const databases = await this.getDatabasesWithInfoKeyspace(connection);
       
       // 如果获取成功且有数据，返回结果
       if (databases && databases.length > 0) {
-        console.log(`[REDIS DB UTILS] INFO keyspace方法成功，获取到 ${databases.length} 个数据库`);
         return databases;
       }
-      
-      // 否则回退到备用方法
-      console.log('[REDIS DB UTILS] INFO keyspace方法失败或返回空结果，切换到备用方法');
     } catch (error) {
-      console.error('[REDIS DB UTILS] INFO keyspace方法发生异常:', error);
+      // 静默错误，直接进入备用方法
     }
     
-    // 使用备用方法：SELECT/DBSIZE命令逐个查询（串行执行，避免单连接池并发超时）
+    // 使用备用方法：SELECT/DBSIZE命令逐个查询，但采用优化的方式
     try {
-      console.log('[REDIS DB UTILS] 尝试方法2: 使用SELECT/DBSIZE命令逐个查询（串行）');
       const fallbackDatabases = await this.getDatabasesWithFallback(connection);
-      
-      console.log(`[REDIS DB UTILS] 备用方法完成，获取到 ${fallbackDatabases.length} 个数据库`);
       return fallbackDatabases;
     } catch (error) {
-      console.error('[REDIS DB UTILS] 备用方法发生异常:', error);
+      // 静默错误，返回默认列表
     }
     
     // 所有方法都失败时，返回默认的0-15号数据库列表
-    console.log('[REDIS DB UTILS] 所有方法都失败，返回默认的0-15号数据库列表');
     return this.getDefaultDatabases();
   }
 
   /**
-   * 清除所有相关缓存
+   * 轻量级缓存清除，只清除必要的Redis相关缓存
    */
   private clearCaches(): void {
-    console.log('[REDIS DB UTILS] 开始清除所有缓存');
-    
-    // 清除window对象上可能存在的缓存
+    // 仅清除Redis特定的缓存，避免过度清除影响性能
     if (typeof window !== 'undefined') {
-      // 清除Redis特定缓存
       if (window.__redisDbCache) {
         delete window.__redisDbCache;
-        console.log('[REDIS DB UTILS] window.__redisDbCache 已清除');
       }
-      
       if (window.__redisKeyspaceInfo) {
         delete window.__redisKeyspaceInfo;
-        console.log('[REDIS DB UTILS] window.__redisKeyspaceInfo 已清除');
-      }
-      
-      // 清除localStorage中的缓存
-      try {
-        if (typeof localStorage !== 'undefined') {
-          const keysToRemove: string[] = [];
-          
-          Object.keys(localStorage).forEach(key => {
-            if (key.includes('redis') || key.includes('database') || key.includes('db')) {
-              keysToRemove.push(key);
-            }
-          });
-          
-          keysToRemove.forEach(key => {
-            localStorage.removeItem(key);
-            console.log(`[REDIS DB UTILS] 已清除localStorage键: ${key}`);
-          });
-          
-          console.log(`[REDIS DB UTILS] 共清除 ${keysToRemove.length} 个localStorage缓存项`);
-        }
-      } catch (e) {
-        console.warn('[REDIS DB UTILS] 无法清除localStorage缓存:', e);
-      }
-      
-      // 尝试清除DataLoader的缓存
-      if (window.__dataLoaderRef?.clearCache) {
-        try {
-          window.__dataLoaderRef.clearCache();
-          console.log('[REDIS DB UTILS] DataLoader缓存已清除');
-        } catch (e) {
-          console.warn('[REDIS DB UTILS] 无法清除DataLoader缓存:', e);
-        }
       }
     }
-    
-    console.log('[REDIS DB UTILS] 缓存清除完成');
   }
 
   /**
@@ -166,43 +104,28 @@ export class RedisDbUtils extends BaseDbUtils {
   }
 
   /**
-   * 执行INFO keyspace命令，带重试机制
+   * 执行INFO keyspace命令，带重试机制和优化的超时设置
    */
   private async executeInfoKeyspaceCommand(connectionId: string): Promise<any> {
-    console.log('[REDIS DB UTILS] 执行INFO keyspace命令');
-    
-    const maxRetries = 3;
-    const timeoutMs = 5000;
+    const maxRetries = 2; // 减少重试次数，避免过长等待
+    const timeoutMs = 3000; // 优化超时时间，更快失败重试
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt}/${maxRetries}`);
-        
         // 使用execRedisQueued执行命令
         const result = await execRedisQueued(connectionId, 'info', ['keyspace'], timeoutMs);
-        
-        console.log(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 结果 JSON:`, JSON.stringify(result));
         
         // 立即返回成功结果
         if (result && result.success) {
           return result;
         }
-        
-        // 失败时打印错误与数据类型，辅助定位
-        if (result && !result.success) {
-          const errMsg = (result as any).error || (result as any).message || '';
-          const dataType = typeof (result as any).data;
-          console.warn(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 未成功，error: ${String(errMsg)}, dataType: ${dataType}`);
-        }
       } catch (error) {
-        console.error(`[REDIS DB UTILS] INFO keyspace尝试 ${attempt} 失败:`, error);
+        // 静默错误，继续重试
       }
       
-      // 如果不是最后一次尝试，等待后重试
+      // 如果不是最后一次尝试，等待更短的时间后重试
       if (attempt < maxRetries) {
-        const waitTime = 1000 * attempt; // 递增等待时间
-        console.log(`[REDIS DB UTILS] ${waitTime}ms后进行下一次尝试`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
     
@@ -421,51 +344,43 @@ export class RedisDbUtils extends BaseDbUtils {
   }
 
   /**
-   * 备用方法：使用SELECT/DBSIZE命令获取数据库列表
+   * 备用方法：使用SELECT/DBSIZE命令获取数据库列表（优化版本）
    */
   private async getDatabasesWithFallback(connection: DatabaseConnection): Promise<DatabaseItem[]> {
-    console.log('[REDIS DB UTILS] 执行备用SELECT/DBSIZE方法');
-    
     const connectionId = connection.connectionId || connection.id;
     if (!connectionId) {
-      console.error('[REDIS DB UTILS] 缺少有效connectionId');
       return this.getDefaultDatabases();
     }
     
     const databases: DatabaseItem[] = [];
-    let successCount = 0;
-    let errorCount = 0;
     
-    // 串行查询所有0-15号数据库，适配Redis单连接池，避免并发超时
+    // 优化策略：先快速创建数据库列表框架
     for (let i = 0; i <= 15; i++) {
-      try {
-        const keyCount = await this.getDatabaseKeyCount(connectionId, i);
-        databases.push({
-          name: `db${i}`,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: [],
-          keyCount: keyCount ?? 0
-        });
-        successCount++;
-      } catch (error) {
-        console.error(`[REDIS DB UTILS] 处理数据库 db${i} 失败:`, error);
-        databases.push({
-          name: `db${i}`,
-          tables: [],
-          views: [],
-          procedures: [],
-          functions: [],
-          schemas: [],
-          keyCount: 0
-        });
-        errorCount++;
-      }
+      databases.push({
+        name: `db${i}`,
+        tables: [],
+        views: [],
+        procedures: [],
+        functions: [],
+        schemas: [],
+        keyCount: 0
+      });
     }
     
-    console.log(`[REDIS DB UTILS] 备用方法统计 - 成功: ${successCount}, 失败: ${errorCount}`);
+    // 然后只检查db0，大多数情况下用户只关心默认数据库
+    // 这样可以快速返回列表，后续可以异步更新其他数据库的键数量
+    try {
+      const db0KeyCount = await this.getDatabaseKeyCount(connectionId, 0);
+      if (db0KeyCount !== null) {
+        const db0Index = databases.findIndex(db => db.name === 'db0');
+        if (db0Index >= 0) {
+          databases[db0Index].keyCount = db0KeyCount;
+        }
+      }
+    } catch (error) {
+      // 静默错误
+    }
+    
     return databases;
   }
 

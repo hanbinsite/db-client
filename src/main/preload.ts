@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 数据库连接相关
   connectDatabase: (config: any) => ipcRenderer.invoke('connect-database', config),
   disconnectDatabase: (connectionId: string) => ipcRenderer.invoke('disconnect-database', connectionId),
+  isDatabaseConnected: (connectionId: string) => ipcRenderer.invoke('is-database-connected', connectionId),
   executeQuery: (connectionId: string, query: string, params?: any[]) => 
     ipcRenderer.invoke('execute-query', { connectionId, query, params }),
   // 新增：批量执行（同一连接、MySQL 串行队列原子化）

@@ -10,6 +10,7 @@ interface IDatabaseConnectionFactory {
 interface IDatabaseConnection {
   connect(): Promise<boolean>;
   disconnect(): Promise<void>;
+  isConnected(): boolean;
   executeQuery(query: string, params?: any[]): Promise<QueryResult>;
   getDatabaseInfo(): Promise<DatabaseInfo>;
   getTableStructure(tableName: string): Promise<TableStructure>;
@@ -38,6 +39,7 @@ type DatabaseType = 'mysql' | 'postgresql' | 'oracle' | 'gaussdb' | 'redis' | 's
 
 // 数据库连接
 interface DatabaseConnection {
+  id: string;
   type: DatabaseType;
   host: string;
   port: number;
@@ -49,6 +51,8 @@ interface DatabaseConnection {
   timeout?: number;
   authType?: 'username_password' | 'password';
   applicationName?: string;
+  isConnected?: boolean;
+  connectionId?: string;
 }
 
 // 查询结果
@@ -870,36 +874,63 @@ class RedisConnection extends BaseDatabaseConnection {
         console.error('Redis client error:', err);
       });
 
+      // 监听连接事件
+      this.client.on('connect', () => {
+        console.log('Redis client connect event emitted');
+      });
+
+      // 监听就绪事件
+      this.client.on('ready', () => {
+        console.log('Redis client ready event emitted');
+      });
+
+      // 监听关闭事件
+      this.client.on('close', (reason: string) => {
+        console.log(`Redis connection closed - reason: ${reason}`);
+      });
+
+      // 监听结束事件
+      this.client.on('end', () => {
+        console.log('Redis connection end event emitted');
+      });
+
       // 连接到Redis
+      console.log('Calling client.connect()...');
       await this.client.connect();
       console.log('Redis connection established');
 
       // 如果有默认数据库，切换到该数据库
       if (this.selectedDb !== undefined) {
-        await this.client.select(this.selectedDb);
+        console.log(`Calling client.select(${this.selectedDb})...`);
+        const selectResult = await this.client.select(this.selectedDb);
+        console.log(`client.select() result: ${selectResult}`);
       }
 
       this.isConnecting = false;
       return true;
     } catch (error) {
-      console.error('Redis connection failed:', error);
+      const errMsg = (error as Error).message;
+      console.error('Redis connection failed:', errMsg);
       this.isConnecting = false;
       this.client = null;
-      return false;
+      throw error; // 重传错误信息
     }
   }
 
   async disconnect(): Promise<void> {
+    console.log('RedisConnection.disconnect() called - this.client:', !!this.client);
     if (this.client) {
       try {
         await this.client.quit();
-        console.log('Redis connection closed');
+        console.log('Redis connection closed via client.quit()');
       } catch (error) {
         console.error('Error closing Redis connection:', error);
       }
       this.client = null;
     }
   }
+
+
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
@@ -921,6 +952,10 @@ class RedisConnection extends BaseDatabaseConnection {
       // 根据Redis命令执行相应操作
       let result: any;
       switch (cmd) {
+        case 'ping':
+          // 检查连接状态
+          result = await this.client.ping();
+          break;
         case 'info': {
           // 获取Redis信息（静默执行，移除噪音日志）
           const section = (params && params.length > 0 && typeof params[0] === 'string') ? params[0] : undefined;
@@ -1308,8 +1343,8 @@ class RedisConnection extends BaseDatabaseConnection {
   }
 
   isConnected(): boolean {
-    // 增强连接状态检测，增加更多条件确保准确性
-    return this.client !== null && typeof this.client.isReady === 'boolean' && this.client.isReady;
+    // 增强连接状态检测，使用client.connected作为client.isReady的fallback，兼容Node Redis v5
+    return this.client !== null && (this.client.isReady || this.client.connected);
   }
 
   async ping(): Promise<boolean> {
@@ -1493,32 +1528,61 @@ export class DatabaseService extends EventEmitter {
 
   private generatePoolId(config: DatabaseConnection): string {
     const databaseName = config.database || '';
-    return `${config.type}_${config.host}_${config.port}_${databaseName}`;
+    return `${(config.type || 'redis').toLowerCase()}_${config.host}_${config.port}_${databaseName}`;
   }
 
   async createConnectionPool(config: DatabaseConnection, _poolConfig?: Partial<IConnectionPoolConfig>): Promise<string> {
     const poolId = this.generatePoolId(config);
-    if (this.connections.has(poolId)) return poolId;
+    console.log(`DatabaseService.createConnectionPool - poolId: ${poolId}, config: ${JSON.stringify(config)}`);
+    if (this.connections.has(poolId)) {
+      console.log(`DatabaseService.createConnectionPool - Connection pool already exists: ${poolId}`);
+      return poolId;
+    }
     const factory = new DatabaseConnectionFactory();
     const conn = factory.createConnection(config);
-    await conn.connect();
+    console.log(`DatabaseService.createConnectionPool - Created connection instance: ${conn}`);
+    const connected = await conn.connect();
+    if (!connected) {
+      throw new Error('Failed to connect to Redis');
+    }
+    console.log(`DatabaseService.createConnectionPool - Connection connected successfully`);
     this.connections.set(poolId, conn);
     this.configs.set(poolId, config);
     this.poolTypes.set(poolId, config.type);
+    console.log(`DatabaseService.createConnectionPool - Connection added to pool: ${poolId}`);
     return poolId;
   }
 
   getConnectionPool(poolId: string): IDatabaseConnection | undefined {
-    return this.connections.get(poolId);
+    // 首先尝试直接通过poolId查找
+    let conn = this.connections.get(poolId);
+    if (conn) return conn;
+    
+    // 如果没有找到，尝试通过connection.id查找
+    for (const [id, config] of this.configs.entries()) {
+      if (config.id === poolId) {
+        conn = this.connections.get(id);
+        break;
+      }
+    }
+    return conn;
   }
 
   async disconnect(poolId: string): Promise<void> {
+    console.log(`DatabaseService.disconnect - poolId: ${poolId}`);
     const conn = this.connections.get(poolId);
     if (conn) {
-      try { await conn.disconnect(); } finally {
+      console.log(`DatabaseService.disconnect - Found connection: ${conn}`);
+      try {
+        await conn.disconnect();
+        console.log(`DatabaseService.disconnect - Connection disconnected successfully`);
+      } catch (error) {
+        console.error(`DatabaseService.disconnect - Error disconnecting: ${error}`);
+      } finally {
         this.connections.delete(poolId);
         this.configs.delete(poolId);
         this.poolTypes.delete(poolId);
+        console.log(`DatabaseService.disconnect - Connection removed from pool: ${poolId}`);
       }
     }
   }
@@ -1598,7 +1662,10 @@ export class DatabaseService extends EventEmitter {
   }
   updateConnectionPoolConfig(_poolId: string, _config: Partial<IConnectionPoolConfig>): void {}
   getAllConnectionPoolIds(): string[] { return Array.from(this.connections.keys()); }
-  getConnectionPoolConfig(_poolId: string): IConnectionPoolConfig | undefined {
+  getConnectionPoolConfig(poolId: string): IConnectionPoolConfig | undefined {
+    if (!this.connections.has(poolId)) {
+      return undefined;
+    }
     return { maxConnections: 1, minConnections: 1, acquireTimeout: 60000, idleTimeout: 60000, testOnBorrow: true };
   }
 

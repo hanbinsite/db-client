@@ -454,47 +454,35 @@ useEffect(() => {
         debugLog('ensurePool start, current poolId:', pid, 'connId:', connection.connectionId);
         if (!pid) {
           const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
-          // 先测试连接并尝试复用/保留测试创建的连接池
+          // 直接创建持久连接
           try {
-            const testRes = await (window as any).electronAPI?.testConnection?.(connection);
-            debugLog('testConnection result:', testRes);
-          } catch (e) {
-            console.warn('[REDIS BROWSER] testConnection error:', e);
-          }
-          // 测试后检查是否已有连接池配置
-          try {
-            const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
-            if (cfgRes) {
-              pid = generatedId;
+            // 打印连接参数
+      debugLog('connectDatabase params:', connection);
+      const res = await (window as any).electronAPI?.connectDatabase?.(connection);
+      debugLog('connectDatabase result:', res);
+            if (res && res.success && res.connectionId) {
+              pid = res.connectionId;
               connection.connectionId = pid;
               connection.isConnected = true;
-              debugLog('adopted poolId from test/generator:', pid);
+              debugLog('created poolId via connectDatabase:', pid);
             } else {
-              // 回退：创建持久连接
-              const res = await (window as any).electronAPI?.connectDatabase?.(connection);
-              debugLog('connectDatabase result:', res);
-              if (res && res.success && res.connectionId) {
-                pid = res.connectionId;
-                connection.connectionId = pid;
-                connection.isConnected = true;
-                debugLog('created poolId via connectDatabase:', pid);
-              } else {
-                // 最后再检查一次是否已有池
-                try {
-                  const cfgRes2 = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
-                  if (cfgRes2) {
-                    pid = generatedId;
-                    console.warn('[REDIS BROWSER] adopting existing poolId via generatedId after fallback:', generatedId);
-                  } else {
-                    console.warn('[REDIS BROWSER] no existing pool found for generatedId, keep poolId undefined');
-                  }
-                } catch (e2) {
-                  console.warn('[REDIS BROWSER] getConnectionPoolConfig error:', e2);
+              // 最后再检查一次是否已有池
+              try {
+                const cfgRes = await (window as any).electronAPI?.getConnectionPoolConfig?.(generatedId);
+                if (cfgRes) {
+                  pid = generatedId;
+                  connection.connectionId = pid;
+                  connection.isConnected = true;
+                  console.warn('[REDIS BROWSER] adopting existing poolId via generatedId after fallback:', generatedId);
+                } else {
+                  console.warn('[REDIS BROWSER] no existing pool found for generatedId, keep poolId undefined');
                 }
+              } catch (e) {
+                console.warn('[REDIS BROWSER] getConnectionPoolConfig error:', e);
               }
             }
           } catch (e) {
-            console.warn('[REDIS BROWSER] getConnectionPoolConfig check error:', e);
+            console.warn('[REDIS BROWSER] connectDatabase error:', e);
           }
         }
         if (!cancelled && pid) {

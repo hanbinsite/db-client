@@ -353,6 +353,19 @@ class DBClientApp {
       return await this.handleQueryExecution(connectionId, query, params);
     });
 
+    ipcMain.handle('is-database-connected', async (event, connectionId) => {
+      try {
+        const connection = await this.databaseService.getConnectionPool(connectionId);
+        if (!connection) {
+          return false;
+        }
+        return connection.isConnected();
+      } catch (error) {
+        console.error('Error checking database connection:', error);
+        return false;
+      }
+    });
+
     // 新增：批量执行（保持同一连接、对 MySQL 走串行队列原子化）
     ipcMain.handle('execute-batch', async (event, { connectionId, queries }) => {
       return await this.handleExecuteBatch(connectionId, queries);
@@ -644,8 +657,9 @@ class DBClientApp {
   private async handleCloseTestConnection(config: any): Promise<any> {
     try {
       // 与DatabaseService.ts中generatePoolId方法保持一致的ID生成逻辑
+      // 但添加_test后缀以避免干扰实际连接
       const databaseName = config.database || ''; // 不使用默认数据库名，只使用配置中指定的数据库名
-      const poolId = `${config.type}_${config.host}_${config.port}_${databaseName}`;
+      const poolId = `${config.type}_${config.host}_${config.port}_${databaseName}_test`;
       
       // 检查连接池是否存在并断开
       await this.databaseService.disconnect(poolId);

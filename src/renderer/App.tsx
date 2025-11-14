@@ -78,6 +78,34 @@ const AppContent: React.FC = () => {
   
   // 标签页管理
   const [databaseTabs, setDatabaseTabs] = useState<DatabaseTab[]>([]);
+
+  // Update all tabs with the latest connection information whenever connections change
+  useEffect(() => {
+    if (connections.length > 0) {
+      setDatabaseTabs(prevTabs => prevTabs.map(tab => {
+        const updatedConnection = connections.find(conn => conn.id === tab.connection.id);
+        if (updatedConnection) {
+          return { ...tab, connection: updatedConnection };
+        }
+        return tab;
+      }));
+    }
+  }, [connections]);
+
+  // 更新单个连接并同步到所有使用它的标签页
+  const updateConnectionAndTabs = (updatedConnection: DatabaseConnection) => {
+    // 更新connections状态
+    setConnections(prev => prev.map(conn => 
+      conn.id === updatedConnection.id ? updatedConnection : conn
+    ));
+    // 由于useEffect会处理标签页更新，这里不需要直接调用updateDatabaseTabs
+  };
+
+  // 将updateConnectionAndTabs函数暴露到window对象上，以便在其他组件和工具类中调用
+  useEffect(() => {
+    (window as any).app = (window as any).app || {};
+    (window as any).app.updateConnectionAndTabs = updateConnectionAndTabs;
+  }, [updateConnectionAndTabs]);
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([]);
   const [tableDataTabs, setTableDataTabs] = useState<TableDataTab[]>([]);
   const [tableDesignTabs, setTableDesignTabs] = useState<TableDesignTab[]>([]);
@@ -215,46 +243,23 @@ const AppContent: React.FC = () => {
     // 用户第一次点击连接时，尝试连接到数据库并设置连接状态
     try {
       if (window.electronAPI && connection.id) {
-        // 先测试连接并尝试复用/保留测试创建的连接池
-        const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;
-        const testResult = await window.electronAPI.testConnection(connection);
-        if (testResult && testResult.success) {
-          // 测试成功后检查是否已存在连接池配置（复用测试创建的池）
-          const cfgRes = await window.electronAPI.getConnectionPoolConfig(generatedId);
-          if (cfgRes) {
-            const updatedConnection = {
-              ...connection,
-              isConnected: true,
-              connectionId: generatedId
-            };
-            setActiveConnection(updatedConnection);
-            setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
-            console.log('测试连接成功并复用/保留连接池，设置poolId:', generatedId);
-          } else {
-            // 未检测到连接池配置，回退到创建持久连接
-            const connectResult = await window.electronAPI.connectDatabase(connection);
-            if (connectResult && connectResult.success) {
-              const updatedConnection = {
-                ...connection,
-                isConnected: true,
-                connectionId: connectResult.connectionId
-              };
-              setActiveConnection(updatedConnection);
-              setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
-              console.log('连接池未检测到，创建持久连接成功，poolId:', connectResult.connectionId);
-            } else {
-              console.warn('连接数据库失败:', connectResult?.message);
-              setActiveConnection({ ...connection, isConnected: false });
-              setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
-              message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
-            }
-          }
+        // 直接创建持久连接
+        const connectResult = await window.electronAPI.connectDatabase(connection);
+        if (connectResult && connectResult.success) {
+          const updatedConnection = {
+            ...connection,
+            isConnected: true,
+            connectionId: connectResult.connectionId
+          };
+          setActiveConnection(updatedConnection);
+          setConnections(prev => prev.map(conn => conn.id === connection.id ? updatedConnection : conn));
+          console.log('创建持久连接成功，poolId:', connectResult.connectionId);
         } else {
-          // 测试失败，保持未连接状态并提示
-          console.warn('测试连接失败:', (testResult && testResult.error) || '未知错误');
+          // 连接失败，保持未连接状态并提示
+          console.warn('连接数据库失败:', connectResult?.message);
           setActiveConnection({ ...connection, isConnected: false });
           setConnections(prev => prev.map(conn => conn.id === connection.id ? { ...conn, isConnected: false } : conn));
-          message.error('连接测试失败: ' + ((testResult && testResult.error) || '未知错误'));
+          message.error('连接数据库失败: ' + (connectResult?.message || '未知错误'));
         }
       } else {
         // 开发环境或无法使用electronAPI时，设置为未连接状态
@@ -1140,31 +1145,30 @@ const AppContent: React.FC = () => {
                     ) : tab.type === 'redis' ? (
                       tab.key?.startsWith('redis-service-info-') ? (
                         <RedisServiceInfoPage
-                          connection={tab.connection}
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
-                        />
-                      ) : tab.key?.startsWith('redis-slowlog-') ? (
+                        />) : tab.key?.startsWith('redis-slowlog-') ? (
                         <RedisSlowlogPage
-                          connection={tab.connection}
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
                         />
                       ) : tab.key?.startsWith('redis-cli-') ? (
                         <RedisCliPage
-                          connection={tab.connection}
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
                         />
                       ) : tab.key?.startsWith('redis-pubsub-') ? (
                         <RedisPubSubPage
-                          connection={tab.connection}
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
                         />
                       ) : (
                         <RedisDataBrowser
-                          connection={tab.connection}
+                          connection={connections.find(c => c.id === tab.connection.id) || tab.connection}
                           database={tab.database}
                           darkMode={darkMode}
                         />

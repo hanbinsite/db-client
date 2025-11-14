@@ -485,8 +485,8 @@ export class RedisDbUtils extends BaseDbUtils {
         }
         if (cfgRes) {
           pid = generatedId;
-          connection.connectionId = pid;
-          connection.isConnected = true;
+          const updatedConnection = { ...connection, connectionId: pid, isConnected: true };
+          (window as any).app.updateConnectionAndTabs(updatedConnection);
           console.log('[REDIS DB UTILS] ensurePoolId 复用测试创建的连接池，poolId:', pid);
           // 执行健康查询以确认连接可用
           try {
@@ -514,8 +514,8 @@ export class RedisDbUtils extends BaseDbUtils {
         }
         if (res && res.success && res.connectionId) {
           pid = res.connectionId;
-          connection.connectionId = pid;
-          connection.isConnected = true;
+          const updatedConnection = { ...connection, connectionId: pid, isConnected: true };
+          (window as any).app.updateConnectionAndTabs(updatedConnection);
           console.log('[REDIS DB UTILS] ensurePoolId 创建连接池成功，poolId:', pid);
         } else {
           const generatedId = `${connection.type}_${connection.host}_${connection.port}_${connection.database || ''}`;

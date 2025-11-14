@@ -64,6 +64,8 @@ const RedisQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
     const msg = String(((res as any)?.message || (res as any)?.error || ''));
     if (res && res.success === false && (msg.includes('连接池不存在') || msg.includes('Redis client not connected') || msg.includes('获取连接超时'))) {
       try {
+        // 打印连接参数
+        console.log('RedisQueryPanel - connectDatabase params:', connection);
         const reconnect = await (window as any).electronAPI?.connectDatabase?.(connection);
         if (reconnect && reconnect.success && reconnect.connectionId) {
           currentPid = reconnect.connectionId;

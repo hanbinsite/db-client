@@ -158,7 +158,7 @@ const RedisAddKeyModal: React.FC<RedisAddKeyModalProps> = ({
   };
 
   const handleOk = async () => {
-    if (!connection || connection.type !== 'redis' || !connection.connectionId) {
+    if (!connection || connection.type !== 'redis') {
       message.error('当前未选择Redis连接');
       return;
     }
@@ -167,7 +167,7 @@ const RedisAddKeyModal: React.FC<RedisAddKeyModalProps> = ({
       message.error('请输入键名');
       return;
     }
-    const poolId = connection.connectionId;
+    const poolId = connection.connectionId || connection.id;
     try {
       const m = /^db(\d+)$/i.exec(activeDatabase || '');
       if (m) {

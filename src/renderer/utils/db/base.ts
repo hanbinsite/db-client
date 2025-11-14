@@ -18,8 +18,8 @@ export class BaseDbUtils {
         try {
           const reconnect = await window.electronAPI?.connectDatabase(connection);
           if (reconnect && reconnect.success && reconnect.connectionId) {
-            connection.connectionId = reconnect.connectionId;
-            connection.isConnected = true;
+            const updatedConnection = { ...connection, connectionId: reconnect.connectionId, isConnected: true };
+            (window as any).app.updateConnectionAndTabs(updatedConnection);
             return await fn();
           }
         } catch (reErr) {

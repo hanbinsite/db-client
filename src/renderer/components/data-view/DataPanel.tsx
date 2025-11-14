@@ -909,7 +909,9 @@ const resolvePoolId = async (conn: any): Promise<string | undefined> => {
   // 若仍无pid，回退到创建持久连接
   if (!pid && (window as any).electronAPI?.connectDatabase && conn) {
     try {
-      const res = await (window as any).electronAPI.connectDatabase(conn);
+      // 打印连接参数
+        console.log('DataPanel - connectDatabase params:', conn);
+        const res = await (window as any).electronAPI.connectDatabase(conn);
       if (res && res.success && res.connectionId) {
         pid = res.connectionId;
         conn.connectionId = pid;

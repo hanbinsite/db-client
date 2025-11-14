@@ -100,9 +100,9 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
         
         if (connectResult && connectResult.success) {
           console.log('DATABASE UTILS - 数据库重新连接成功');
-          // 更新连接信息
-          connection.isConnected = true;
-          connection.connectionId = connectResult.connectionId;
+          // 更新连接信息并同步到所有标签页
+          const updatedConnection = { ...connection, isConnected: true, connectionId: connectResult.connectionId };
+          (window as any).app.updateConnectionAndTabs(updatedConnection);
         } else {
           console.error('DATABASE UTILS - 数据库重新连接失败:', connectResult?.message);
           // 连接失败，返回空数组
@@ -157,8 +157,8 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
                   
                   if (reconnectResult && reconnectResult.success) {
                     console.log('DATABASE UTILS - 数据库重新连接成功');
-                    connection.isConnected = true;
-                    connection.connectionId = reconnectResult.connectionId;
+                    const updatedConnection = { ...connection, isConnected: true, connectionId: reconnectResult.connectionId };
+                    (window as any).app.updateConnectionAndTabs(updatedConnection);
                   } else {
                     console.error('DATABASE UTILS - 数据库重新连接失败:', reconnectResult?.message);
                   }
@@ -187,12 +187,12 @@ export const getDatabaseList = async (connection: DatabaseConnection): Promise<D
             const reconnectResult = await window.electronAPI.connectDatabase(connection);
             
             if (reconnectResult && reconnectResult.success) {
-              console.log('DATABASE UTILS - 数据库重新连接成功');
-              connection.isConnected = true;
-              connection.connectionId = reconnectResult.connectionId;
-            } else {
-              console.error('DATABASE UTILS - 数据库重新连接失败:', reconnectResult?.message);
-            }
+          console.log('DATABASE UTILS - 数据库重新连接成功');
+          const updatedConnection = { ...connection, isConnected: true, connectionId: reconnectResult.connectionId };
+          (window as any).app.updateConnectionAndTabs(updatedConnection);
+        } else {
+          console.error('DATABASE UTILS - 数据库重新连接失败:', reconnectResult?.message);
+        }
           } catch (reconnectError) {
             console.error('DATABASE UTILS - 重新连接数据库时发生异常:', reconnectError);
           }

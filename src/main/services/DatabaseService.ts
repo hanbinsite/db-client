@@ -809,142 +809,317 @@ class GaussDBConnection extends PostgreSQLConnection {
 }
 
 class RedisConnection extends BaseDatabaseConnection {
-  private client: any = null;
+  private clients: Map<string, any> = new Map(); // 连接池
+  private poolConfig: IConnectionPoolConfig = {
+    maxConnections: 5,
+    minConnections: 1,
+    acquireTimeout: 60000,
+    idleTimeout: 60000,
+    testOnBorrow: true
+  };
+  private poolInfo: { poolId?: string; config?: IConnectionPoolConfig; createdAt?: number } = {};
   protected isConnecting: boolean = false;
   private subscriber: any = null;
   private subscribedChannels: Set<string> = new Set();
+  private connectionCounter: number = 0;
+  private idleConnections: string[] = []; // 空闲连接队列
 
-  // Redis连接实现
+  constructor(poolConfig?: IConnectionPoolConfig) {
+    super();
+    if (poolConfig) {
+      this.poolConfig = { ...this.poolConfig, ...poolConfig };
+    }
+  }
+
+  // 更新连接池配置
+  updatePoolConfig(poolConfig: Partial<IConnectionPoolConfig>): void {
+    this.poolConfig = { ...this.poolConfig, ...poolConfig };
+    console.log(`RedisConnection.updatePoolConfig - Updated pool config: ${JSON.stringify(this.poolConfig)}`);
+  }
+
+  // 设置连接池信息
+  setPoolInfo(info: { poolId?: string; config?: IConnectionPoolConfig; createdAt?: number }): void {
+    this.poolInfo = { ...this.poolInfo, ...info };
+    console.log(`RedisConnection.setPoolInfo - Pool info set: ${JSON.stringify(this.poolInfo)}`);
+  }
+
+  // 创建单个Redis客户端
+  private async createClientInstance(): Promise<{ clientId: string; client: any }> {
+    const { createClient } = require('redis');
+    const config = this.getConfig();
+    
+    // 构建Redis连接选项
+    const redisOptions: any = {
+      socket: {
+        host: config.host,
+        port: Number(config.port) || 6379,
+        connectTimeout: (config.timeout || 30) * 1000
+      }
+    };
+
+    // 根据认证类型设置认证信息（并对缺省authType且提供了密码的情况做兼容）
+    const hasPassword = typeof config.password === 'string' && config.password.trim().length > 0;
+    const hasUsername = typeof config.username === 'string' && config.username.trim().length > 0;
+    if (config.authType === 'username_password') {
+      if (hasUsername) {
+        redisOptions.username = config.username;
+      }
+      if (hasPassword) {
+        redisOptions.password = config.password;
+      }
+    } else if (config.authType === 'password') {
+      if (hasPassword) {
+        redisOptions.password = config.password;
+      }
+    } else {
+      // 兼容：如果未声明认证类型但给了密码（目标实例未启用ACL，仅requirepass），仍然传入password
+      if (hasPassword) {
+        redisOptions.password = config.password;
+      }
+    }
+
+    // 记录简化后的连接选项（不打印敏感字段）便于诊断
+    try {
+      const safeOpts = { socket: redisOptions.socket, username: !!redisOptions.username, passwordPresent: !!redisOptions.password };
+      console.log('[REDIS POOL] createClient options:', JSON.stringify(safeOpts));
+    } catch {}
+
+    // 创建Redis客户端
+    const client = createClient(redisOptions);
+    const clientId = `redis_client_${this.connectionCounter++}`;
+
+    // 监听错误事件
+    client.on('error', (err: Error) => {
+      console.error(`Redis client ${clientId} error:`, err);
+      // 从连接池中移除错误的连接
+      this.removeClient(clientId);
+    });
+
+    // 监听关闭事件
+    client.on('close', (reason: string) => {
+      console.log(`Redis connection ${clientId} closed - reason: ${reason}`);
+      this.removeClient(clientId);
+    });
+
+    // 监听结束事件
+    client.on('end', () => {
+      console.log(`Redis connection ${clientId} end event emitted`);
+      this.removeClient(clientId);
+    });
+
+    // 连接到Redis
+    console.log(`Calling client.connect() for client ${clientId}...`);
+    await client.connect();
+    console.log(`Redis connection ${clientId} established`);
+
+    // 如果有默认数据库，切换到该数据库
+    if (this.selectedDb !== undefined) {
+      console.log(`Calling client.select(${this.selectedDb}) for client ${clientId}...`);
+      await client.select(this.selectedDb);
+    }
+
+    return { clientId, client };
+  }
+
+  // 从连接池中移除客户端
+  private removeClient(clientId: string): void {
+    this.clients.delete(clientId);
+    const idleIndex = this.idleConnections.indexOf(clientId);
+    if (idleIndex > -1) {
+      this.idleConnections.splice(idleIndex, 1);
+    }
+    console.log(`Redis client ${clientId} removed from pool, current pool size: ${this.clients.size}`);
+  }
+
+  // 获取连接池中的连接
+  private async getConnection(): Promise<{ clientId: string; client: any }> {
+    console.log(`[REDIS POOL] Getting connection - Pool size: ${this.clients.size}, Idle: ${this.idleConnections.length}`);
+    
+    // 首先尝试从空闲连接中获取
+    if (this.idleConnections.length > 0) {
+      const clientId = this.idleConnections.shift()!;
+      const client = this.clients.get(clientId);
+      console.log(`[REDIS POOL] Using idle connection: ${clientId}`);
+      
+      // 测试连接是否有效
+      if (this.poolConfig.testOnBorrow && client && (client.isReady || client.connected)) {
+        try {
+          await client.ping();
+          console.log(`[REDIS POOL] Connection ${clientId} is valid`);
+          return { clientId, client };
+        } catch (error) {
+          console.log(`[REDIS POOL] Connection ${clientId} ping failed, removing from pool`);
+          this.removeClient(clientId);
+        }
+      } else if (client) {
+        return { clientId, client };
+      }
+    }
+
+    // 如果连接数小于最大值，创建新连接
+    if (this.clients.size < this.poolConfig.maxConnections) {
+      console.log(`[REDIS POOL] Creating new connection - Current: ${this.clients.size}, Max: ${this.poolConfig.maxConnections}`);
+      const { clientId, client } = await this.createClientInstance();
+      this.clients.set(clientId, client);
+      console.log(`[REDIS POOL] New connection created: ${clientId}`);
+      return { clientId, client };
+    }
+
+    // 如果没有空闲连接且达到最大连接数，等待连接释放
+    console.log(`[REDIS POOL] Pool saturated (${this.clients.size}/${this.poolConfig.maxConnections}), waiting for connection release`);
+    const startTime = Date.now();
+    while (true) {
+      if (this.idleConnections.length > 0) {
+        const clientId = this.idleConnections.shift()!;
+        const client = this.clients.get(clientId);
+        if (client && (client.isReady || client.connected)) {
+          console.log(`[REDIS POOL] Got connection after waiting: ${clientId}, waited: ${Date.now() - startTime}ms`);
+          return { clientId, client };
+        }
+      }
+      
+      // 检查超时
+      if (Date.now() - startTime > this.poolConfig.acquireTimeout) {
+        console.error(`[REDIS POOL] Connection acquisition timeout after ${Date.now() - startTime}ms`);
+        throw new Error(`Timeout waiting for Redis connection (${this.poolConfig.acquireTimeout}ms)`);
+      }
+      
+      // 每100ms记录一次等待状态
+      if ((Date.now() - startTime) % 100 === 0) {
+        console.log(`[REDIS POOL] Still waiting for connection after ${Date.now() - startTime}ms`);
+      }
+      
+      // 等待一段时间后重试
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+
+  // 释放连接回连接池
+  private releaseConnection(clientId: string): void {
+    console.log(`[REDIS POOL] Releasing connection: ${clientId}`);
+    
+    if (this.clients.has(clientId)) {
+      // 检查客户端是否连接有效
+      const client = this.clients.get(clientId);
+      if (!client || (!client.isReady && !client.connected)) {
+        console.log(`[REDIS POOL] Connection ${clientId} is invalid, removing from pool`);
+        this.removeClient(clientId);
+        return;
+      }
+      
+      this.idleConnections.push(clientId);
+      console.log(`[REDIS POOL] Connection ${clientId} released to pool. Idle: ${this.idleConnections.length}`);
+      
+      // 如果空闲连接数超过最大空闲连接数限制，关闭多余的连接
+      if (this.idleConnections.length > this.poolConfig.maxConnections) {
+        const excessCount = this.idleConnections.length - this.poolConfig.maxConnections;
+        console.log(`[REDIS POOL] Too many idle connections, closing ${excessCount} excess connections`);
+        
+        for (let i = 0; i < excessCount; i++) {
+          const excessClientId = this.idleConnections.shift();
+          if (excessClientId) {
+            this.removeClient(excessClientId);
+          }
+        }
+      }
+    }
+  }
+
+  // Redis连接实现（连接池初始化）
   async connect(): Promise<boolean> {
-    if (this.isConnected()) {
+    if (this.clients.size > 0) {
       return true;
     }
 
     this.isConnecting = true;
     try {
-      const { createClient } = require('redis');
       const config = this.getConfig();
       
-      // 构建Redis连接选项
-      const redisOptions: any = {
-        socket: {
-          host: config.host,
-          port: Number(config.port) || 6379,
-          connectTimeout: (config.timeout || 30) * 1000
-        }
-      };
-
-      // 根据认证类型设置认证信息（并对缺省authType且提供了密码的情况做兼容）
-      const hasPassword = typeof config.password === 'string' && config.password.trim().length > 0;
-      const hasUsername = typeof config.username === 'string' && config.username.trim().length > 0;
-      if (config.authType === 'username_password') {
-        if (hasUsername) {
-          redisOptions.username = config.username;
-        }
-        if (hasPassword) {
-          redisOptions.password = config.password;
-        }
-      } else if (config.authType === 'password') {
-        if (hasPassword) {
-          redisOptions.password = config.password;
-        }
-      } else {
-        // 兼容：如果未声明认证类型但给了密码（目标实例未启用ACL，仅requirepass），仍然传入password
-        if (hasPassword) {
-          redisOptions.password = config.password;
-        }
-      }
-
       // 如果提供了默认数据库，选择数据库
       if (config.database && !isNaN(Number(config.database))) {
         this.selectedDb = Number(config.database);
       }
-
-      // 记录简化后的连接选项（不打印敏感字段）便于诊断
-      try {
-        const safeOpts = { socket: redisOptions.socket, username: !!redisOptions.username, passwordPresent: !!redisOptions.password };
-        console.log('[REDIS MAIN] createClient options:', JSON.stringify(safeOpts));
-      } catch {}
-
-      // 创建Redis客户端
-      this.client = createClient(redisOptions);
-
-      // 监听错误事件
-      this.client.on('error', (err: Error) => {
-        console.error('Redis client error:', err);
-      });
-
-      // 监听连接事件
-      this.client.on('connect', () => {
-        console.log('Redis client connect event emitted');
-      });
-
-      // 监听就绪事件
-      this.client.on('ready', () => {
-        console.log('Redis client ready event emitted');
-      });
-
-      // 监听关闭事件
-      this.client.on('close', (reason: string) => {
-        console.log(`Redis connection closed - reason: ${reason}`);
-      });
-
-      // 监听结束事件
-      this.client.on('end', () => {
-        console.log('Redis connection end event emitted');
-      });
-
-      // 连接到Redis
-      console.log('Calling client.connect()...');
-      await this.client.connect();
-      console.log('Redis connection established');
-
-      // 如果有默认数据库，切换到该数据库
-      if (this.selectedDb !== undefined) {
-        console.log(`Calling client.select(${this.selectedDb})...`);
-        const selectResult = await this.client.select(this.selectedDb);
-        console.log(`client.select() result: ${selectResult}`);
+      
+      // 初始化最小连接数
+      console.log(`Initializing Redis connection pool with minConnections: ${this.poolConfig.minConnections}`);
+      for (let i = 0; i < this.poolConfig.minConnections; i++) {
+        try {
+          const { clientId, client } = await this.createClientInstance();
+          this.clients.set(clientId, client);
+          this.idleConnections.push(clientId);
+        } catch (error) {
+          console.error(`Failed to create initial connection ${i + 1}/${this.poolConfig.minConnections}:`, error);
+          // 如果至少有一个连接成功，就继续
+          if (this.clients.size === 0) {
+            throw error;
+          }
+        }
       }
 
+      console.log(`Redis connection pool initialized with ${this.clients.size} connections`);
       this.isConnecting = false;
-      return true;
+      return this.clients.size > 0;
     } catch (error) {
       const errMsg = (error as Error).message;
-      console.error('Redis connection failed:', errMsg);
+      console.error('Redis connection pool initialization failed:', errMsg);
       this.isConnecting = false;
-      this.client = null;
+      // 清理已创建的连接
+      await this.disconnect();
       throw error; // 重传错误信息
     }
   }
 
   async disconnect(): Promise<void> {
-    console.log('RedisConnection.disconnect() called - this.client:', !!this.client);
-    if (this.client) {
+    console.log(`RedisConnection.disconnect() called - pool size: ${this.clients.size}`);
+    
+    // 关闭连接池中的所有连接
+    const clientsToDisconnect = Array.from(this.clients.values());
+    this.clients.clear();
+    this.idleConnections = [];
+    
+    for (const client of clientsToDisconnect) {
       try {
-        await this.client.quit();
+        await client.quit();
         console.log('Redis connection closed via client.quit()');
       } catch (error) {
         console.error('Error closing Redis connection:', error);
       }
-      this.client = null;
     }
+    
+    // 不再保存单个连接引用
   }
 
 
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
     try {
-      // 移除冗长的命令执行日志，避免Terminal刷屏
-
-      if (!this.client || !this.isConnected()) {
-         // 尝试重新连接
-         console.log(`[REDIS MAIN] 客户端未连接，尝试重新连接`);
-         const reconnected = await this.connect();
-         if (!reconnected || !this.isConnected()) {
-           console.error(`[REDIS MAIN] 重新连接失败`);
-           throw new Error('Redis client not connected');
-         }
-       }
+      // 确认Redis连接池已初始化
+      if (this.clients.size === 0) {
+        // 尝试初始化连接池
+        console.log(`[REDIS POOL] 连接池未初始化，尝试初始化`);
+        const initialized = await this.connect();
+        if (!initialized) {
+          console.error(`[REDIS POOL] 连接池初始化失败`);
+          throw new Error('Redis connection pool initialization failed');
+        }
+      }
+      
+      // 从连接池获取连接
+      let connection: { clientId: string; client: any } | null = null;
+      let client: any = null;
+      let clientId: string = '';
+      
+      try {
+        connection = await this.getConnection();
+        client = connection.client;
+        clientId = connection.clientId;
+        console.log(`[REDIS POOL] 执行命令 ${command} 使用连接 ${clientId}`);
+      } catch (connError) {
+        console.error(`[REDIS POOL] 获取连接失败:`, connError);
+        throw new Error('Failed to get connection from pool');
+      }
+      
+      // 使用本地client变量执行命令，不再保存到this.client
       
       // 将命令转换为小写
       const cmd = command.toLowerCase();
@@ -954,15 +1129,15 @@ class RedisConnection extends BaseDatabaseConnection {
       switch (cmd) {
         case 'ping':
           // 检查连接状态
-          result = await this.client.ping();
+          result = await client.ping();
           break;
         case 'info': {
           // 获取Redis信息（静默执行，移除噪音日志）
           const section = (params && params.length > 0 && typeof params[0] === 'string') ? params[0] : undefined;
           if (section) {
-            result = await this.client.info(section);
+            result = await client.info(section);
           } else {
-            result = await this.client.info();
+            result = await client.info();
           }
           break;
         }
@@ -970,7 +1145,7 @@ class RedisConnection extends BaseDatabaseConnection {
           // 切换数据库
           if (params && params.length > 0) {
             this.selectedDb = Number(params[0]);
-            await this.client.select(String(this.selectedDb));
+            await client.select(String(this.selectedDb));
             result = 'OK';
           } else {
             throw new Error('Database index is required for SELECT command');
@@ -979,15 +1154,15 @@ class RedisConnection extends BaseDatabaseConnection {
         case 'keys':
           // 列出键
           if (params && params.length > 0) {
-            result = await this.client.keys(params[0]);
+            result = await client.keys(params[0]);
           } else {
-            result = await this.client.keys('*');
+            result = await client.keys('*');
           }
           break;
         case 'get':
           // 获取键的值
           if (params && params.length > 0) {
-            result = await this.client.get(params[0]);
+            result = await client.get(params[0]);
           } else {
             throw new Error('Key name is required for GET command');
           }
@@ -995,7 +1170,7 @@ class RedisConnection extends BaseDatabaseConnection {
         case 'set':
           // 设置键的值
           if (params && params.length >= 2) {
-            result = await this.client.set(params[0], params[1]);
+            result = await client.set(params[0], params[1]);
           } else {
             throw new Error('Key and value are required for SET command');
           }
@@ -1003,26 +1178,26 @@ class RedisConnection extends BaseDatabaseConnection {
         case 'del':
           // 删除键
           if (params && params.length > 0) {
-            result = await this.client.del(params[0]);
+            result = await client.del(params[0]);
           } else {
             throw new Error('Key name is required for DEL command');
           }
           break;
         case 'type':
           if (!params || params.length < 1) throw new Error('Key is required for TYPE');
-          result = await this.client.type(params[0]);
+          result = await client.type(params[0]);
           break;
         case 'ttl':
           if (!params || params.length < 1) throw new Error('Key is required for TTL');
-          result = await this.client.ttl(params[0]);
+          result = await client.ttl(params[0]);
           break;
         case 'pttl':
           if (!params || params.length < 1) throw new Error('Key is required for PTTL');
-          result = await this.client.pttl(params[0]);
+          result = await client.pttl(params[0]);
           break;
         case 'exists':
           if (!params || params.length < 1) throw new Error('Key is required for EXISTS');
-          result = await this.client.exists(params[0]);
+          result = await client.exists(params[0]);
           break;
         case 'scan': {
           // 支持 SCAN cursor MATCH pattern COUNT n
@@ -1039,24 +1214,24 @@ class RedisConnection extends BaseDatabaseConnection {
               if (token === 'COUNT') COUNT = Number(val);
             }
           }
-          result = await this.client.scan(cursor, { MATCH, COUNT });
+          result = await client.scan(cursor, { MATCH, COUNT });
           break;
         }
         case 'dbsize':
           // 兼容 node-redis v4/v5 的 camelCase 方法名
-          result = await this.client.dbSize();
+          result = await client.dbSize();
           break;
         case 'lrange':
           if (!params || params.length < 3) throw new Error('LRANGE requires key, start, stop');
-          result = await this.client.lRange(params[0], Number(params[1]), Number(params[2]));
+          result = await client.lRange(params[0], Number(params[1]), Number(params[2]));
           break;
         case 'smembers':
           if (!params || params.length < 1) throw new Error('SMEMBERS requires key');
-          result = await this.client.sMembers(params[0]);
+          result = await client.sMembers(params[0]);
           break;
         case 'hgetall':
           if (!params || params.length < 1) throw new Error('HGETALL requires key');
-          result = await this.client.hGetAll(params[0]);
+          result = await client.hGetAll(params[0]);
           break;
         case 'zrange': {
           if (!params || params.length < 3) throw new Error('ZRANGE requires key, start, stop');
@@ -1064,7 +1239,7 @@ class RedisConnection extends BaseDatabaseConnection {
           const start = Number(params[1]);
           const stop = Number(params[2]);
           const withScores = params && params.some((p: any) => String(p).toLowerCase() === 'withscores');
-          result = withScores ? await this.client.zRange(key, start, stop, { WITHSCORES: true }) : await this.client.zRange(key, start, stop);
+          result = withScores ? await client.zRange(key, start, stop, { WITHSCORES: true }) : await client.zRange(key, start, stop);
           break;
         }
         // ---- New explicit command handlers for camelCase methods in node-redis v4 ----
@@ -1077,21 +1252,21 @@ class RedisConnection extends BaseDatabaseConnection {
           for (let i = 0; i < rest.length; i += 2) {
             obj[String(rest[i])] = String(rest[i + 1]);
           }
-          result = await this.client.hSet(key, obj);
+          result = await client.hSet(key, obj);
           break;
         }
         case 'lpush': {
           if (!params || params.length < 2) throw new Error('LPUSH requires key and at least one value');
           const key = String(params[0]);
           const values = params.slice(1).map((v: any) => String(v));
-          result = await this.client.lPush(key, values);
+          result = await client.lPush(key, values);
           break;
         }
         case 'sadd': {
           if (!params || params.length < 2) throw new Error('SADD requires key and at least one member');
           const key = String(params[0]);
           const members = params.slice(1).map((v: any) => String(v));
-          result = await this.client.sAdd(key, members);
+          result = await client.sAdd(key, members);
           break;
         }
         case 'zadd': {
@@ -1106,37 +1281,37 @@ class RedisConnection extends BaseDatabaseConnection {
             if (!Number.isFinite(score)) throw new Error('Invalid ZADD score');
             entries.push({ score, value });
           }
-          result = await this.client.zAdd(key, entries);
+          result = await client.zAdd(key, entries);
           break;
         }
         case 'pubsub': {
           const subcmd = String(params?.[0] ?? '').toLowerCase();
           if (subcmd === 'channels') {
             const pattern = (params && params.length > 1 && typeof params[1] === 'string') ? String(params[1]) : undefined;
-            if (typeof (this.client as any).pubSubChannels === 'function') {
-              result = await (this.client as any).pubSubChannels(pattern);
-            } else if (typeof (this.client as any).sendCommand === 'function') {
+            if (typeof (client as any).pubSubChannels === 'function') {
+              result = await (client as any).pubSubChannels(pattern);
+            } else if (typeof (client as any).sendCommand === 'function') {
               const args = ['PUBSUB', 'CHANNELS'];
               if (pattern) args.push(pattern);
-              result = await (this.client as any).sendCommand(args);
+              result = await (client as any).sendCommand(args);
             } else {
               throw new Error('PUBSUB CHANNELS not supported by client');
             }
           } else if (subcmd === 'numsub') {
             const channels = params?.slice(1)?.map((c: any) => String(c)) || [];
-            if (typeof (this.client as any).pubSubNumSub === 'function') {
-              result = await (this.client as any).pubSubNumSub(channels);
-            } else if (typeof (this.client as any).sendCommand === 'function') {
+            if (typeof (client as any).pubSubNumSub === 'function') {
+              result = await (client as any).pubSubNumSub(channels);
+            } else if (typeof (client as any).sendCommand === 'function') {
               const args = ['PUBSUB', 'NUMSUB', ...channels];
-              result = await (this.client as any).sendCommand(args);
+              result = await (client as any).sendCommand(args);
             } else {
               throw new Error('PUBSUB NUMSUB not supported by client');
             }
           } else if (subcmd === 'numpat') {
-            if (typeof (this.client as any).pubSubNumPat === 'function') {
-              result = await (this.client as any).pubSubNumPat();
-            } else if (typeof (this.client as any).sendCommand === 'function') {
-              result = await (this.client as any).sendCommand(['PUBSUB', 'NUMPAT']);
+            if (typeof (client as any).pubSubNumPat === 'function') {
+              result = await (client as any).pubSubNumPat();
+            } else if (typeof (client as any).sendCommand === 'function') {
+              result = await (client as any).sendCommand(['PUBSUB', 'NUMPAT']);
             } else {
               throw new Error('PUBSUB NUMPAT not supported by client');
             }
@@ -1147,18 +1322,18 @@ class RedisConnection extends BaseDatabaseConnection {
         }
         case 'slowlog': {
           const subcmd = String(params?.[0] ?? '').toLowerCase();
-          if (typeof (this.client as any).sendCommand !== 'function') {
+          if (typeof (client as any).sendCommand !== 'function') {
             throw new Error('SLOWLOG not supported by client');
           }
           if (subcmd === 'get') {
             const count = params?.[1];
             const args = ['SLOWLOG', 'GET'];
             if (typeof count !== 'undefined') args.push(String(count));
-            result = await (this.client as any).sendCommand(args);
+            result = await (client as any).sendCommand(args);
           } else if (subcmd === 'len') {
-            result = await (this.client as any).sendCommand(['SLOWLOG', 'LEN']);
+            result = await (client as any).sendCommand(['SLOWLOG', 'LEN']);
           } else if (subcmd === 'reset') {
-            result = await (this.client as any).sendCommand(['SLOWLOG', 'RESET']);
+            result = await (client as any).sendCommand(['SLOWLOG', 'RESET']);
           } else {
             throw new Error(`Unsupported SLOWLOG subcommand: ${subcmd}`);
           }
@@ -1166,8 +1341,8 @@ class RedisConnection extends BaseDatabaseConnection {
         }
         default:
           // 尝试直接执行命令（仅当存在同名方法）
-          if (typeof (this.client as any)[cmd] === 'function') {
-            result = await (this.client as any)[cmd](...(params || []));
+          if (typeof (client as any)[cmd] === 'function') {
+            result = await (client as any)[cmd](...(params || []));
           } else {
             throw new Error(`Unsupported Redis command: ${cmd}`);
           }
@@ -1184,41 +1359,69 @@ class RedisConnection extends BaseDatabaseConnection {
         success: false,
         error: error.message || 'Redis query execution failed'
       };
+    } finally {
+      // 对于直接使用this.client的查询，不需要释放连接池
     }
   }
 
   async getDatabaseInfo(): Promise<DatabaseInfo> {
     try {
-      if (!this.client || !this.isConnected()) {
-        throw new Error('Redis client not connected');
+      if (!this.isConnected()) {
+        throw new Error('Redis connection pool not connected');
       }
 
-      const info = await this.client.info();
-      const infoLines = info.split('\r\n');
-      const infoObj: Record<string, string> = {};
-
-      infoLines.forEach((line: string) => {
-        const parts = line.split(':');
-        if (parts.length === 2) {
-          infoObj[parts[0]] = parts[1];
+      // 使用连接池获取数据库信息
+      let connection = null;
+      try {
+        // 从连接池获取连接
+        connection = await this.getConnection();
+        
+        if (!connection || !connection.client) {
+          throw new Error('Failed to get connection from pool');
         }
-      });
 
-      return {
-        version: infoObj['redis_version'] || 'Unknown',
-        uptime: parseInt(infoObj['uptime_in_seconds'] || '0'),
-        connections: parseInt(infoObj['connected_clients'] || '0'),
-        storage: {
-          total: parseInt(infoObj['total_system_memory'] || '0'),
-          used: parseInt(infoObj['used_memory'] || '0'),
-          free: 0 // Redis不直接提供空闲内存信息
-        },
-        storageInstance: { total: 0, used: 0, free: 0 },
-        performance: {
-          queriesPerSecond: parseInt(infoObj['instantaneous_ops_per_sec'] || '0'),
-          slowQueries: parseInt(infoObj['slowlog_length'] || '0')
+        const info = await connection.client.info();
+        const infoLines = info.split('\r\n');
+        const infoObj: Record<string, string> = {};
+
+        infoLines.forEach((line: string) => {
+          const parts = line.split(':');
+          if (parts.length === 2) {
+            infoObj[parts[0]] = parts[1];
+          }
+        });
+
+        // 增强返回的数据库信息，添加连接池相关信息
+        const result: DatabaseInfo = {
+          version: infoObj['redis_version'] || 'Unknown',
+          uptime: parseInt(infoObj['uptime_in_seconds'] || '0'),
+          connections: parseInt(infoObj['connected_clients'] || '0'),
+          storage: {
+            total: parseInt(infoObj['total_system_memory'] || '0'),
+            used: parseInt(infoObj['used_memory'] || '0'),
+            free: 0 // Redis不直接提供空闲内存信息
+          },
+          storageInstance: { total: 0, used: 0, free: 0 },
+          performance: {
+            queriesPerSecond: parseInt(infoObj['instantaneous_ops_per_sec'] || '0'),
+            slowQueries: parseInt(infoObj['slowlog_length'] || '0')
+          }
+        };
+        
+        // 如果是TypeScript环境，添加扩展属性
+        if (this.poolInfo) {
+          (result as any).poolSize = this.clients.size;
+          (result as any).idleConnections = this.idleConnections.length;
+          (result as any).poolId = this.poolInfo.poolId;
         }
-      };
+        
+        return result;
+      } finally {
+        // 释放连接回池
+        if (connection && connection.clientId) {
+          this.releaseConnection(connection.clientId);
+        }
+      }
     } catch (error) {
       console.error('Failed to get Redis info:', error);
       throw error;
@@ -1228,49 +1431,62 @@ class RedisConnection extends BaseDatabaseConnection {
   async getTableStructure(tableName: string): Promise<TableStructure> {
     // Redis没有表的概念，这里返回键空间信息
     try {
-      if (!this.client || !this.isConnected()) {
+      if (!this.isConnected()) {
         throw new Error('Redis client not connected');
       }
 
-      // 尝试获取键的类型
-      let type = 'unknown';
+      // 使用连接池获取键类型
+      let client = null;
       try {
-        type = await this.client.type(tableName);
-      } catch {
-        // 如果键不存在，type命令会失败
-      }
+        client = await this.getConnection();
+        if (!client || !client.client) {
+          throw new Error('Failed to get Redis connection');
+        }
 
-      // 构建类似表结构的信息
-      return {
-        name: tableName,
-        columns: [
-          {
-            name: 'key',
-            type: 'string',
-            nullable: false,
-            primaryKey: true,
-            autoIncrement: false
-          },
-          {
-            name: 'value',
-            type: type,
-            nullable: false,
-            primaryKey: false,
-            autoIncrement: false
-          },
-          {
-            name: 'type',
-            type: 'string',
-            nullable: false,
-            primaryKey: false,
-            autoIncrement: false
-          }
-        ],
-        indexes: [],
-        foreignKeys: [],
-        rowCount: 1, // Redis键是单个记录
-        size: 0 // 暂时不计算大小
-      };
+        // 尝试获取键的类型
+        let type = 'unknown';
+        try {
+          type = await client.client.type(tableName);
+        } catch {
+          // 如果键不存在，type命令会失败
+        }
+
+        // 构建类似表结构的信息
+        return {
+          name: tableName,
+          columns: [
+            {
+              name: 'key',
+              type: 'string',
+              nullable: false,
+              primaryKey: true,
+              autoIncrement: false
+            },
+            {
+              name: 'value',
+              type: type,
+              nullable: false,
+              primaryKey: false,
+              autoIncrement: false
+            },
+            {
+              name: 'type',
+              type: 'string',
+              nullable: false,
+              primaryKey: false,
+              autoIncrement: false
+            }
+          ],
+          indexes: [],
+          foreignKeys: [],
+          rowCount: 1, // Redis键是单个记录
+          size: 0 // 暂时不计算大小
+        };
+      } finally {
+        if (client && client.clientId) {
+          this.releaseConnection(client.clientId);
+        }
+      }
     } catch (error) {
       console.error('Failed to get Redis key structure:', error);
       throw error;
@@ -1280,12 +1496,24 @@ class RedisConnection extends BaseDatabaseConnection {
   async listTables(): Promise<string[]> {
     // Redis没有表的概念，但我们可以返回当前数据库中的所有键
     try {
-      if (!this.client || !this.isConnected()) {
+      if (!this.isConnected()) {
         return [];
       }
 
-      const keys = await this.client.keys('*');
-      return keys.sort();
+      // 使用连接池获取键列表
+      let client = null;
+      try {
+        client = await this.getConnection();
+        if (!client || !client.client) {
+          return [];
+        }
+        const keys = await client.client.keys('*');
+        return keys.sort();
+      } finally {
+        if (client && client.clientId) {
+          this.releaseConnection(client.clientId);
+        }
+      }
     } catch (error) {
       console.error('Failed to list Redis keys:', error);
       return [];
@@ -1295,7 +1523,7 @@ class RedisConnection extends BaseDatabaseConnection {
   async listDatabases(): Promise<string[]> {
     // 获取Redis数据库列表
     try {
-      if (!this.client || !this.isConnected()) {
+      if (!this.isConnected()) {
         // 尝试重新连接
         await this.connect();
         if (!this.isConnected()) {
@@ -1303,37 +1531,57 @@ class RedisConnection extends BaseDatabaseConnection {
         }
       }
 
-      const info = await this.client.info('keyspace');
-      const dbNames: string[] = [];
-      
-      // 增强的解析逻辑，支持不同的换行符格式
-      const lines = String(info || '').split(/\r?\n/);
-      lines.forEach((line: string) => {
-        // 更精确的数据库名匹配
-        const match = line.match(/^db(\d+)/);
-        if (match) {
-          dbNames.push(match[0]);
+      // 使用连接池获取数据库信息
+      let client = null;
+      try {
+        client = await this.getConnection();
+        if (!client || !client.client) {
+          return ['db0'];
         }
-      });
-      
-      // 如果没有找到数据库信息，返回默认的数据库列表
-      if (dbNames.length === 0) {
-        return ['db0'];
+        const info = await client.client.info('keyspace');
+        const dbNames: string[] = [];
+        
+        // 增强的解析逻辑，支持不同的换行符格式
+        const lines = String(info || '').split(/\r?\n/);
+        lines.forEach((line: string) => {
+          // 更精确的数据库名匹配
+          const match = line.match(/^db(\d+)/);
+          if (match) {
+            dbNames.push(match[0]);
+          }
+        });
+        
+        // 如果没有找到数据库信息，返回默认的数据库列表
+        if (dbNames.length === 0) {
+          return ['db0'];
+        }
+        
+        // 按数字顺序排序
+        return dbNames.sort((a, b) => {
+          const numA = parseInt(a.replace('db', ''), 10);
+          const numB = parseInt(b.replace('db', ''), 10);
+          return numA - numB;
+        });
+      } finally {
+        if (client && client.clientId) {
+          this.releaseConnection(client.clientId);
+        }
       }
-      
-      // 按数字顺序排序
-      return dbNames.sort((a, b) => {
-        const numA = parseInt(a.replace('db', ''), 10);
-        const numB = parseInt(b.replace('db', ''), 10);
-        return numA - numB;
-      });
     } catch (error) {
       console.error('Failed to list Redis databases:', error);
       // 即使出错也尝试通过dbsize获取当前数据库信息
       try {
-        if (this.isConnected()) {
-          await this.client.dbSize();
-          return ['db0'];
+        let client = null;
+        try {
+          client = await this.getConnection();
+          if (client && client.client) {
+            await client.client.dbSize();
+            return ['db0'];
+          }
+        } finally {
+          if (client && client.clientId) {
+            this.releaseConnection(client.clientId);
+          }
         }
       } catch (innerError) {
         console.error('Failed to get current Redis DB size:', innerError);
@@ -1343,8 +1591,20 @@ class RedisConnection extends BaseDatabaseConnection {
   }
 
   isConnected(): boolean {
-    // 增强连接状态检测，使用client.connected作为client.isReady的fallback，兼容Node Redis v5
-    return this.client !== null && (this.client.isReady || this.client.connected);
+    // 优先检查连接池状态
+    if (this.clients.size > 0) {
+      // 检查是否有空闲连接
+      if (this.idleConnections.length > 0) {
+        return true;
+      }
+      
+      // 检查至少有一个客户端是活跃的
+      // 检查连接池中的连接状态
+      return this.clients.size > 0;
+    }
+    
+    // 向后兼容：如果连接池未初始化，检查单个连接
+    return this.clients !== null && this.clients.size > 0;
   }
 
   async ping(): Promise<boolean> {
@@ -1353,8 +1613,24 @@ class RedisConnection extends BaseDatabaseConnection {
         return false;
       }
       
-      const pong = await this.client.ping();
-      return pong === 'PONG';
+      // 使用连接池进行ping操作
+      let client = null;
+      try {
+        // 从连接池获取连接
+        client = await this.getConnection();
+        
+        if (!client || !client.client || (!client.client.isReady && !client.client.connected)) {
+          return false;
+        }
+        
+        const pong = await client.client.ping();
+        return pong === 'PONG';
+      } finally {
+        // 释放连接回池
+        if (client && client.clientId) {
+          this.releaseConnection(client.clientId);
+        }
+      }
     } catch {
       return false;
     }
@@ -1474,7 +1750,7 @@ class SQLiteConnection extends BaseDatabaseConnection {
 
 // ... 数据库连接工厂（恢复主进程依赖）
 export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
-  createConnection(config: DatabaseConnection): IDatabaseConnection {
+  createConnection(config: DatabaseConnection, poolConfig?: IConnectionPoolConfig): IDatabaseConnection {
     let conn: IDatabaseConnection;
     switch (config.type) {
       case 'mysql':
@@ -1490,7 +1766,7 @@ export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
         conn = new GaussDBConnection();
         break;
       case 'redis':
-        conn = new RedisConnection();
+        conn = new RedisConnection(poolConfig);
         break;
       case 'sqlite':
         conn = new SQLiteConnection();
@@ -1500,6 +1776,10 @@ export class DatabaseConnectionFactory implements IDatabaseConnectionFactory {
     }
     // 将配置注入到连接实例（基类持有 config 属性）
     (conn as any).config = config;
+    // 如果支持连接池配置，设置它
+    if (poolConfig && typeof (conn as any).updatePoolConfig === 'function') {
+      (conn as any).updatePoolConfig(poolConfig);
+    }
     return conn;
   }
 
@@ -1531,26 +1811,73 @@ export class DatabaseService extends EventEmitter {
     return `${(config.type || 'redis').toLowerCase()}_${config.host}_${config.port}_${databaseName}`;
   }
 
-  async createConnectionPool(config: DatabaseConnection, _poolConfig?: Partial<IConnectionPoolConfig>): Promise<string> {
+  async createConnectionPool(config: DatabaseConnection, poolConfig?: Partial<IConnectionPoolConfig>): Promise<string> {
     const poolId = this.generatePoolId(config);
     console.log(`DatabaseService.createConnectionPool - poolId: ${poolId}, config: ${JSON.stringify(config)}`);
+    
+    // 如果连接池已存在，检查配置是否需要更新
     if (this.connections.has(poolId)) {
+      const existingConn = this.connections.get(poolId);
+      // 如果提供了新的池配置，更新现有连接池的配置
+      if (poolConfig && existingConn && typeof (existingConn as any).updatePoolConfig === 'function') {
+        try {
+          (existingConn as any).updatePoolConfig(poolConfig);
+          console.log(`DatabaseService.createConnectionPool - Updated existing connection pool config: ${poolId}`);
+        } catch (error) {
+          console.error(`DatabaseService.createConnectionPool - Error updating pool config: ${error}`);
+        }
+      }
       console.log(`DatabaseService.createConnectionPool - Connection pool already exists: ${poolId}`);
       return poolId;
     }
+    
+    // 应用默认池配置或用户提供的配置
+    const effectivePoolConfig: IConnectionPoolConfig = {
+      maxConnections: poolConfig?.maxConnections || 5,
+      minConnections: poolConfig?.minConnections || 1,
+      acquireTimeout: poolConfig?.acquireTimeout || 60000,
+      idleTimeout: poolConfig?.idleTimeout || 60000,
+      testOnBorrow: poolConfig?.testOnBorrow !== undefined ? poolConfig.testOnBorrow : true
+    };
+    
+    console.log(`DatabaseService.createConnectionPool - Effective pool config: ${JSON.stringify(effectivePoolConfig)}`);
+    
     const factory = new DatabaseConnectionFactory();
-    const conn = factory.createConnection(config);
+    // 传入池配置给连接工厂
+    const conn = factory.createConnection(config, effectivePoolConfig);
     console.log(`DatabaseService.createConnectionPool - Created connection instance: ${conn}`);
-    const connected = await conn.connect();
-    if (!connected) {
-      throw new Error('Failed to connect to Redis');
+    
+    try {
+      const connected = await conn.connect();
+      if (!connected) {
+        throw new Error('Failed to connect to database');
+      }
+      console.log(`DatabaseService.createConnectionPool - Connection connected successfully`);
+      
+      // 存储连接和配置信息
+      this.connections.set(poolId, conn);
+      this.configs.set(poolId, config);
+      this.poolTypes.set(poolId, config.type);
+      
+      // 对于Redis，设置连接池信息
+      if (config.type === 'redis' && typeof (conn as any).setPoolInfo === 'function') {
+        (conn as any).setPoolInfo({
+          poolId,
+          config: effectivePoolConfig,
+          createdAt: Date.now()
+        });
+      }
+      
+      console.log(`DatabaseService.createConnectionPool - Connection added to pool: ${poolId}`);
+      return poolId;
+    } catch (error) {
+      console.error(`DatabaseService.createConnectionPool - Error creating connection pool: ${error}`);
+      // 清理资源
+      try {
+        await conn.disconnect();
+      } catch {}
+      throw error;
     }
-    console.log(`DatabaseService.createConnectionPool - Connection connected successfully`);
-    this.connections.set(poolId, conn);
-    this.configs.set(poolId, config);
-    this.poolTypes.set(poolId, config.type);
-    console.log(`DatabaseService.createConnectionPool - Connection added to pool: ${poolId}`);
-    return poolId;
   }
 
   getConnectionPool(poolId: string): IDatabaseConnection | undefined {

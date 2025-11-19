@@ -91,6 +91,13 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
   const [keyspace, setKeyspace] = useState<Record<string, { keys: number; expires: number; avg_ttl: number }>>({});
   const [commandStats, setCommandStats] = useState<Array<{cmd: string; calls: number; usec: number; usecPerCall: number}>>([]);
   const [clusterNodes, setClusterNodes] = useState<string>('');
+  // 连接池状态信息
+  const [poolInfo, setPoolInfo] = useState<{poolSize: number; idleConnections: number; activeConnections: number; poolId: string}>({
+    poolSize: 0,
+    idleConnections: 0,
+    activeConnections: 0,
+    poolId: ''
+  });
 
   // 采样 & 趋势状态
   const [sampleWindow, setSampleWindow] = useState<number>(30);
@@ -124,6 +131,18 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
   const [topN, setTopN] = useState<number>(10);
   
   const poolId = connection.connectionId || connection.id;
+  
+  // 连接池历史指标数据
+  const [poolSamples, setPoolSamples] = useState<Array<{ 
+    ts: number; 
+    poolSize: number; 
+    idleConnections: number; 
+    activeConnections: number; 
+    usageRate: number; 
+    avgWaitTime?: number; 
+    waitCount?: number; 
+    timeoutCount?: number;
+  }>>([]);
 
   // 根据分钟与采样间隔，派生样本窗口
   useEffect(() => {
@@ -147,60 +166,38 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
         setError('');
 
         try {
-          // 详细日志：打印连接对象
-          console.log('RedisServiceInfoPage - 连接对象:', connection);
-
-          // 尝试获取连接池ID
+          // 确保使用正确的连接池ID，与后端实现保持一致
           let currentPoolId = connection.connectionId;
-          console.log('RedisServiceInfoPage - 初始连接池ID:', currentPoolId);
           
-          // 如果连接池ID不存在，尝试生成与主进程一致的ID并检查
+          // 如果连接池ID不存在，使用与主进程一致的ID生成逻辑
           if (!currentPoolId) {
-            // 与主进程generatePoolId函数保持一致的ID生成逻辑
             const databaseName = connection.database || '';
             currentPoolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
-            console.log('RedisServiceInfoPage - 生成的连接池ID:', currentPoolId);
             
             // 检查连接池是否存在
             const poolExists = await (window as any).electronAPI?.getConnectionPoolConfig?.(currentPoolId);
             if (!poolExists) {
-                // 打印连接参数
-                console.log('RedisServiceInfoPage - connectDatabase params:', connection);
                 // 连接池不存在，尝试重新连接
                 const res = await (window as any).electronAPI?.connectDatabase?.(connection);
-                console.log('RedisServiceInfoPage - 重新连接结果:', res);
                 if (res?.success && res?.connectionId) {
                   currentPoolId = res.connectionId;
-                  // 更新连接对象的connectionId和isConnected状态
+                  // 更新连接对象的connectionId
                   connection.connectionId = currentPoolId;
-                  connection.isConnected = true;
-                  console.log('RedisServiceInfoPage - 重新连接获取的连接池ID:', currentPoolId);
                 } else {
                   throw new Error('无法获取连接池ID，重新连接失败');
                 }
-            } else {
-              console.log('RedisServiceInfoPage - 连接池存在，使用生成的ID');
             }
           }
         
         // 执行Redis命令获取真实数据
-        console.log('RedisServiceInfoPage - 执行Redis INFO命令');
         const infoResult = await execRedisQueued(currentPoolId as string, 'INFO');
-        console.log('RedisServiceInfoPage - INFO命令结果:', infoResult);
-        
-        console.log('RedisServiceInfoPage - 执行Redis CLUSTER NODES命令');
-        const clusterResult = await execRedisQueued(currentPoolId as string, 'CLUSTER', ['NODES']);
-        console.log('RedisServiceInfoPage - CLUSTER NODES命令结果:', clusterResult);
-        
-        console.log('RedisServiceInfoPage - 执行Redis INFO commandstats命令');
-        const cmdStatsResult = await execRedisQueued(currentPoolId as string, 'INFO', ['commandstats']);
-          console.log('RedisServiceInfoPage - INFO commandstats命令结果:', cmdStatsResult);
+          const clusterResult = await execRedisQueued(currentPoolId as string, 'CLUSTER', ['NODES']);
+          const cmdStatsResult = await execRedisQueued(currentPoolId as string, 'INFO', ['commandstats']);
 
           if (cancelled) return;
 
           // 解析数据
           const parsedSections = parseRedisInfo(infoResult);
-          console.log('RedisServiceInfoPage - 解析后的INFO数据:', parsedSections);
           setSections(parsedSections);
           
           setClusterNodes(clusterResult);
@@ -208,7 +205,6 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
           // 解析键空间信息
           const keyspaceSection = parsedSections.keyspace || {};
           const parsedKeyspace = parseKeyspace(Object.entries(keyspaceSection).map(([k, v]) => `${k}:${v}`).join('\n'));
-          console.log('RedisServiceInfoPage - 解析后的键空间信息:', parsedKeyspace);
           setKeyspace(parsedKeyspace);
 
           // 解析命令统计信息
@@ -232,15 +228,41 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
                 usecPerCall: obj.usec_per_call || 0
               };
             });
-          console.log('RedisServiceInfoPage - 解析后的命令统计信息:', stats);
           setCommandStats(stats);
 
           if (!cancelled) setLoading(false);
         } catch (err: any) {
-          console.error('RedisServiceInfoPage - 加载失败:', err);
+          // 仅记录错误，不输出详细日志
+          console.error('Redis信息加载失败:', err);
           if (!cancelled) {
-            setError(`加载失败: ${err.message || '未知错误'}`);
+            // 提供更友好的错误信息
+            let errorMessage = '加载Redis服务信息失败';
+            if (err.message) {
+              if (err.message.includes('无法获取连接池ID')) {
+                errorMessage = '无法连接到Redis连接池，请检查连接配置';
+              } else {
+                errorMessage = `加载失败: ${err.message}`;
+              }
+            }
+            setError(errorMessage);
             setLoading(false);
+          }
+        } finally {
+          // 尝试获取连接池信息，即使其他操作失败也尝试获取
+          if (!cancelled && poolId) {
+            try {
+              const poolConfig = await (window as any).electronAPI?.getConnectionPoolConfig?.(poolId);
+              if (poolConfig) {
+                setPoolInfo({
+                  poolSize: poolConfig.poolSize || 0,
+                  idleConnections: poolConfig.idleConnections || 0,
+                  activeConnections: (poolConfig.poolSize || 0) - (poolConfig.idleConnections || 0),
+                  poolId: poolId
+                });
+              }
+            } catch (err) {
+              console.error('获取连接池信息失败:', err);
+            }
           }
         }
       };
@@ -261,44 +283,75 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
     const timer = setInterval(async () => {
       if (samplingBusy) return;
       setSamplingBusy(true);
+      
       try {
-        // 获取真实Redis信息
-        const infoResult = await execRedisQueued(poolId, 'INFO', ['stats', 'memory', 'clients', 'cpu']);
-        const parsed = parseRedisInfo(infoResult);
-        const mem = parsed.memory || {};
-        const stats = parsed.stats || {};
-        const clients = parsed.clients || {};
-
-        // 计算 OPS (Operations Per Second)
-        const totalCmds = Number(stats.total_commands_processed || 0);
         const currentTs = Date.now();
-        let ops = 0;
-
-        if (lastTotalCmds !== null && lastOpsTs !== null) {
-          const timeDiffMs = currentTs - lastOpsTs;
-          const cmdDiff = totalCmds - lastTotalCmds;
-          ops = timeDiffMs > 0 ? Number(((cmdDiff / timeDiffMs) * 1000).toFixed(2)) : 0;
-        }
-        setLastTotalCmds(totalCmds);
-        setLastOpsTs(currentTs);
-
-        // 创建新样本
-        const newSample = {
-          ts: currentTs,
-          ops,
-          mem: Number(mem.used_memory || 0),
-          memRss: Number(mem.used_memory_rss || 0),
-          memPeak: Number(mem.used_memory_peak || 0),
-          memDataset: Number(mem.used_memory_dataset || 0),
-          memLua: Number(mem.used_memory_lua || 0),
-          clients: Number(clients.connected_clients || 0),
-          blocked: Number(clients.blocked_clients || 0)
-        };
         
-        setInfoSamples(prev => {
-          const updated = [...prev, newSample];
-          return updated.slice(-sampleWindow);
-        });
+        // 并行获取Redis信息和连接池配置
+        const [infoResult, poolConfig] = await Promise.all([
+          execRedisQueued(poolId, 'INFO', ['stats', 'memory', 'clients', 'cpu']).catch(() => null),
+          (window as any).electronAPI?.getConnectionPoolConfig?.(poolId).catch(() => null)
+        ]);
+
+        // 处理Redis信息采样
+        if (infoResult) {
+          const parsed = parseRedisInfo(infoResult);
+          const mem = parsed.memory || {};
+          const stats = parsed.stats || {};
+          const clients = parsed.clients || {};
+
+          // 计算 OPS (Operations Per Second)
+          const totalCmds = Number(stats.total_commands_processed || 0);
+          let ops = 0;
+
+          if (lastTotalCmds !== null && lastOpsTs !== null) {
+            const timeDiffMs = currentTs - lastOpsTs;
+            const cmdDiff = totalCmds - lastTotalCmds;
+            ops = timeDiffMs > 0 ? Number(((cmdDiff / timeDiffMs) * 1000).toFixed(2)) : 0;
+          }
+          setLastTotalCmds(totalCmds);
+          setLastOpsTs(currentTs);
+
+          // 创建新样本
+          const newSample = {
+            ts: currentTs,
+            ops,
+            mem: Number(mem.used_memory || 0),
+            memRss: Number(mem.used_memory_rss || 0),
+            memPeak: Number(mem.used_memory_peak || 0),
+            memDataset: Number(mem.used_memory_dataset || 0),
+            memLua: Number(mem.used_memory_lua || 0),
+            clients: Number(clients.connected_clients || 0),
+            blocked: Number(clients.blocked_clients || 0)
+          };
+          
+          setInfoSamples(prev => {
+            const updated = [...prev, newSample];
+            return updated.slice(-sampleWindow);
+          });
+        }
+
+        // 处理连接池采样
+        if (poolConfig) {
+          const activeConn = (poolConfig.poolSize || 0) - (poolConfig.idleConnections || 0);
+          const usageRate = poolConfig.poolSize > 0 ? (activeConn / poolConfig.poolSize) * 100 : 0;
+          
+          const newPoolSample = {
+            ts: currentTs,
+            poolSize: poolConfig.poolSize || 0,
+            idleConnections: poolConfig.idleConnections || 0,
+            activeConnections: activeConn,
+            usageRate: Number(usageRate.toFixed(1)),
+            avgWaitTime: poolConfig.avgWaitTime || 0,
+            waitCount: poolConfig.waitCount || 0,
+            timeoutCount: poolConfig.timeoutCount || 0
+          };
+          
+          setPoolSamples(prev => {
+            const updated = [...prev, newPoolSample];
+            return updated.slice(-sampleWindow);
+          });
+        }
       } catch (err) {
         console.error('采样失败:', err);
       } finally {
@@ -395,6 +448,51 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
               /></Col>
             </Row>
           </Card>
+          
+          {/* 连接池状态卡片 */}
+          <Card title="连接池状态" style={{ marginBottom: 12 }}>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Statistic 
+                  title="连接池大小" 
+                  value={poolInfo.poolSize} 
+                  suffix="" 
+                  valueStyle={{ color: '#007BFF' }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic 
+                  title="空闲连接数" 
+                  value={poolInfo.idleConnections} 
+                  suffix="" 
+                  valueStyle={{ color: '#3f8600' }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic 
+                  title="活动连接数" 
+                  value={poolInfo.activeConnections} 
+                  suffix="" 
+                  valueStyle={{ color: poolInfo.activeConnections > poolInfo.poolSize * 0.8 ? '#cf1322' : '#1677ff' }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic 
+                  title="连接使用率" 
+                  value={poolInfo.poolSize > 0 ? Number(((poolInfo.activeConnections / poolInfo.poolSize) * 100).toFixed(1)) : 0} 
+                  suffix="%" 
+                  valueStyle={{ 
+                    color: poolInfo.poolSize > 0 && (poolInfo.activeConnections / poolInfo.poolSize) > 0.8 ? '#cf1322' : '#1677ff' 
+                  }}
+                />
+              </Col>
+            </Row>
+            {poolInfo.poolId && (
+              <div style={{ marginTop: 12, fontSize: 12, color: '#666' }}>
+                <Tag color="blue">连接池ID: {poolInfo.poolId}</Tag>
+              </div>
+            )}
+          </Card>
 
           {/* 性能指标图表 */}
           <Row gutter={16} style={{ marginBottom: 12 }}>
@@ -458,6 +556,90 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
                   axis={{ x: { type: 'time', label: { formatter: (v: number) => fmtTime(v) } }, y: { type: 'number', title: '客户端连接数' } }}
                   tooltip={{ formatter: (datum: any) => ({ name: '客户端数', value: datum.clients }) }}
                 />
+                )}
+              </Card>
+            </Col>
+          </Row>
+          
+          {/* 连接池指标图表 */}
+          <Row gutter={16} style={{ marginBottom: 12 }}>
+            <Col span={24}>
+              <Card title="连接池使用率趋势" style={{ height: 400 }}>
+                {poolSamples.length > 0 && (
+                  <Line
+                    data={poolSamples.map(sample => ({ 
+                      time: sample.ts, 
+                      usageRate: sample.usageRate,
+                      activeConnections: sample.activeConnections,
+                      poolSize: sample.poolSize
+                    }))}
+                    xField="time"
+                    yField={['usageRate', 'activeConnections', 'poolSize']}
+                    geometry={[
+                      { type: 'line', yField: 'usageRate', smooth: true, color: '#FF7D00' },
+                      { type: 'line', yField: 'activeConnections', smooth: true, color: '#165DFF' },
+                      { type: 'line', yField: 'poolSize', smooth: true, color: '#36CBCB', style: { lineDash: [4, 4] } }
+                    ]}
+                    xAxis={{ type: 'time', label: { formatter: (v: number) => fmtTime(v) } }}
+                    yAxis={[
+                      { title: { text: '使用率 (%)' }, position: 'left', min: 0, max: 100 },
+                      { title: { text: '连接数' }, position: 'right', min: 0 }
+                    ]}
+                    tooltip={{ formatter: (datum: any) => ({
+                      name: '时间',
+                      value: fmtTime(datum.time),
+                      '使用率': `${datum.usageRate}%`,
+                      '活动连接': datum.activeConnections,
+                      '池大小': datum.poolSize
+                    }) }}
+                  />
+                )}
+              </Card>
+            </Col>
+          </Row>
+          
+          <Row gutter={16} style={{ marginBottom: 12 }}>
+            <Col span={12}>
+              <Card title="连接等待时间" style={{ height: 300 }}>
+                {poolSamples.length > 0 && poolSamples.some(s => s.avgWaitTime !== undefined && s.avgWaitTime > 0) && (
+                  <Column
+                    data={poolSamples.filter(s => s.avgWaitTime !== undefined)}
+                    xField="ts"
+                    yField="avgWaitTime"
+                    xAxis={{ type: 'time', label: { formatter: (v: number) => fmtTime(v) } }}
+                    tooltip={{ formatter: (datum: any) => ({
+                      name: '平均等待时间',
+                      value: `${datum.avgWaitTime} ms`
+                    }) }}
+                    columnStyle={{ fill: 'l(270) 0:#1890ff 1:#096dd9' }}
+                  />
+                )}
+                {poolSamples.length > 0 && poolSamples.every(s => s.avgWaitTime === undefined || s.avgWaitTime === 0) && (
+                  <div style={{ textAlign: 'center', padding: '50px 0', color: '#999' }}>
+                    暂无连接等待时间数据
+                  </div>
+                )}
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card title="等待与超时计数" style={{ height: 300 }}>
+                {poolSamples.length > 0 && (
+                  <Area
+                    data={poolSamples.map(sample => ({ 
+                      time: sample.ts, 
+                      waitCount: sample.waitCount || 0,
+                      timeoutCount: sample.timeoutCount || 0
+                    }))}
+                    xField="time"
+                    yField={['waitCount', 'timeoutCount']}
+                    axis={{ x: { type: 'time', label: { formatter: (v: number) => fmtTime(v) } } }}
+                    tooltip={{ formatter: (datum: any) => ({
+                      name: '时间',
+                      value: fmtTime(datum.time),
+                      '等待次数': datum.waitCount,
+                      '超时次数': datum.timeoutCount
+                    }) }}
+                  />
                 )}
               </Card>
             </Col>

@@ -130,7 +130,8 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
   const [cmdViewMode, setCmdViewMode] = useState<'current'|'window'>('current');
   const [topN, setTopN] = useState<number>(10);
   
-  const poolId = connection.connectionId || connection.id;
+    const databaseName = connection.type === 'redis' ? (connection.database !== undefined ? String(connection.database) : '0') : (connection.database !== undefined ? String(connection.database) : '');
+    const poolId = connection.connectionId || `${(connection.type || 'redis').toLowerCase()}_${connection.host}_${connection.port}_${databaseName}`;
   
   // 连接池历史指标数据
   const [poolSamples, setPoolSamples] = useState<Array<{ 
@@ -168,47 +169,80 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
         try {
           // 确保使用正确的连接池ID，与后端实现保持一致
           let currentPoolId = connection.connectionId;
+          let poolExists = false;
           
-          // 如果连接池ID不存在，使用与主进程一致的ID生成逻辑
-          if (!currentPoolId) {
-            const databaseName = connection.database || '';
-            currentPoolId = `${connection.type}_${connection.host}_${connection.port}_${databaseName}`;
-            
-            // 检查连接池是否存在
-            const poolExists = await (window as any).electronAPI?.getConnectionPoolConfig?.(currentPoolId);
-            if (!poolExists) {
-                // 连接池不存在，尝试重新连接
-                const res = await (window as any).electronAPI?.connectDatabase?.(connection);
-                if (res?.success && res?.connectionId) {
-                  currentPoolId = res.connectionId;
-                  // 更新连接对象的connectionId
-                  connection.connectionId = currentPoolId;
-                } else {
-                  throw new Error('无法获取连接池ID，重新连接失败');
-                }
+          // 检查连接池是否存在并有效
+          const checkPool = async () => {
+            if (currentPoolId) {
+              poolExists = await (window as any).electronAPI?.getConnectionPoolConfig?.(currentPoolId) || false;
             }
+            
+            if (!poolExists) {
+              // 如果连接池不存在或无效，尝试重新创建
+              const res = await (window as any).electronAPI?.createConnectionPool?.(connection, { 
+                maxConnections: 5, 
+                minConnections: 1, 
+                testOnBorrow: true
+              });
+              if (res?.success) {
+                currentPoolId = res.poolId || '';
+                // 更新连接对象的connectionId
+                connection.connectionId = currentPoolId;
+                poolExists = true;
+              } else {
+                // 如果直接创建失败，尝试重新连接数据库
+                const connectRes = await (window as any).electronAPI?.connectDatabase?.(connection);
+                if (connectRes?.success && connectRes?.connectionId) {
+                  currentPoolId = connectRes.connectionId;
+                  connection.connectionId = currentPoolId;
+                  poolExists = true;
+                } else {
+                  // 最后尝试使用与主进程一致的ID生成逻辑
+                  const databaseName = connection.type === 'redis' ? (connection.database !== undefined ? String(connection.database) : '0') : (connection.database !== undefined ? String(connection.database) : '');
+                  currentPoolId = `${(connection.type || 'redis').toLowerCase()}_${connection.host}_${connection.port}_${databaseName}`;
+                  // 再次检查是否存在
+                  poolExists = await (window as any).electronAPI?.getConnectionPoolConfig?.(currentPoolId) || false;
+                }
+              }
+            }
+          };
+          
+          await checkPool();
+          
+          if (!poolExists || !currentPoolId) {
+            throw new Error('无法获取或创建有效的连接池ID');
           }
         
         // 执行Redis命令获取真实数据
         const infoResult = await execRedisQueued(currentPoolId as string, 'INFO');
-          const clusterResult = await execRedisQueued(currentPoolId as string, 'CLUSTER', ['NODES']);
-          const cmdStatsResult = await execRedisQueued(currentPoolId as string, 'INFO', ['commandstats']);
+        const clusterResult = await execRedisQueued(currentPoolId as string, 'CLUSTER', ['NODES']);
+        const cmdStatsResult = await execRedisQueued(currentPoolId as string, 'INFO', ['commandstats']);
 
-          if (cancelled) return;
+        if (cancelled) return;
 
-          // 解析数据
-          const parsedSections = parseRedisInfo(infoResult);
-          setSections(parsedSections);
-          
-          setClusterNodes(clusterResult);
+        // 检查执行结果是否成功
+        if (!infoResult?.success) throw new Error('Failed to execute INFO command');
+        if (!clusterResult?.success) throw new Error('Failed to execute CLUSTER NODES command');
+        if (!cmdStatsResult?.success) throw new Error('Failed to execute INFO commandstats');
 
-          // 解析键空间信息
-          const keyspaceSection = parsedSections.keyspace || {};
-          const parsedKeyspace = parseKeyspace(Object.entries(keyspaceSection).map(([k, v]) => `${k}:${v}`).join('\n'));
-          setKeyspace(parsedKeyspace);
+        // 提取真实数据
+        const infoData = infoResult.data;
+        const clusterData = clusterResult.data;
+        const cmdStatsData = cmdStatsResult.data;
 
-          // 解析命令统计信息
-          const commandStatsLines = cmdStatsResult.split('\n');
+        // 解析数据
+        const parsedSections = parseRedisInfo(infoData);
+        setSections(parsedSections);
+        
+        setClusterNodes(clusterData);
+
+        // 解析键空间信息
+        const keyspaceSection = parsedSections.keyspace || {};
+        const parsedKeyspace = parseKeyspace(Object.entries(keyspaceSection).map(([k, v]) => `${k}:${v}`).join('\n'));
+        setKeyspace(parsedKeyspace);
+
+        // 解析命令统计信息
+        const commandStatsLines = cmdStatsData.split('\n');
           const stats = commandStatsLines
             .filter((line: string) => line.startsWith('cmdstat_'))
             .map((line: string) => {

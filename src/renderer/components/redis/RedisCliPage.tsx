@@ -35,7 +35,8 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
   const historyRef = useRef<HTMLDivElement>(null);
   const [showHistoryOverlay, setShowHistoryOverlay] = useState<boolean>(false);
   const maxHistorySize = 100;
-  const poolId = connection?.connectionId || connection?.id;
+  const databaseName = connection?.database !== undefined ? String(connection?.database) : '';
+    const poolId = connection?.connectionId || `${(connection?.type || 'redis').toLowerCase()}_${connection?.host}_${connection?.port}_${databaseName}`;
   
   // Redis命令及其描述，用于语法提示
   const redisCommands: {[key: string]: string} = {
@@ -456,6 +457,26 @@ const RedisCliPage: React.FC<Props> = ({ connection, database }) => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  // 创建连接池（如果不存在）
+  useEffect(() => {
+    // 创建连接池（如果不存在）并确保数据库切换
+    const createPoolAndEnsureDb = async () => {
+      try {
+        const poolExists = await (window as any).electronAPI?.getConnectionPoolConfig?.(poolId);
+        if (!poolExists) {
+          await (window as any).electronAPI?.createConnectionPool?.(connection, { maxConnections: 5 });
+        }
+        // 仅在连接池存在或创建成功后切换数据库
+        await ensureDb();
+      } catch (error) {
+        console.error('初始化连接或切换数据库失败:', error);
+        message.error('初始化连接失败');
+      }
+    };
+
+    createPoolAndEnsureDb();
+  }, [poolId]);
   
   // 历史面板控制与工具函数
   const toggleHistory = () => {

@@ -21,7 +21,8 @@ const RedisPubSubPage: React.FC<Props> = ({ connection, database, darkMode }) =>
   const [isPattern, setIsPattern] = useState<boolean>(false);
   const [stream, setStream] = useState<Array<{ ts: number; channel: string; message: string }>>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const poolId = connection?.connectionId || connection?.id;
+  const databaseName = connection?.database !== undefined ? String(connection?.database) : '';
+    const poolId = connection?.connectionId || `${(connection?.type || 'redis').toLowerCase()}_${connection?.host}_${connection?.port}_${databaseName}`;
 
   const ensureDb = async () => {
     try {

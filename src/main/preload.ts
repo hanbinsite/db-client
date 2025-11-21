@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-table-structure', { connectionId, tableName }),
   listTables: (connectionId: string) => ipcRenderer.invoke('list-tables', connectionId),
   listDatabases: (connectionId: string) => ipcRenderer.invoke('list-databases', connectionId),
+  // 新增：创建连接池
+  createConnectionPool: (config: any, poolConfig?: any) => ipcRenderer.invoke('create-connection-pool', { config, poolConfig }),
   // 新增：获取连接池配置（动态并发），直接返回配置对象或null
   getConnectionPoolConfig: async (connectionId: string) => {
     const res = await ipcRenderer.invoke('get-connection-pool-config', connectionId);
@@ -47,8 +49,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuNewConnection: (callback: () => void) => {
     ipcRenderer.on('menu-new-connection', callback);
   },
-  
-  // 移除监听器
+  // 连接状态变化事件
+  onConnectionStatusChanged: (callback: (data: { connectionId: string; isConnected: boolean }) => void) => {
+    ipcRenderer.on('connection-status-changed', (_event, data) => callback(data));
+  },
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },

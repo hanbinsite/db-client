@@ -167,7 +167,7 @@ const RedisAddKeyModal: React.FC<RedisAddKeyModalProps> = ({
       message.error('请输入键名');
       return;
     }
-    const poolId = connection.connectionId || connection.id;
+    const poolId = connection.connectionId || `${(connection?.type || 'redis').toLowerCase()}_${connection?.host}_${connection?.port}_${String(connection?.database || '')}`;
     try {
       const m = /^db(\d+)$/i.exec(activeDatabase || '');
       if (m) {

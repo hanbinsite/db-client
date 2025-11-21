@@ -92,6 +92,8 @@ declare global {
       
       // 菜单事件监听
       onMenuNewConnection: (callback: () => void) => void;
+      // 连接状态变化事件
+      onConnectionStatusChanged: (callback: (data: { connectionId: string; isConnected: boolean }) => void) => void;
       removeAllListeners: (channel: string) => void;
 
       // 新增：检查更新（打包后使用）

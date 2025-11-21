@@ -33,7 +33,8 @@ const RedisQueryPage: React.FC<Props> = ({ connection, database }) => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const maxHistorySize = 100;
-  const poolId = connection?.connectionId || connection?.id;
+  const databaseName = connection?.database !== undefined ? String(connection?.database) : '';
+    const poolId = connection?.connectionId || `${(connection?.type || 'redis').toLowerCase()}_${connection?.host}_${connection?.port}_${databaseName}`;
   
   // Redis命令及其描述，用于语法提示
   const redisCommands: {[key: string]: string} = {

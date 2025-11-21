@@ -22,7 +22,8 @@ interface SlowlogRow {
 const { RangePicker } = DatePicker;
 
 const RedisSlowlogPage: React.FC<Props> = ({ connection, database, darkMode }) => {
-  const poolId = connection?.connectionId || connection?.id;
+  const databaseName = connection?.database !== undefined ? String(connection?.database) : '';
+    const poolId = connection?.connectionId || `${(connection?.type || 'redis').toLowerCase()}_${connection?.host}_${connection?.port}_${databaseName}`;
   const [count, setCount] = useState<number>(30);
   const [search, setSearch] = useState<string>('');
   const [rows, setRows] = useState<SlowlogRow[]>([]);

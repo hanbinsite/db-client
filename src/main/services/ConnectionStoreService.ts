@@ -151,6 +151,16 @@ export class ConnectionStoreService {
       connection.isConnected = isConnected;
       connection.lastConnectTime = new Date();
       await this.saveConnections();
+      // 通知渲染器进程连接状态已更新
+      const { ipcMain, BrowserWindow } = await import('electron');
+      // 获取所有打开的浏览器窗口
+      const windows = BrowserWindow.getAllWindows();
+      // 向每个窗口发送连接状态变化事件
+      windows.forEach(window => {
+        if (window.webContents) {
+          window.webContents.send('connection-status-changed', { connectionId, isConnected });
+        }
+      });
     }
   }
 }

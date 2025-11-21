@@ -454,8 +454,19 @@ class DBClientApp {
       }
     });
 
-    // 连接测试处理器
-    ipcMain.handle('test-connection', async (event, config) => {
+    // 新增：创建连接池
+    ipcMain.handle('create-connection-pool', async (event, { config, poolConfig }) => {
+      try {
+        const connectionId = await this.databaseService.createConnectionPool(config, poolConfig);
+        return { success: true, connectionId };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return { success: false, message: errorMessage };
+      }
+    });
+
+      // 连接测试处理器
+      ipcMain.handle('test-connection', async (event, config) => {
       return await this.handleTestConnection(config);
     });
 

@@ -881,7 +881,7 @@ class RedisConnection extends BaseDatabaseConnection {
     // 记录简化后的连接选项（不打印敏感字段）便于诊断
     try {
       const safeOpts = { socket: redisOptions.socket, username: !!redisOptions.username, passwordPresent: !!redisOptions.password };
-      console.log('[REDIS POOL] createClient options:', JSON.stringify(safeOpts));
+      // console.log('[REDIS POOL] createClient options:', JSON.stringify(safeOpts));
     } catch {}
 
     // 创建Redis客户端
@@ -908,13 +908,13 @@ class RedisConnection extends BaseDatabaseConnection {
     });
 
     // 连接到Redis
-    console.log(`Calling client.connect() for client ${clientId}...`);
+    // console.log(`Calling client.connect() for client ${clientId}...`);
     await client.connect();
-    console.log(`Redis connection ${clientId} established`);
+    // console.log(`Redis connection ${clientId} established`);
 
     // 如果有默认数据库，切换到该数据库
     if (this.selectedDb !== undefined) {
-      console.log(`Calling client.select(${this.selectedDb}) for client ${clientId}...`);
+      // console.log(`Calling client.select(${this.selectedDb}) for client ${clientId}...`);
       await client.select(this.selectedDb);
     }
 
@@ -933,19 +933,19 @@ class RedisConnection extends BaseDatabaseConnection {
 
   // 获取连接池中的连接
   private async getConnection(): Promise<{ clientId: string; client: any }> {
-    console.log(`[REDIS POOL] Getting connection - Pool size: ${this.clients.size}, Idle: ${this.idleConnections.length}`);
+    // console.log(`[REDIS POOL] Getting connection - Pool size: ${this.clients.size}, Idle: ${this.idleConnections.length}`);
     
     // 首先尝试从空闲连接中获取
     if (this.idleConnections.length > 0) {
       const clientId = this.idleConnections.shift()!;
       const client = this.clients.get(clientId);
-      console.log(`[REDIS POOL] Using idle connection: ${clientId}`);
+      // console.log(`[REDIS POOL] Using idle connection: ${clientId}`);
       
       // 测试连接是否有效
       if (this.poolConfig.testOnBorrow && client && (client.isReady || client.connected)) {
         try {
           await client.ping();
-          console.log(`[REDIS POOL] Connection ${clientId} is valid`);
+          // console.log(`[REDIS POOL] Connection ${clientId} is valid`);
           return { clientId, client };
         } catch (error) {
           console.log(`[REDIS POOL] Connection ${clientId} ping failed, removing from pool`);
@@ -958,22 +958,22 @@ class RedisConnection extends BaseDatabaseConnection {
 
     // 如果连接数小于最大值，创建新连接
     if (this.clients.size < this.poolConfig.maxConnections) {
-      console.log(`[REDIS POOL] Creating new connection - Current: ${this.clients.size}, Max: ${this.poolConfig.maxConnections}`);
+      // console.log(`[REDIS POOL] Creating new connection - Current: ${this.clients.size}, Max: ${this.poolConfig.maxConnections}`);
       const { clientId, client } = await this.createClientInstance();
       this.clients.set(clientId, client);
-      console.log(`[REDIS POOL] New connection created: ${clientId}`);
+      // console.log(`[REDIS POOL] New connection created: ${clientId}`);
       return { clientId, client };
     }
 
     // 如果没有空闲连接且达到最大连接数，等待连接释放
-    console.log(`[REDIS POOL] Pool saturated (${this.clients.size}/${this.poolConfig.maxConnections}), waiting for connection release`);
+    // console.log(`[REDIS POOL] Pool saturated (${this.clients.size}/${this.poolConfig.maxConnections}), waiting for connection release`);
     const startTime = Date.now();
     while (true) {
       if (this.idleConnections.length > 0) {
         const clientId = this.idleConnections.shift()!;
         const client = this.clients.get(clientId);
         if (client && (client.isReady || client.connected)) {
-          console.log(`[REDIS POOL] Got connection after waiting: ${clientId}, waited: ${Date.now() - startTime}ms`);
+          // console.log(`[REDIS POOL] Got connection after waiting: ${clientId}, waited: ${Date.now() - startTime}ms`);
           return { clientId, client };
         }
       }
@@ -995,25 +995,38 @@ class RedisConnection extends BaseDatabaseConnection {
   }
 
   // 释放连接回连接池
-  private releaseConnection(clientId: string): void {
-    console.log(`[REDIS POOL] Releasing connection: ${clientId}`);
+  private async releaseConnection(clientId: string): Promise<void> {
+    // console.log(`[REDIS POOL] Releasing connection: ${clientId}`);
     
     if (this.clients.has(clientId)) {
       // 检查客户端是否连接有效
       const client = this.clients.get(clientId);
       if (!client || (!client.isReady && !client.connected)) {
-        console.log(`[REDIS POOL] Connection ${clientId} is invalid, removing from pool`);
+        // console.log(`[REDIS POOL] Connection ${clientId} is invalid, removing from pool`);
         this.removeClient(clientId);
         return;
       }
       
+      // 将连接重置到默认数据库
+      if (this.selectedDb !== undefined) {
+        try {
+          await client.select(this.selectedDb);
+          // console.log(`[REDIS POOL] Connection ${clientId} reset to default database ${this.selectedDb}`);
+        } catch (error) {
+          console.error(`[REDIS POOL] Failed to reset database for connection ${clientId}:`, error);
+          // 如果重置失败，将连接从池中移除
+          this.removeClient(clientId);
+          return;
+        }
+      }
+      
       this.idleConnections.push(clientId);
-      console.log(`[REDIS POOL] Connection ${clientId} released to pool. Idle: ${this.idleConnections.length}`);
+      // console.log(`[REDIS POOL] Connection ${clientId} released to pool. Idle: ${this.idleConnections.length}`);
       
       // 如果空闲连接数超过最大空闲连接数限制，关闭多余的连接
       if (this.idleConnections.length > this.poolConfig.maxConnections) {
         const excessCount = this.idleConnections.length - this.poolConfig.maxConnections;
-        console.log(`[REDIS POOL] Too many idle connections, closing ${excessCount} excess connections`);
+        // console.log(`[REDIS POOL] Too many idle connections, closing ${excessCount} excess connections`);
         
         for (let i = 0; i < excessCount; i++) {
           const excessClientId = this.idleConnections.shift();
@@ -1092,6 +1105,11 @@ class RedisConnection extends BaseDatabaseConnection {
 
 
   async executeQuery(command: string, params?: any[]): Promise<QueryResult> {
+    // 从连接池获取连接
+    let connection: { clientId: string; client: any } | null = null;
+    let client: any = null;
+    let clientId: string = '';
+    
     try {
       // 确认Redis连接池已初始化
       if (this.clients.size === 0) {
@@ -1104,20 +1122,10 @@ class RedisConnection extends BaseDatabaseConnection {
         }
       }
       
-      // 从连接池获取连接
-      let connection: { clientId: string; client: any } | null = null;
-      let client: any = null;
-      let clientId: string = '';
-      
-      try {
-        connection = await this.getConnection();
-        client = connection.client;
-        clientId = connection.clientId;
-        console.log(`[REDIS POOL] 执行命令 ${command} 使用连接 ${clientId}`);
-      } catch (connError) {
-        console.error(`[REDIS POOL] 获取连接失败:`, connError);
-        throw new Error('Failed to get connection from pool');
-      }
+      connection = await this.getConnection();
+      client = connection.client;
+      clientId = connection.clientId;
+      // console.log(`[REDIS POOL] 执行命令 ${command} 使用连接 ${clientId}`);
       
       // 使用本地client变量执行命令，不再保存到this.client
       
@@ -1360,7 +1368,10 @@ class RedisConnection extends BaseDatabaseConnection {
         error: error.message || 'Redis query execution failed'
       };
     } finally {
-      // 对于直接使用this.client的查询，不需要释放连接池
+      // 释放连接回连接池
+      if (connection) {
+        await this.releaseConnection(clientId);
+      }
     }
   }
 
@@ -1419,7 +1430,7 @@ class RedisConnection extends BaseDatabaseConnection {
       } finally {
         // 释放连接回池
         if (connection && connection.clientId) {
-          this.releaseConnection(connection.clientId);
+          await this.releaseConnection(connection.clientId);
         }
       }
     } catch (error) {
@@ -1484,7 +1495,7 @@ class RedisConnection extends BaseDatabaseConnection {
         };
       } finally {
         if (client && client.clientId) {
-          this.releaseConnection(client.clientId);
+          await this.releaseConnection(client.clientId);
         }
       }
     } catch (error) {
@@ -1511,7 +1522,7 @@ class RedisConnection extends BaseDatabaseConnection {
         return keys.sort();
       } finally {
         if (client && client.clientId) {
-          this.releaseConnection(client.clientId);
+          await this.releaseConnection(client.clientId);
         }
       }
     } catch (error) {
@@ -1564,7 +1575,7 @@ class RedisConnection extends BaseDatabaseConnection {
         });
       } finally {
         if (client && client.clientId) {
-          this.releaseConnection(client.clientId);
+          await this.releaseConnection(client.clientId);
         }
       }
     } catch (error) {
@@ -1580,7 +1591,7 @@ class RedisConnection extends BaseDatabaseConnection {
           }
         } finally {
           if (client && client.clientId) {
-            this.releaseConnection(client.clientId);
+            await this.releaseConnection(client.clientId);
           }
         }
       } catch (innerError) {
@@ -1628,7 +1639,7 @@ class RedisConnection extends BaseDatabaseConnection {
       } finally {
         // 释放连接回池
         if (client && client.clientId) {
-          this.releaseConnection(client.clientId);
+          await this.releaseConnection(client.clientId);
         }
       }
     } catch {
@@ -1807,7 +1818,14 @@ export class DatabaseService extends EventEmitter {
   constructor() { super(); }
 
   private generatePoolId(config: DatabaseConnection): string {
-    const databaseName = config.database || '';
+    let databaseName;
+    if (config.type === 'redis') {
+      // Redis默认使用数据库0
+      databaseName = config.database !== undefined ? String(config.database) : '0';
+    } else {
+      // 其他数据库使用空字符串作为默认
+      databaseName = config.database !== undefined ? String(config.database) : '';
+    }
     return `${(config.type || 'redis').toLowerCase()}_${config.host}_${config.port}_${databaseName}`;
   }
 

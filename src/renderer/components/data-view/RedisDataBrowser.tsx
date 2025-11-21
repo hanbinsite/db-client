@@ -86,7 +86,7 @@ const TextPreview: React.FC<{ value: any }> = ({ value }) => {
 };
 
 const RedisDataBrowser: React.FC<RedisDataBrowserProps> = ({ connection, database, darkMode }) => {
-  const [poolId, setPoolId] = useState<string | undefined>(connection.connectionId);
+  const [poolId, setPoolId] = useState<string | undefined>(connection.connectionId || `${(connection.type || 'redis').toLowerCase()}_${connection.host}_${connection.port}_${connection.database || ''}`);
   const [selectingDb, setSelectingDb] = useState<boolean>(false);
   const [scan, setScan] = useState<ScanState>({ cursor: '0', keys: [], loading: false, reachedEnd: false, pattern: '*' });
   const [selectedKey, setSelectedKey] = useState<string | null>(null);

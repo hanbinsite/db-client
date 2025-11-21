@@ -101,6 +101,32 @@ const AppContent: React.FC = () => {
     // 由于useEffect会处理标签页更新，这里不需要直接调用updateDatabaseTabs
   };
 
+  // 监听连接状态变化事件
+  useEffect(() => {
+    if (window.electronAPI && window.electronAPI.onConnectionStatusChanged) {
+      const handleConnectionStatusChanged = (data: { connectionId: string; isConnected: boolean }) => {
+        console.log('[APP] 收到连接状态变化通知:', data);
+        // 更新连接列表中的连接状态
+        setConnections(prevConnections => {
+          return prevConnections.map(conn => {
+            if (conn.id === data.connectionId) {
+              return { ...conn, isConnected: data.isConnected };
+            }
+            return conn;
+          });
+        });
+      };
+
+      // 监听主进程发送的连接状态变化事件
+      window.electronAPI.onConnectionStatusChanged(handleConnectionStatusChanged);
+
+      // 组件卸载时移除事件监听
+      return () => {
+        window.electronAPI.removeAllListeners('connection-status-changed');
+      };
+    }
+  }, []);
+
   // 将updateConnectionAndTabs函数暴露到window对象上，以便在其他组件和工具类中调用
   useEffect(() => {
     (window as any).app = (window as any).app || {};

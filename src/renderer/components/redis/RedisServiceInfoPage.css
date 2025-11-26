@@ -1,0 +1,166 @@
+.chart-card {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  transition: all 0.3s ease;
+  background-color: #ffffff;
+  border: 1px solid #e8e8e8;
+}
+
+.chart-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 123, 255, 0.15);
+  transform: translateY(-2px);
+  border-color: #007BFF;
+}
+
+.chart-card .ant-card-head {
+  background-color: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.chart-card .ant-card-head-title {
+  color: #333333;
+  font-size: 16px;
+  font-weight: 500;
+  padding: 12px 0;
+}
+
+.chart-container {
+  height: 360px;
+  position: relative;
+  overflow: hidden;
+}
+
+.no-data {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #999999;
+  font-size: 14px;
+  text-align: center;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .chart-container {
+    height: 300px;
+  }
+  
+  .chart-card .ant-card-head-title {
+    font-size: 14px;
+  }
+}
+
+/* 增强图表可读性 */
+.ant-card-body {
+  padding: 16px;
+}
+
+/* 优化概览卡片样式 */
+.overview-card .ant-statistic {
+  margin-bottom: 8px;
+}
+
+.overview-card .ant-statistic-title {
+  color: #666666;
+  font-size: 12px;
+}
+
+.overview-card .ant-statistic-content {
+  color: #333333;
+  font-size: 18px;
+}
+
+/* 集群模式标签样式优化 */
+.cluster-mode-tag {
+  margin-top: 8px;
+}
+
+/* 表格样式优化 */
+.redis-table {
+  background-color: #ffffff;
+  color: #333333;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.redis-table .ant-table-thead > tr > th {
+  background-color: #fafafa;
+  color: #333333;
+  font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.redis-table .ant-table-tbody > tr > td {
+  background-color: #ffffff;
+  color: #333333;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.redis-table .ant-table-tbody > tr:hover > td {
+  background-color: #f5f5f5;
+}
+
+.redis-table .ant-table-tbody > tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+.redis-table .ant-table-empty {
+  background-color: #ffffff;
+}
+
+.redis-table .ant-table-empty .ant-empty-description {
+  color: #999999;
+}
+
+/* 分页样式优化 */
+.redis-table .ant-pagination {
+  color: #333333;
+}
+
+.redis-table .ant-pagination-item {
+  background-color: #ffffff;
+  border: 1px solid #e8e8e8;
+  color: #333333;
+}
+
+.redis-table .ant-pagination-item-active {
+  background-color: #007BFF;
+  border-color: #007BFF;
+}
+
+.redis-table .ant-pagination-item:hover {
+  border-color: #007BFF;
+  color: #007BFF;
+}
+
+.redis-table .ant-pagination-item-active:hover {
+  color: #ffffff;
+}
+
+/* 卡片样式增强 */
+.ant-card {
+  background-color: #ffffff;
+  border: 1px solid #e8e8e8;
+  color: #333333;
+}
+
+.ant-card .ant-card-body {
+  color: #333333;
+}
+
+/* 描述列表样式优化 */
+.ant-descriptions {
+  color: #333333;
+}
+
+.ant-descriptions-item-label {
+  color: #666666 !important;
+}
+
+.ant-descriptions-item-content {
+  color: #333333 !important;
+}

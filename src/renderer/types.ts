@@ -90,6 +90,11 @@ declare global {
       showSaveDialog: (defaultFileName: string, format: string) => Promise<any>;
       writeExportFile: (filePath: string, data: any, format: string, dbType?: string) => Promise<{success: boolean; error?: string}>;
       
+      // 数据导入功能
+      showOpenDialog: (options: any) => Promise<any>;
+      previewFileData: (params: { filePath: string; limit?: number }) => Promise<{ success: boolean; data: any[]; columns: string[]; message?: string }>;
+      importDataToDatabase: (params: { connection: DatabaseConnection; databaseName: string; tableName: string; filePath: string }) => Promise<{ success: boolean; message: string; importedRows: number }>;
+      
       // 菜单事件监听
       onMenuNewConnection: (callback: () => void) => void;
       // 连接状态变化事件

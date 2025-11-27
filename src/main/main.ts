@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { DatabaseService } from './services/DatabaseService';
 import { ConnectionStoreService } from './services/ConnectionStoreService';
+import { DataImportService } from './services/DataImportService';
 import { autoUpdater } from 'electron-updater';
 import { DatabaseConnectionFactory } from './services/DatabaseService';
 
@@ -10,6 +11,7 @@ class DBClientApp {
   private mainWindow: BrowserWindow | null = null;
   private databaseService: DatabaseService = new DatabaseService();
   private connectionStoreService: ConnectionStoreService = new ConnectionStoreService();
+  private dataImportService: DataImportService = new DataImportService(this.databaseService);
 
   constructor() {
     // 仅注册IPC处理器，窗口创建在app ready后进行
@@ -485,6 +487,56 @@ class DBClientApp {
         return { ok: true, result };
       } catch (e: any) {
         return { ok: false, message: e?.message || String(e) };
+      }
+    });
+
+    // 数据导入相关处理器
+    // 显示文件选择对话框
+    ipcMain.handle('show-open-dialog', async (event, options) => {
+      try {
+        const dialogOptions = {
+          title: '选择导入文件',
+          filters: [
+            { name: 'CSV文件', extensions: ['csv'] },
+            { name: 'JSON文件', extensions: ['json'] },
+            { name: 'Excel文件', extensions: ['xlsx', 'xls'] },
+            { name: '所有文件', extensions: ['*'] }
+          ],
+          properties: ['openFile' as const]
+        };
+        
+        const result = await dialog.showOpenDialog(this.mainWindow!, dialogOptions);
+        return result;
+      } catch (error) {
+        console.error('显示文件选择对话框失败:', error);
+        return { canceled: true };
+      }
+    });
+
+    // 预览文件数据
+    ipcMain.handle('preview-file-data', async (event, { filePath, limit }) => {
+      try {
+        const preview = this.dataImportService.previewFileData(filePath, limit);
+        return { success: true, data: preview.data, columns: preview.columns };
+      } catch (error) {
+        console.error('预览文件数据失败:', error);
+        return { success: false, message: (error as Error).message };
+      }
+    });
+
+    // 导入数据到数据库
+    ipcMain.handle('import-data-to-database', async (event, { connection, databaseName, tableName, filePath }) => {
+      try {
+        const result = await this.dataImportService.importDataToDatabase(
+          connection,
+          databaseName,
+          tableName,
+          filePath
+        );
+        return result;
+      } catch (error) {
+        console.error('导入数据到数据库失败:', error);
+        return { success: false, message: (error as Error).message, importedRows: 0 };
       }
     });
   }

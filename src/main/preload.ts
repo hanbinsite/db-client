@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('list-tables-with-schema', { connectionId, schema }),
   getTableStructureWithSchema: (connectionId: string, schema: string, tableName: string) =>
     ipcRenderer.invoke('get-table-structure-with-schema', { connectionId, schema, tableName }),
+  
+  // 数据导入相关
+  showOpenDialog: (options: any) => ipcRenderer.invoke('show-open-dialog', options),
+  previewFileData: (params: { filePath: string; limit?: number }) =>
+    ipcRenderer.invoke('preview-file-data', params),
+  importDataToDatabase: (params: { connection: any; databaseName: string; tableName: string; filePath: string }) =>
+    ipcRenderer.invoke('import-data-to-database', params),
 });
 
 // 类型定义在 src/renderer/types.ts 中

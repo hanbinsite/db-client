@@ -29,6 +29,7 @@ import MySqlServiceInfoPage from './components/mysql/MySqlServiceInfoPage';
 import MySqlUsersPage from './components/mysql/MySqlUsersPage';
 import MySqlCliPage from './components/mysql/MySqlCliPage';
 import MySqlSlowlogPage from './components/mysql/MySqlSlowlogPage';
+import QueryHistory from './components/sql-query/QueryHistory';
 
 const { Sider, Content, Header, Footer } = Layout;
 const { TabPane } = Tabs;
@@ -735,6 +736,7 @@ const AppContent: React.FC = () => {
             onOpenUsers={handleOpenMySqlUsers}
             onOpenCli={handleOpenMySqlCli}
             onOpenSlowlog={handleOpenMySqlSlowlog}
+            onOpenQueryHistory={handleOpenMySqlQueryHistory}
           />
         )}
 
@@ -924,6 +926,28 @@ const AppContent: React.FC = () => {
       const newTab: DatabaseTab = {
         key,
         label: 'MySQL 慢日志',
+        connection: activeConnection,
+        database: dbName,
+        type: 'mysql' as DatabaseType
+      };
+      setDatabaseTabs(prev => [...prev, newTab]);
+    }
+    setActiveTabKey(key);
+  };
+
+  // MySQL: 查询历史
+  const handleOpenMySqlQueryHistory = () => {
+    if (!activeConnection) {
+      message.warning('请先选择一个MySQL连接');
+      return;
+    }
+    const dbName = activeDatabase || 'information_schema';
+    const key = `mysql-query-history-${activeConnection.id}-${dbName}`;
+    const exists = databaseTabs.find(t => t.key === key);
+    if (!exists) {
+      const newTab: DatabaseTab = {
+        key,
+        label: 'MySQL 查询历史',
         connection: activeConnection,
         database: dbName,
         type: 'mysql' as DatabaseType
@@ -1149,6 +1173,19 @@ const AppContent: React.FC = () => {
                           database={tab.database}
                           darkMode={darkMode}
                         />
+                      ) : tab.key?.startsWith('mysql-query-history-') ? (
+                        <QueryHistory
+                          connectionId={tab.connection.id}
+                          databaseType={tab.type}
+                          onQuerySelect={(query) => {
+                            // 在查询历史页面选择查询后，创建新的查询标签页
+                            handleNewQuery(tab.database);
+                            // 这里需要将查询内容传递给新创建的查询标签页
+                            // 由于QueryTab的状态管理限制，暂时无法直接传递，后续可以优化
+                            message.info('已创建新查询标签页，请手动复制查询内容');
+                          }}
+                          darkMode={darkMode}
+                        />
                       ) : (
                       <MySqlDatabaseTabPanel
                         connection={tab.connection}
@@ -1226,6 +1263,16 @@ const AppContent: React.FC = () => {
                       connection={tabConnection}
                       database={tab.database || activeDatabase}
                       darkMode={darkMode}
+                      onDatabaseChange={(newDatabase) => {
+                        // 更新标签页的数据库信息
+                        setQueryTabs(prev => prev.map(t => 
+                          t.key === tab.key ? { ...t, database: newDatabase } : t
+                        ));
+                        // 更新全局活动数据库状态
+                        if (tabConnection?.id === activeConnection?.id) {
+                          setActiveDatabase(newDatabase);
+                        }
+                      }}
                     />
                   </div>
                 </TabPane>

@@ -10,9 +10,10 @@ interface MySqlActionsProps {
   onOpenUsers?: () => void;
   onOpenCli?: () => void;
   onOpenSlowlog?: () => void;
+  onOpenQueryHistory?: () => void;
 }
 
-const MySqlActions: React.FC<MySqlActionsProps> = ({ connection, activeDatabase, darkMode, onOpenServiceInfo, onOpenUsers, onOpenCli, onOpenSlowlog }) => {
+const MySqlActions: React.FC<MySqlActionsProps> = ({ connection, activeDatabase, darkMode, onOpenServiceInfo, onOpenUsers, onOpenCli, onOpenSlowlog, onOpenQueryHistory }) => {
   if (!connection) return null;
   return (
     <div className="toolbar-section">
@@ -21,6 +22,7 @@ const MySqlActions: React.FC<MySqlActionsProps> = ({ connection, activeDatabase,
         <Button onClick={onOpenUsers}>用户信息</Button>
         <Button onClick={onOpenCli}>命令行</Button>
         <Button onClick={onOpenSlowlog}>慢日志</Button>
+        <Button onClick={onOpenQueryHistory}>查询历史</Button>
       </Space>
     </div>
   );

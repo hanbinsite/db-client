@@ -7,6 +7,7 @@ export interface BaseQueryPanelProps {
   tabKey?: string;
   onTabClose?: (key: string) => void;
   darkMode: boolean;
+  onDatabaseChange?: (database: string) => void;
 }
 
 // 批量查询结果接口

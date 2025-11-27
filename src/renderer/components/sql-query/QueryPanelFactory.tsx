@@ -29,7 +29,8 @@ const QueryPanelFactory: React.FC<QueryPanelFactoryProps> = ({
   database, 
   tabKey, 
   onTabClose, 
-  darkMode 
+  darkMode, 
+  onDatabaseChange 
 }) => {
   // 根据数据库类型选择对应的查询面板组件
   const getQueryPanelComponent = () => {
@@ -56,6 +57,7 @@ const QueryPanelFactory: React.FC<QueryPanelFactoryProps> = ({
       tabKey={tabKey}
       onTabClose={onTabClose}
       darkMode={darkMode}
+      onDatabaseChange={onDatabaseChange}
     />
   );
 };

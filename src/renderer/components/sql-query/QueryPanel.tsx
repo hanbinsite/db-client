@@ -9,6 +9,7 @@ interface QueryPanelProps {
   tabKey?: string;
   onTabClose?: (key: string) => void;
   darkMode: boolean;
+  onDatabaseChange?: (database: string) => void;
 }
 
 /**
@@ -17,7 +18,7 @@ interface QueryPanelProps {
  * 解决了查询页面一直处于loading状态的问题
  * 支持多条SQL执行（按;分割）
  */
-const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, onTabClose, darkMode }) => {
+const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, onTabClose, darkMode, onDatabaseChange }) => {
   // 修复loading状态问题：确保组件正确渲染
   const [isInitialized, setIsInitialized] = useState(false);
 
@@ -39,6 +40,7 @@ const QueryPanel: React.FC<QueryPanelProps> = ({ connection, database, tabKey, o
       tabKey={tabKey}
       onTabClose={onTabClose}
       darkMode={darkMode}
+      onDatabaseChange={onDatabaseChange}
     />
   );
 };

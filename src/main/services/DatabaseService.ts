@@ -2058,4 +2058,47 @@ export class DatabaseService extends EventEmitter {
     const indexes = (indexesRes?.data || []).map((idx: any) => ({ name: idx.indexname, definition: idx.indexdef }));
     return { name: tableName, schema, columns, indexes, foreignKeys: [], rowCount: 0, size: 0 } as any;
   }
+  
+  // 测试数据库连接是否有效
+  async testConnection(config: DatabaseConnection): Promise<boolean> {
+    let conn: IDatabaseConnection | null = null;
+    try {
+      // 创建临时连接进行测试
+      const factory = new DatabaseConnectionFactory();
+      conn = factory.createConnection(config);
+      
+      // 尝试连接
+      const isConnected = await conn.connect();
+      
+      if (isConnected) {
+        // 执行简单查询验证连接
+        let testQuery: string;
+        if (config.type === 'redis') {
+          testQuery = 'PING';
+        } else {
+          testQuery = 'SELECT 1';
+        }
+        
+        const result = await conn.executeQuery(testQuery);
+        
+        // 关闭临时连接
+        await conn.disconnect();
+        
+        return result.success;
+      } else {
+        await conn.disconnect();
+        return false;
+      }
+    } catch (error) {
+      console.error('测试连接失败:', error);
+      if (conn) {
+        try {
+          await conn.disconnect();
+        } catch (disconnectError) {
+          console.error('关闭测试连接失败:', disconnectError);
+        }
+      }
+      return false;
+    }
+  }
 }

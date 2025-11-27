@@ -1,7 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { app } from 'electron';
+import { app, ipcMain } from 'electron';
 import { DatabaseConnection } from '../../renderer/types';
+import { DatabaseService } from './DatabaseService';
+
+// 连接状态检查间隔（毫秒）
+const CONNECTION_STATUS_CHECK_INTERVAL = 30000;
 
 /**
  * 连接存储服务 - 负责管理数据库连接信息的持久化存储
@@ -10,6 +14,8 @@ export class ConnectionStoreService {
   private storeFilePath: string;
   private connections: DatabaseConnection[] = [];
   private isLoaded: boolean = false;
+  private statusCheckTimer: NodeJS.Timeout | null = null;
+  private databaseService: DatabaseService;
 
   constructor() {
     // 检查是否运行在便携模式
@@ -35,6 +41,86 @@ export class ConnectionStoreService {
     this.storeFilePath = path.join(userDataPath, 'connections.json');
     
     console.log(`Store file path: ${this.storeFilePath}`);
+    
+    // 初始化数据库服务
+    this.databaseService = new DatabaseService();
+    
+    // 启动连接状态检查定时器
+    this.startStatusCheckTimer();
+    
+    // 监听主进程退出事件，清理定时器
+    app.on('before-quit', () => {
+      this.stopStatusCheckTimer();
+    });
+  }
+  
+  /**
+   * 启动连接状态检查定时器
+   */
+  private startStatusCheckTimer(): void {
+    if (this.statusCheckTimer) {
+      this.stopStatusCheckTimer();
+    }
+    
+    this.statusCheckTimer = setInterval(async () => {
+      await this.checkAllConnectionsStatus();
+    }, CONNECTION_STATUS_CHECK_INTERVAL);
+    
+    console.log(`Connection status check timer started, interval: ${CONNECTION_STATUS_CHECK_INTERVAL}ms`);
+  }
+  
+  /**
+   * 停止连接状态检查定时器
+   */
+  private stopStatusCheckTimer(): void {
+    if (this.statusCheckTimer) {
+      clearInterval(this.statusCheckTimer);
+      this.statusCheckTimer = null;
+      console.log('Connection status check timer stopped');
+    }
+  }
+  
+  /**
+   * 检查所有连接的状态
+   */
+  private async checkAllConnectionsStatus(): Promise<void> {
+    try {
+      await this.loadConnections();
+      
+      for (const connection of this.connections) {
+        if (connection.isConnected) {
+          await this.checkConnectionStatus(connection);
+        }
+      }
+    } catch (error) {
+      console.error('检查连接状态失败:', error);
+    }
+  }
+  
+  /**
+   * 检查单个连接的状态
+   */
+  private async checkConnectionStatus(connection: DatabaseConnection): Promise<void> {
+    try {
+      // 使用DatabaseService测试连接，转换authType类型
+      const connectionConfig = {
+        ...connection,
+        authType: connection.authType === 'none' ? undefined : connection.authType
+      };
+      
+      const isConnected = await this.databaseService.testConnection(connectionConfig);
+      
+      if (connection.isConnected !== isConnected) {
+        await this.updateConnectionStatus(connection.id, isConnected);
+        console.log(`Connection ${connection.name} status changed to ${isConnected ? 'connected' : 'disconnected'}`);
+      }
+    } catch (error) {
+      console.error(`检查连接 ${connection.name} 状态失败:`, error);
+      // 如果检查失败，将连接状态设置为断开
+      if (connection.isConnected) {
+        await this.updateConnectionStatus(connection.id, false);
+      }
+    }
   }
 
   /**

@@ -35,7 +35,9 @@
       "assets/**",
       "!**/*.map"
     ],
-    "extraFiles": ["portable.ini"],
+    "extraFiles": [
+      "portable.ini"
+    ],
     "asar": true,
     "compression": "store",
     "electronVersion": "25.9.8",
@@ -94,11 +96,13 @@
     "webpack-dev-server": "^4.15.2"
   },
   "dependencies": {
+    "@ant-design/charts": "^2.6.6",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/plots": "^2.6.5",
     "@monaco-editor/react": "^4.7.0",
     "@types/react-monaco-editor": "^0.16.0",
     "antd": "^5.8.2",
+    "csv-parse": "^6.1.0",
     "dayjs": "^1.11.18",
     "electron-updater": "^6.6.2",
     "monaco-editor": "^0.52.2",
@@ -108,6 +112,7 @@
     "react-dom": "^18.2.0",
     "react-monaco-editor": "^0.59.0",
     "redis": "^5.8.3",
+    "sql-formatter": "^15.6.10",
     "xlsx": "^0.18.5"
   }
 }

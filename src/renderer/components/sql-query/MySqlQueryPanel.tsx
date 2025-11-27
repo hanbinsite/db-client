@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button, Input, Select, Space, Table, message, Card, Spin, Tooltip, Tabs } from 'antd';
+import { Button, Input, Select, Space, Table, message, Card, Spin, Tooltip, Tabs, Collapse } from 'antd';
+import ChartView from './ChartView';
+import DataImportModal from './DataImportModal';
 import {
   PlayCircleOutlined,
   SaveOutlined,
@@ -8,25 +10,32 @@ import {
   UploadOutlined,
   CopyOutlined,
   FormOutlined,
-  FileSearchOutlined
+  FileSearchOutlined,
+  HistoryOutlined
 } from '@ant-design/icons';
 import { DatabaseConnection, QueryResult } from '../../types';
 import { BaseQueryPanelProps, BatchQueryResult } from './types';
 import Editor from '@monaco-editor/react';
+import { SqlFormatterService } from '../../utils/sql-formatter';
+import QueryHistory from './QueryHistory';
+import { queryHistoryService } from '../../utils/query-history';
 import './QueryPanel.css';
 
 const { TextArea } = Input;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
-const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, tabKey, onTabClose, darkMode }) => {
+const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, tabKey, onTabClose, darkMode, onDatabaseChange }) => {
   const [query, setQuery] = useState<string>('SELECT * FROM users LIMIT 10;');
   const [results, setResults] = useState<BatchQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [executionTime, setExecutionTime] = useState<number>(0);
   const editorRef = useRef<any>(null);
   const [tableList, setTableList] = useState<string[]>([]);
+  const [databaseList, setDatabaseList] = useState<string[]>([]);
   const [schemaCache, setSchemaCache] = useState<Record<string, string[]>>({});
+  const [showImportModal, setShowImportModal] = useState(false);
+  const { Panel } = Collapse;
 
   // 获取编辑器中选中的SQL文本
   const getSelectedSql = (): string => {
@@ -132,6 +141,30 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
     }
   };
   
+  // 加载MySQL数据库列表
+  const loadDatabases = async () => {
+    if (!connection || !connection.isConnected) return;
+    
+    try {
+      const poolId = connection.connectionId || connection.id;
+      const query = 'SHOW DATABASES;';
+      
+      const result = await window.electronAPI.executeQuery(poolId, query);
+      if (result && result.success && result.data && result.data.length > 0) {
+        const databases: string[] = [];
+        result.data.forEach((row: any) => {
+          const dbName = Object.values(row)[0];
+          if (typeof dbName === 'string') {
+            databases.push(dbName);
+          }
+        });
+        setDatabaseList(databases);
+      }
+    } catch (error) {
+      console.error('加载数据库列表失败:', error);
+    }
+  };
+  
   // 加载MySQL数据库表列表
   const loadDatabaseTables = async () => {
     if (!connection || !connection.isConnected || !database) return;
@@ -189,6 +222,19 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
     loadDatabaseTables();
     setSchemaCache({});
   }, [connection, database]);
+  
+  // 当连接改变时加载数据库列表
+  useEffect(() => {
+    loadDatabases();
+  }, [connection]);
+  
+  // 处理数据库选择变化
+  const handleDatabaseChange = (value: string) => {
+    // 通知父组件数据库已改变
+    if (onDatabaseChange) {
+      onDatabaseChange(value);
+    }
+  };
   
   // 配置MySQL特有的SQL补全
   const handleEditorDidMount = (editor: any, monaco: any) => {
@@ -374,42 +420,108 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
   ];
 
   const handleFormatSQL = () => {
-    // 简单的SQL格式化实现
-    let formattedQuery = query
-      .replace(/\s*SELECT\s*/gi, '\nSELECT ')    
-      .replace(/\s*FROM\s*/gi, '\nFROM ')        
-      .replace(/\s*WHERE\s*/gi, '\nWHERE ')      
-      .replace(/\s*JOIN\s*/gi, '\nJOIN ')        
-      .replace(/\s*ON\s*/gi, ' ON ')              
-      .replace(/\s*AND\s*/gi, '\n  AND ')        
-      .replace(/\s*OR\s*/gi, '\n  OR ');         
-    setQuery(formattedQuery);
+    if (!query.trim()) {
+      message.warning('没有可格式化的SQL语句');
+      return;
+    }
+    
+    try {
+      // 使用SqlFormatterService格式化SQL
+      const formattedQuery = SqlFormatterService.formatSql(query, {
+        language: SqlFormatterService.getLanguageByDbType(connection?.type || 'mysql'),
+        keywordCase: 'upper'
+      });
+      setQuery(formattedQuery);
+      message.success('SQL格式化成功');
+    } catch (error) {
+      console.error('SQL格式化失败:', error);
+      message.error('SQL格式化失败: ' + (error as Error).message);
+    }
   };
 
-  const handleExportResults = () => {
+  const handleExportResults = async () => {
     if (!results || !results.success || results.results.length === 0 || !results.results[0].data) {
       message.warning('没有可导出的结果');
       return;
     }
     
-    // 简单的CSV导出实现（只导出第一个结果集）
+    // 选择要导出的结果集（目前只支持第一个结果集）
     const firstResult = results.results[0];
-    const headers = (firstResult.columns || []).join(',');
     const data = firstResult.data || [];
-    const rows = data.map((row: Record<string, any>) => 
-      Object.values(row).map(val => `"${val}"`).join(',')
-    ).join('\n');
-    const csv = `${headers}\n${rows}`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `query_result_${Date.now()}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('结果已导出为CSV文件');
+    
+    try {
+      // 显示格式选择对话框
+      const { Modal, Select } = await import('antd');
+      const { Option } = Select;
+      
+      // 定义支持的导出格式
+      const exportFormats = [
+        { value: 'csv', label: 'CSV文件 (.csv)' },
+        { value: 'json', label: 'JSON文件 (.json)' },
+        { value: 'xlsx', label: 'Excel文件 (.xlsx)' }
+      ];
+      
+      // 使用Promise包装Modal，实现异步等待用户选择
+      const selectedFormat = await new Promise<string | null>((resolve) => {
+        let tempFormat = 'csv';
+        
+        const modal = Modal.confirm({
+          title: '选择导出格式',
+          content: (
+            <div style={{ padding: '16px 0' }}>
+              <Select
+                defaultValue={tempFormat}
+                style={{ width: '100%' }}
+                onChange={(value) => {
+                  tempFormat = value;
+                }}
+              >
+                {exportFormats.map(format => (
+                  <Option key={format.value} value={format.value}>
+                    {format.label}
+                  </Option>
+                ))}
+              </Select>
+            </div>
+          ),
+          onOk: () => {
+            resolve(tempFormat);
+            modal.destroy();
+          },
+          onCancel: () => {
+            resolve(null);
+            modal.destroy();
+          },
+          okText: '确定',
+          cancelText: '取消'
+        });
+      });
+      
+      if (!selectedFormat) {
+        return; // 用户取消了导出
+      }
+      
+      // 显示保存对话框
+      const format = selectedFormat;
+      const defaultFileName = `query_result_${Date.now()}.${format}`;
+      
+      // 调用主进程的导出功能
+      const saveResult = await window.electronAPI.showSaveDialog(defaultFileName, format);
+      
+      if (!saveResult.canceled && saveResult.filePath) {
+        // 写入文件
+        const writeResult = await window.electronAPI.writeExportFile(saveResult.filePath, data, format, connection?.type);
+        
+        if (writeResult.success) {
+          message.success(`结果已成功导出为${format.toUpperCase()}文件`);
+        } else {
+          message.error(`导出失败: ${writeResult.error || '未知错误'}`);
+        }
+      }
+    } catch (error) {
+      console.error('导出结果失败:', error);
+      message.error('导出结果失败: ' + (error as Error).message);
+    }
   };
 
   const handleImportQuery = () => {
@@ -459,6 +571,8 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
 
     setLoading(true);
     const startTime = Date.now();
+    let allSuccess = false;
+    let resultCount = 0;
 
     try {
       // 使用真实的数据库连接执行查询
@@ -470,7 +584,16 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
       // 分割多条SQL语句
       const queries = splitSqlStatements(sql);
       const queryResults: QueryResult[] = [];
-      let allSuccess = true;
+      allSuccess = true;
+
+      // 如果指定了数据库，先执行USE语句切换数据库
+      if (database) {
+        const useDbResult = await window.electronAPI.executeQuery(poolId, `USE \`${database}\``);
+        if (!useDbResult || !useDbResult.success) {
+          // 如果切换数据库失败，继续执行查询，让MySQL返回具体错误
+          console.warn('切换数据库失败:', useDbResult?.error);
+        }
+      }
 
       for (const stmt of queries) {
         if (stmt.trim()) {
@@ -488,6 +611,7 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
               rowCount: data.length,
               executionTime: Date.now() - startTime
             });
+            resultCount += data.length;
           } else if (result && result.success) {
             queryResults.push({
               success: true,
@@ -530,6 +654,27 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
       message.error('查询执行失败');
     } finally {
       setLoading(false);
+      
+      // 保存查询历史记录
+      if (sql.trim() && connection) {
+        try {
+          await queryHistoryService.addHistoryItem({
+            query: sql,
+            connectionId: connection.id,
+            connectionName: connection.name,
+            databaseType: connection.type,
+            databaseName: database,
+            executedAt: new Date(),
+            resultCount,
+            executionTime: Date.now() - startTime,
+            isFavorite: false,
+            success: allSuccess
+          });
+        } catch (error) {
+          console.error('保存查询历史失败:', error);
+          // 保存失败不影响主流程
+        }
+      }
     }
   };
 
@@ -569,52 +714,73 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
         }
       >
         {results.results.map((result, index) => (
-          <TabPane 
-            tab={
-              <Space>
-                <span>结果 {index + 1}</span>
-                <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666' }}>
-                  {result.success 
-                    ? `(${result.rowCount || 0} 行)` 
-                    : '(失败)'}
-                </span>
-              </Space>
-            } 
-            key={index.toString()}
-          >
-            {result.success && result.columns ? (
-              <Table
-                dataSource={result.data || []}
-                columns={result.columns.map((col: string) => ({
-                  title: col,
-                  dataIndex: col,
-                  key: col,
-                  ellipsis: true
-                }))}
-                size="small"
-                pagination={{
-                  pageSize: 10,
-                  showSizeChanger: true,
-                  showQuickJumper: true,
-                  showTotal: (total, range) => 
-                    `第 ${range[0]}-${range[1]} 条，共 ${total} 条`
-                }}
-                scroll={{ x: true }}
-                className={darkMode ? 'dark-table' : ''}
-                locale={{
-                  emptyText: '暂无数据'
-                }}
-              />
-            ) : result.success ? (
-              <div style={{ padding: '16px 0', color: darkMode ? '#69d183' : '#52c41a' }}>
-                命令执行成功
-              </div>
-            ) : (
-              <div style={{ color: darkMode ? '#ff8080' : '#ff4d4f', padding: '16px 0' }}>
-                <strong>错误:</strong> {result.error}
-              </div>
+          <React.Fragment key={index}>
+            <TabPane 
+              tab={
+                <Space>
+                  <span>结果 {index + 1} (表格)</span>
+                  <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666' }}>
+                    {result.success 
+                      ? `(${result.rowCount || 0} 行)` 
+                      : '(失败)'}
+                  </span>
+                </Space>
+              } 
+              key={`${index}-table`}
+            >
+              {result.success && result.columns ? (
+                <Table
+                  dataSource={result.data || []}
+                  columns={result.columns.map((col: string) => ({
+                    title: col,
+                    dataIndex: col,
+                    key: col,
+                    ellipsis: true
+                  }))}
+                  size="small"
+                  pagination={{
+                    pageSize: 10,
+                    showSizeChanger: true,
+                    showQuickJumper: true,
+                    showTotal: (total, range) => 
+                      `第 ${range[0]}-${range[1]} 条，共 ${total} 条`
+                  }}
+                  scroll={{ x: true }}
+                  className={darkMode ? 'dark-table' : ''}
+                  locale={{
+                    emptyText: '暂无数据'
+                  }}
+                />
+              ) : result.success ? (
+                <div style={{ padding: '16px 0', color: darkMode ? '#69d183' : '#52c41a' }}>
+                  命令执行成功
+                </div>
+              ) : (
+                <div style={{ color: darkMode ? '#ff8080' : '#ff4d4f', padding: '16px 0' }}>
+                  <strong>错误:</strong> {result.error}
+                </div>
+              )}
+            </TabPane>
+            
+            {/* 添加可视化图表选项卡 */}
+            {result.success && result.columns && result.data && result.data.length > 0 && (
+              <TabPane 
+                tab={
+                  <Space>
+                    <span>结果 {index + 1} (可视化)</span>
+                    <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666' }}>
+                      {result.success 
+                        ? `(${result.rowCount || 0} 行)` 
+                        : '(失败)'}
+                    </span>
+                  </Space>
+                } 
+                key={`${index}-chart`}
+              >
+                <ChartView result={result} darkMode={darkMode} />
+              </TabPane>
             )}
-          </TabPane>
+          </React.Fragment>
         ))}
       </Tabs>
     );
@@ -626,13 +792,24 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
         {/* 连接信息显示 */}
         <div className="connection-info">
           {connection ? (
-            <div>
-              <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666', marginRight: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666' }}>
                 {connection.name} (MySQL)
               </span>
-              <span style={{ fontSize: '12px', color: darkMode ? '#69d183' : '#52c41a' }}>
-                数据库: {database || '未选择数据库'}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: darkMode ? '#999' : '#666' }}>数据库:</span>
+                <Select
+                  value={database}
+                  onChange={handleDatabaseChange}
+                  style={{ width: 150 }}
+                  placeholder="选择数据库"
+                  className={darkMode ? 'dark-select' : ''}
+                >
+                  {databaseList.map(db => (
+                    <Option key={db} value={db}>{db}</Option>
+                  ))}
+                </Select>
+              </div>
             </div>
           ) : (
             <span style={{ fontSize: '12px', color: '#999' }}>未连接数据库</span>
@@ -687,12 +864,37 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
                 className={darkMode ? 'dark-btn' : ''}
               />
             </Tooltip>
+            <Tooltip title="查询历史">
+              <Button 
+                icon={<HistoryOutlined />} 
+                onClick={() => {
+                  // 触发查询历史页面打开
+                  message.info('正在打开查询历史页面...');
+                  // 由于MySqlQueryPanel组件没有直接访问App.tsx方法的权限，我们需要通过其他方式
+                  // 这里可以使用一个简单的方案：通过window对象暴露的全局方法
+                  // 或者可以考虑使用事件总线或状态管理库
+                  // 暂时使用message.info提示，后续可以优化
+                }}
+                className={darkMode ? 'dark-btn' : ''}
+              >
+                历史
+              </Button>
+            </Tooltip>
             <Tooltip title="导入SQL文件">
               <Button 
                 icon={<UploadOutlined />} 
                 onClick={handleImportQuery}
                 className={darkMode ? 'dark-btn' : ''}
               />
+            </Tooltip>
+            <Tooltip title="数据导入">
+              <Button 
+                icon={<UploadOutlined />} 
+                onClick={() => setShowImportModal(true)}
+                className={darkMode ? 'dark-btn' : ''}
+              >
+                数据导入
+              </Button>
             </Tooltip>
             <Tooltip title="导出结果">
               <Button 
@@ -783,6 +985,16 @@ const MySqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, database, 
 
       {/* 查询结果 */}
       {renderResults()}
+      
+      {/* 数据导入模态框 */}
+      <DataImportModal
+        visible={showImportModal}
+        onCancel={() => setShowImportModal(false)}
+        connection={connection || null}
+        database={database}
+        tables={tableList}
+        darkMode={darkMode}
+      />
     </div>
   );
 };

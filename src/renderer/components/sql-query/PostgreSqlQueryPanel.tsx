@@ -13,6 +13,7 @@ import {
 import { DatabaseConnection, QueryResult } from '../../types';
 import { BaseQueryPanelProps, BatchQueryResult } from './types';
 import Editor from '@monaco-editor/react';
+import { SqlFormatterService } from '../../utils/sql-formatter';
 import './QueryPanel.css';
 
 const { TextArea } = Input;
@@ -497,42 +498,108 @@ const PostgreSqlQueryPanel: React.FC<BaseQueryPanelProps> = ({ connection, datab
   ];
 
   const handleFormatSQL = () => {
-    // 简单的SQL格式化实现
-    let formattedQuery = query
-      .replace(/\s*SELECT\s*/gi, '\nSELECT ')    
-      .replace(/\s*FROM\s*/gi, '\nFROM ')        
-      .replace(/\s*WHERE\s*/gi, '\nWHERE ')      
-      .replace(/\s*JOIN\s*/gi, '\nJOIN ')        
-      .replace(/\s*ON\s*/gi, ' ON ')              
-      .replace(/\s*AND\s*/gi, '\n  AND ')        
-      .replace(/\s*OR\s*/gi, '\n  OR ');         
-    setQuery(formattedQuery);
+    if (!query.trim()) {
+      message.warning('没有可格式化的SQL语句');
+      return;
+    }
+    
+    try {
+      // 使用SqlFormatterService格式化SQL
+      const formattedQuery = SqlFormatterService.formatSql(query, {
+        language: SqlFormatterService.getLanguageByDbType(connection?.type || 'postgresql'),
+        keywordCase: 'upper'
+      });
+      setQuery(formattedQuery);
+      message.success('SQL格式化成功');
+    } catch (error) {
+      console.error('SQL格式化失败:', error);
+      message.error('SQL格式化失败: ' + (error as Error).message);
+    }
   };
 
-  const handleExportResults = () => {
+  const handleExportResults = async () => {
     if (!results || !results.success || results.results.length === 0 || !results.results[0].data) {
       message.warning('没有可导出的结果');
       return;
     }
     
-    // 简单的CSV导出实现（只导出第一个结果集）
+    // 选择要导出的结果集（目前只支持第一个结果集）
     const firstResult = results.results[0];
-    const headers = (firstResult.columns || []).join(',');
     const data = firstResult.data || [];
-    const rows = data.map((row: Record<string, any>) => 
-      Object.values(row).map(val => `"${val}"`).join(',')
-    ).join('\n');
-    const csv = `${headers}\n${rows}`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `query_result_${Date.now()}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('结果已导出为CSV文件');
+    
+    try {
+      // 显示格式选择对话框
+      const { Modal, Select } = await import('antd');
+      const { Option } = Select;
+      
+      // 定义支持的导出格式
+      const exportFormats = [
+        { value: 'csv', label: 'CSV文件 (.csv)' },
+        { value: 'json', label: 'JSON文件 (.json)' },
+        { value: 'xlsx', label: 'Excel文件 (.xlsx)' }
+      ];
+      
+      // 使用Promise包装Modal，实现异步等待用户选择
+      const selectedFormat = await new Promise<string | null>((resolve) => {
+        let tempFormat = 'csv';
+        
+        const modal = Modal.confirm({
+          title: '选择导出格式',
+          content: (
+            <div style={{ padding: '16px 0' }}>
+              <Select
+                defaultValue={tempFormat}
+                style={{ width: '100%' }}
+                onChange={(value) => {
+                  tempFormat = value;
+                }}
+              >
+                {exportFormats.map(format => (
+                  <Option key={format.value} value={format.value}>
+                    {format.label}
+                  </Option>
+                ))}
+              </Select>
+            </div>
+          ),
+          onOk: () => {
+            resolve(tempFormat);
+            modal.destroy();
+          },
+          onCancel: () => {
+            resolve(null);
+            modal.destroy();
+          },
+          okText: '确定',
+          cancelText: '取消'
+        });
+      });
+      
+      if (!selectedFormat) {
+        return; // 用户取消了导出
+      }
+      
+      // 显示保存对话框
+      const format = selectedFormat;
+      const defaultFileName = `query_result_${Date.now()}.${format}`;
+      
+      // 调用主进程的导出功能
+      const saveResult = await window.electronAPI.showSaveDialog(defaultFileName, format);
+      
+      if (!saveResult.canceled && saveResult.filePath) {
+        // 写入文件
+        const writeResult = await window.electronAPI.writeExportFile(saveResult.filePath, data, format, connection?.type);
+        
+        if (writeResult.success) {
+          message.success(`结果已成功导出为${format.toUpperCase()}文件`);
+        } else {
+          message.error(`导出失败: ${writeResult.error || '未知错误'}`);
+        }
+      }
+    } catch (error) {
+      console.error('导出结果失败:', error);
+      message.error('导出结果失败: ' + (error as Error).message);
+    }
   };
 
   const handleImportQuery = () => {

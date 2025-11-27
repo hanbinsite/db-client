@@ -190,11 +190,9 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
 
   // 初始加载
   useEffect(() => {
-    // 测试electronAPI.log是否正常工作
-    if (window.electronAPI?.log) {
-      window.electronAPI.log('RedisServiceInfoPage组件初始化 - 测试electronAPI.log');
-      window.electronAPI.log(`electronAPI.log 功能检查: ${typeof window.electronAPI.log}`);
-    }
+    // 测试console.log是否正常工作
+    console.log('RedisServiceInfoPage组件初始化 - 测试console.log');
+    console.log(`console.log 功能检查: ${typeof console.log}`);
     
     let cancelled = false;
     
@@ -701,10 +699,6 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
                           shared: true,
                           formatter: (datum: any) => {
                             // 添加调试日志，查看datum的实际类型和值
-                            if (window.electronAPI?.log) {
-                              window.electronAPI.log(`OPS图表tooltip datum: ${typeof datum}`);
-                              window.electronAPI.log(JSON.stringify(datum));
-                            }
                             console.log('OPS图表tooltip datum:', typeof datum, datum);
                             
                             // 检查datum是否为数组
@@ -787,10 +781,6 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
                           shared: true,
                           formatter: (datum: any) => {
                             // 添加调试日志，查看datum的实际类型和值
-                            if (window.electronAPI?.log) {
-                              window.electronAPI.log(`客户端连接数图表tooltip datum: ${typeof datum}`);
-                              window.electronAPI.log(JSON.stringify(datum));
-                            }
                             console.log('客户端连接数图表tooltip datum:', typeof datum, datum);
                             
                             // 检查datum是否为数组
@@ -872,11 +862,7 @@ const RedisServiceInfoPage: React.FC<Props> = ({ connection, database, darkMode 
                           shared: true,
                           formatter: (datum: any) => {
                             // 添加调试日志，查看datum的实际类型和值
-                            // 同时输出到主进程，便于在终端查看
-                            if (window.electronAPI?.log) {
-                              window.electronAPI.log(`等待与超时计数图表tooltip datum: ${typeof datum}`);
-                              window.electronAPI.log(JSON.stringify(datum));
-                            }
+                            // 同时输出到控制台，便于查看
                             console.log('等待与超时计数图表tooltip datum:', typeof datum, datum);
                             
                             const result = [];

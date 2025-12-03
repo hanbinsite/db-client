@@ -3,6 +3,8 @@ import { DatabaseType } from '../../types';
 import MySqlDatabaseTree from './MySqlDatabaseTree';
 import PostgreSqlDatabaseTree from './PostgreSqlDatabaseTree';
 import RedisDatabaseTree from './RedisDatabaseTree';
+import OracleDatabaseTree from './OracleDatabaseTree';
+import GaussDBDatabaseTree from './GaussDBDatabaseTree';
 
 export interface TreeNode {
   key: string;
@@ -67,6 +69,12 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
     } else if (databaseType === 'postgresql') {
       console.log('DATABASE TREE - 渲染PostgreSQL数据库树');
       return <PostgreSqlDatabaseTree {...commonProps} />;
+    } else if (databaseType === 'gaussdb') {
+      console.log('DATABASE TREE - 渲染GaussDB数据库树');
+      return <GaussDBDatabaseTree {...commonProps} />;
+    } else if (databaseType === 'oracle') {
+      console.log('DATABASE TREE - 渲染Oracle数据库树');
+      return <OracleDatabaseTree {...commonProps} />;
     } else if (databaseType === 'redis') {
       console.log('DATABASE TREE - 渲染Redis数据库树');
       return <RedisDatabaseTree {...commonProps} darkMode={darkMode} />;

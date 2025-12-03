@@ -81,8 +81,16 @@ export class OracleDbUtils extends BaseDbUtils {
     return [];
   }
 
-  async getSchemas(): Promise<string[]> {
-    // Oracle 模式列表目前不展示，返回空
+  async getSchemas(connection: DatabaseConnection, databaseName: string): Promise<string[]> {
+    const poolId = connection.connectionId || connection.id;
+    if (!window.electronAPI || !poolId) return [];
+    const result = await window.electronAPI.executeQuery(
+      poolId,
+      "SELECT username FROM all_users ORDER BY username"
+    );
+    if (result && result.success && Array.isArray(result.data)) {
+      return result.data.map((row: any) => row.USERNAME);
+    }
     return [];
   }
 }

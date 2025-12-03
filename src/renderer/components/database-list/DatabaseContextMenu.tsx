@@ -52,8 +52,8 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
         }
       );
       
-      // PostgreSQL特有的架构管理
-      if (databaseType === 'postgresql') {
+      // PostgreSQL和GaussDB特有的架构管理
+      if (databaseType === 'postgresql' || databaseType === 'gaussdb') {
         items.push(
           {
             key: 'new-schema',
@@ -105,8 +105,8 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
         );
       }
       
-      // PostgreSQL特有的索引管理
-      if (databaseType === 'postgresql') {
+      // PostgreSQL和GaussDB特有的索引管理
+      if (databaseType === 'postgresql' || databaseType === 'gaussdb') {
         items.push(
           {
             key: 'manage-indexes',
@@ -116,6 +116,22 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
           {
             key: 'manage-constraints',
             label: '管理约束',
+            icon: <CodeOutlined />
+          }
+        );
+      }
+      
+      // Oracle特有的索引和触发器管理
+      if (databaseType === 'oracle') {
+        items.push(
+          {
+            key: 'manage-indexes',
+            label: '管理索引',
+            icon: <CodeOutlined />
+          },
+          {
+            key: 'manage-triggers',
+            label: '管理触发器',
             icon: <CodeOutlined />
           }
         );
@@ -195,8 +211,8 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
       );
     }
     
-    // PostgreSQL特有对象类型菜单
-    if (databaseType === 'postgresql') {
+    // PostgreSQL和GaussDB特有对象类型菜单
+    if (databaseType === 'postgresql' || databaseType === 'gaussdb') {
       // 安全地检查节点类型，不直接比较特定值以避免类型错误
       if (typeof node.type === 'string' && ['sequence'].includes(node.type)) {
         items.push(
@@ -228,6 +244,45 @@ const DatabaseContextMenu: React.FC<DatabaseContextMenuProps> = ({ node, onMenuS
           {
             key: 'delete',
             label: '删除类型',
+            icon: <DeleteOutlined />
+          }
+        );
+      }
+    }
+    
+    // Oracle特有对象类型菜单
+    if (databaseType === 'oracle') {
+      // 安全地检查节点类型
+      if (typeof node.type === 'string' && ['sequence'].includes(node.type)) {
+        items.push(
+          {
+            key: 'view',
+            label: '查看序列',
+            icon: <EyeOutlined />
+          },
+          {
+            key: 'edit',
+            label: '编辑序列',
+            icon: <EditOutlined />
+          },
+          {
+            key: 'delete',
+            label: '删除序列',
+            icon: <DeleteOutlined />
+          }
+        );
+      }
+      
+      if (typeof node.type === 'string' && ['synonym', 'package'].includes(node.type)) {
+        items.push(
+          {
+            key: 'edit',
+            label: '编辑',
+            icon: <EditOutlined />
+          },
+          {
+            key: 'delete',
+            label: '删除',
             icon: <DeleteOutlined />
           }
         );

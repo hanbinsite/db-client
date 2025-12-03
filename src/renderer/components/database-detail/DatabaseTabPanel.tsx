@@ -458,6 +458,17 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
           AND p.prokind = 'p'  -- 'p'表示存储过程
           ORDER BY p.proname`;
         queryParams = [schemaName];
+      } else if (connection?.type === 'oracle') {
+        // Oracle查询
+        procedureQuery = `SELECT 
+          object_name AS routine_name,
+          NULL AS routine_definition, -- Oracle需要使用DBMS_METADATA.GET_DDL来获取完整定义
+          NULL AS routine_comment,
+          created AS created
+        FROM all_objects 
+        WHERE owner = ? AND object_type = 'PROCEDURE'
+        ORDER BY object_name`;
+        queryParams = [database.toUpperCase()];
       } else {
         // 不支持的数据库类型
         setProcedureList([]);
@@ -539,6 +550,17 @@ const DatabaseTabPanel: React.FC<DatabaseTabPanelProps> = ({
           AND p.prokind = 'f'  -- 'f'表示函数
           ORDER BY p.proname`;
         queryParams = [schemaName];
+      } else if (connection?.type === 'oracle') {
+        // Oracle查询
+        functionQuery = `SELECT 
+          object_name AS routine_name,
+          NULL AS routine_definition, -- Oracle需要使用DBMS_METADATA.GET_DDL来获取完整定义
+          NULL AS routine_comment,
+          created AS created
+        FROM all_objects 
+        WHERE owner = ? AND object_type = 'FUNCTION'
+        ORDER BY object_name`;
+        queryParams = [database.toUpperCase()];
       } else {
         // 不支持的数据库类型
         setFunctionList([]);

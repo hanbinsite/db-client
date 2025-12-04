@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ipcRenderer } from 'electron';
 import { Button, Select, Input, Table, Tooltip, Tag, message } from 'antd';
+import { useTheme } from './common/ThemeContext';
 import { 
   PlusOutlined, MinusOutlined, FilterOutlined, 
   PlayCircleOutlined,
@@ -69,8 +70,8 @@ interface QueryBuilderState {
 }
 
 export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId }) => {
-  // Simplified theme handling without styles variable
-  const theme = 'light'; // Default theme
+  const { darkMode } = useTheme();
+  const theme = darkMode ? 'dark' : 'light'; // 使用ThemeContext获取当前主题
   const [state, setState] = useState<QueryBuilderState>({
     tables: [],
     selectedTables: [],
@@ -520,7 +521,7 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
 
   return (
     <div className="sql-builder-container">
-      <div style={{ padding: '20px', borderBottom: '1px solid #e8e8e8', backgroundColor: '#f5f5f5' }}>
+      <div style={{ padding: '20px', borderBottom: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#f5f5f5', color: darkMode ? '#fff' : '#000' }}>
         <h2>SQL查询构建器</h2>
         <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
           <Button 
@@ -552,9 +553,9 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
       <div style={{ display: 'flex', height: 'calc(100vh - 200px)' }}>
         <div style={{ flex: 1, padding: '20px', overflowY: 'auto', borderRight: '1px solid #e8e8e8' }}>
           {/* 表选择区域 */}
-          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>
-              <DatabaseOutlined /> 选择表
+          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa' }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>
+              <DatabaseOutlined /> 表选择
             </h3>
             <div style={{ marginBottom: '16px' }}>
               <Select 
@@ -575,13 +576,13 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
 
           {/* 列选择区域 */}
           {state.selectedTables.length > 0 && (
-            <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>
+            <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa', color: darkMode ? '#fff' : '#000' }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>
                 <ColumnWidthOutlined /> 选择列
               </h3>
               {state.selectedTables.map(tableName => (
                 <div key={tableName} style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontWeight: '500', color: '#007BFF' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontWeight: '500', color: darkMode ? '#40a9ff' : '#007BFF' }}>
                     <span>{tableName}</span>
                     <MinusOutlined onClick={() => handleRemoveTable(tableName)} />
                   </div>
@@ -612,8 +613,8 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
 
           {/* 连接条件区域 */}
           {state.selectedTables.length > 1 && (
-            <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>
+            <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa', color: darkMode ? '#fff' : '#000' }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>
                 连接条件
               </h3>
               <Button 
@@ -625,7 +626,7 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
                 添加连接
               </Button>
               {state.joinConditions.map((join, index) => (
-                <div key={index} style={{ background: 'rgba(0, 123, 255, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #007BFF' }}>
+                <div key={index} style={{ background: darkMode ? 'rgba(64, 169, 255, 0.15)' : 'rgba(0, 123, 255, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #007BFF', color: darkMode ? '#fff' : '#000' }}>
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '10px' }}>
                     <Select 
                       style={{ width: '25%' }}
@@ -688,8 +689,8 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
           )}
 
           {/* 过滤条件区域 */}
-          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>
+          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa' }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>
               <FilterOutlined /> 过滤条件
             </h3>
             <Button 
@@ -701,7 +702,7 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
               添加过滤条件
             </Button>
             {state.filterConditions.map((filter, index) => (
-              <div key={index} style={{ background: 'rgba(255, 193, 7, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #ffc107' }}>
+              <div key={index} style={{ background: darkMode ? 'rgba(255, 193, 7, 0.15)' : 'rgba(255, 193, 7, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #ffc107', color: darkMode ? '#fff' : '#000' }}>
                 {index > 0 && (
                   <Select 
                     style={{ width: '100px', marginBottom: '5px' }}
@@ -758,8 +759,8 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
           </div>
 
           {/* 排序条件区域 */}
-          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>
+          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa' }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>
               <SortAscendingOutlined /> 排序条件
             </h3>
             <Button 
@@ -771,7 +772,7 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
               添加排序条件
             </Button>
             {state.sortConditions.map((sort, index) => (
-              <div key={index} style={{ background: 'rgba(40, 167, 69, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #28a745', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div key={index} style={{ background: darkMode ? 'rgba(40, 167, 69, 0.15)' : 'rgba(40, 167, 69, 0.05)', padding: '12px', borderRadius: '6px', marginBottom: '10px', borderLeft: '3px solid #28a745', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px', color: darkMode ? '#fff' : '#000' }}>
                 <Select 
                   style={{ width: '150px' }}
                   value={sort.table}
@@ -811,26 +812,28 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
           </div>
 
           {/* 分页设置 */}
-          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: '1px solid #e8e8e8', backgroundColor: '#fafafa' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>分页设置</h3>
+          <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '8px', border: darkMode ? '1px solid #333' : '1px solid #e8e8e8', backgroundColor: darkMode ? '#1f1f1f' : '#fafafa' }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>分页设置</h3>
             <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '100px' }}>
-                <label>LIMIT:</label>
+                <label style={{ color: darkMode ? '#fff' : '#000' }}>LIMIT:</label>
                 <Input 
                   type="number" 
                   min="0" 
                   max="1000000" 
                   value={state.limit}
                   onChange={(e) => handlePaginationChange('limit', parseInt(e.target.value) || 0)}
+                  className={darkMode ? 'dark' : ''}
                 />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '100px' }}>
-                <label>OFFSET:</label>
+                <label style={{ color: darkMode ? '#fff' : '#000' }}>OFFSET:</label>
                 <Input 
                   type="number" 
                   min="0" 
                   value={state.offset}
                   onChange={(e) => handlePaginationChange('offset', parseInt(e.target.value) || 0)}
+                  className={darkMode ? 'dark' : ''}
                 />
               </div>
             </div>
@@ -838,9 +841,9 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
         </div>
 
         {/* 右侧SQL预览区域 */}
-        <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: darkMode ? '#1f1f1f' : '#fff', borderLeft: darkMode ? '1px solid #333' : '1px solid #e8e8e8' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#007BFF' }}>生成的SQL</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: darkMode ? '#40a9ff' : '#007BFF' }}>生成的SQL</h3>
             <div>
               <Tooltip title="复制SQL">
                 <Button 
@@ -870,9 +873,10 @@ export const SqlBuilder: React.FC<{ connectionId: string }> = ({ connectionId })
               fontFamily: 'monospace',
               fontSize: '14px',
               lineHeight: 1.5,
-              backgroundColor: '#f5f5f5',
-              border: '1px solid #e8e8e8',
-              resize: 'none'
+              backgroundColor: darkMode ? '#2a2a2a' : '#f5f5f5',
+              border: darkMode ? '1px solid #333' : '1px solid #e8e8e8',
+              resize: 'none',
+              color: darkMode ? '#fff' : '#000'
             }}
           />
         </div>

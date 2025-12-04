@@ -20,42 +20,51 @@ interface ScanState {
 
 const PAGE_COUNT = 100;
 
-const containerStyle: React.CSSProperties = {
+const containerStyle = (darkMode?: boolean): React.CSSProperties => ({
   display: 'flex',
   width: '100%',
   height: '100%',
-  overflow: 'hidden'
-};
+  overflow: 'hidden',
+  backgroundColor: darkMode ? '#1e1e1e' : '#fff'
+});
 
-const leftPaneStyle: React.CSSProperties = {
+const leftPaneStyle = (darkMode?: boolean): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
-  borderRight: '1px solid var(--split-border, #f0f0f0)',
+  borderRight: `1px solid ${darkMode ? '#3e3e3e' : '#f0f0f0'}`,
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden'
-};
+  overflow: 'hidden',
+  backgroundColor: darkMode ? '#1e1e1e' : '#fff',
+  color: darkMode ? '#d4d4d4' : '#333'
+});
 
-const rightPaneStyle: React.CSSProperties = {
+const rightPaneStyle = (darkMode?: boolean): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden'
-};
+  overflow: 'hidden',
+  backgroundColor: darkMode ? '#1e1e1e' : '#fff',
+  color: darkMode ? '#d4d4d4' : '#333'
+});
 
-const scrollAreaStyle: React.CSSProperties = {
+const scrollAreaStyle = (darkMode?: boolean): React.CSSProperties => ({
   flex: 1,
   overflow: 'hidden',
-  padding: 8
-};
-
-const headerStyle: React.CSSProperties = {
   padding: 8,
-  borderBottom: '1px solid var(--split-border, #f0f0f0)'
-};
+  backgroundColor: darkMode ? '#1e1e1e' : '#fff',
+  color: darkMode ? '#d4d4d4' : '#333'
+});
 
-const JsonPreview: React.FC<{ value: any }> = ({ value }) => {
+const headerStyle = (darkMode?: boolean): React.CSSProperties => ({
+  padding: 8,
+  borderBottom: `1px solid ${darkMode ? '#3e3e3e' : '#f0f0f0'}`,
+  backgroundColor: darkMode ? '#252526' : '#f5f5f5',
+  color: darkMode ? '#d4d4d4' : '#333'
+});
+
+const JsonPreview: React.FC<{ value: any; darkMode?: boolean }> = ({ value, darkMode }) => {
   const [text, setText] = useState('');
   useEffect(() => {
     try {
@@ -65,12 +74,12 @@ const JsonPreview: React.FC<{ value: any }> = ({ value }) => {
     }
   }, [value]);
   return (
-    <pre style={{ margin: 0, padding: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</pre>
+    <pre style={{ margin: 0, padding: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: darkMode ? '#2a2a2a' : '#f5f5f5', color: darkMode ? '#d4d4d4' : '#333', borderRadius: 4, border: `1px solid ${darkMode ? '#3e3e3e' : '#e8e8e8'}` }}>{text}</pre>
   );
 };
 
 // 新增：纯文本预览组件
-const TextPreview: React.FC<{ value: any }> = ({ value }) => {
+const TextPreview: React.FC<{ value: any; darkMode?: boolean }> = ({ value, darkMode }) => {
   let text = '';
   try {
     if (typeof value === 'string') text = value;
@@ -81,7 +90,7 @@ const TextPreview: React.FC<{ value: any }> = ({ value }) => {
     text = String(value);
   }
   return (
-    <pre style={{ margin: 0, padding: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</pre>
+    <pre style={{ margin: 0, padding: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: darkMode ? '#2a2a2a' : '#f5f5f5', color: darkMode ? '#d4d4d4' : '#333', borderRadius: 4, border: `1px solid ${darkMode ? '#3e3e3e' : '#e8e8e8'}` }}>{text}</pre>
   );
 };
 
@@ -1354,9 +1363,9 @@ useEffect(() => {
 );
 
   return (
-    <div style={containerStyle}>
+    <div style={containerStyle(darkMode)}>
       {/* 左侧：键列表 */}
-      <div style={leftPaneStyle}>
+      <div style={leftPaneStyle(darkMode)}>
         <RedisAddKeyModal
           visible={addVisible}
           onClose={() => setAddVisible(false)}
@@ -1365,7 +1374,7 @@ useEffect(() => {
           darkMode={darkMode}
           onCreated={() => setAddVisible(false)}
         />
-        <div style={headerStyle}>
+        <div style={headerStyle(darkMode)}>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Typography.Text strong>键列表</Typography.Text>
             <Space>
@@ -1462,7 +1471,7 @@ useEffect(() => {
             </Space>
           </div>
         </div>
-        <div ref={scrollRef} style={scrollAreaStyle}>
+        <div ref={scrollRef} style={scrollAreaStyle(darkMode)}>
           {selectingDb && <Spin style={{ marginBottom: 8 }} />}
           {scanError && (<Alert style={{ marginBottom: 8 }} type="error" showIcon message={scanError} />)}
           {displayItems.length === 0 ? (
@@ -1509,8 +1518,8 @@ useEffect(() => {
       </div>
 
       {/* 右侧：键详情 */}
-      <div style={rightPaneStyle}>
-        <div style={headerStyle}>
+      <div style={rightPaneStyle(darkMode)}>
+        <div style={headerStyle(darkMode)}>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Typography.Text strong>键详情</Typography.Text>
             <Typography.Text type="secondary">数据库: {database}</Typography.Text>

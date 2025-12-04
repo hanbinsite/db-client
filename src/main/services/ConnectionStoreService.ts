@@ -19,14 +19,42 @@ export class ConnectionStoreService {
 
   constructor() {
     // 检查是否运行在便携模式
+    let isPortable = false;
+    let appDirectory = '';
+    
+    // 方法1：检查exe所在目录下的portable.ini
     const exePath = app.getPath('exe');
-    const appDirectory = path.dirname(exePath);
-    const portableMarkerPath = path.join(appDirectory, 'portable.ini');
-    const isPortable = fs.existsSync(portableMarkerPath);
+    const exeDir = path.dirname(exePath);
+    const exePortablePath = path.join(exeDir, 'portable.ini');
+    
+    // 方法2：检查应用根目录下的portable.ini（针对开发模式和打包后的目录结构）
+    const appRootPath = app.isPackaged ? exeDir : process.cwd();
+    const rootPortablePath = path.join(appRootPath, 'portable.ini');
+    
+    // 方法3：检查win-unpacked目录下的portable.ini
+    const winUnpackedPortablePath = path.join(path.dirname(appRootPath), 'portable.ini');
+    
+    // 检查上述三个位置
+    isPortable = fs.existsSync(exePortablePath) || fs.existsSync(rootPortablePath) || fs.existsSync(winUnpackedPortablePath);
+    
+    // 确定应用目录
+    if (isPortable) {
+      // 便携模式下，使用存在portable.ini的目录
+      if (fs.existsSync(exePortablePath)) {
+        appDirectory = exeDir;
+      } else if (fs.existsSync(rootPortablePath)) {
+        appDirectory = appRootPath;
+      } else {
+        appDirectory = path.dirname(appRootPath);
+      }
+    } else {
+      // 非便携模式下，使用默认应用目录
+      appDirectory = app.getPath('userData');
+    }
     
     console.log(`Portable mode: ${isPortable}`);
     console.log(`App directory: ${appDirectory}`);
-    console.log(`Portable marker path: ${portableMarkerPath}`);
+    console.log(`Check portable paths: ${exePortablePath} (${fs.existsSync(exePortablePath)}), ${rootPortablePath} (${fs.existsSync(rootPortablePath)}), ${winUnpackedPortablePath} (${fs.existsSync(winUnpackedPortablePath)})`);
     
     // 获取应用的数据目录
     let userDataPath = isPortable ? appDirectory : app.getPath('userData');
@@ -127,10 +155,6 @@ export class ConnectionStoreService {
    * 从文件加载连接列表
    */
   private async loadConnections(): Promise<void> {
-    if (this.isLoaded) {
-      return;
-    }
-
     try {
       if (fs.existsSync(this.storeFilePath)) {
         const data = await fs.promises.readFile(this.storeFilePath, 'utf-8');
@@ -146,12 +170,10 @@ export class ConnectionStoreService {
         this.connections = this.getDefaultConnections();
         await this.saveConnections();
       }
-      this.isLoaded = true;
     } catch (error) {
       console.error('加载连接列表失败:', error);
       // 出错时使用默认连接
       this.connections = this.getDefaultConnections();
-      this.isLoaded = true;
     }
   }
 

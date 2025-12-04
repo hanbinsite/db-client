@@ -18,7 +18,7 @@ import {
     CloseOutlined
 } from '@ant-design/icons';
 import { DatabaseConnection } from '../../types';
-// ThemeContext导入已移除，因为该模块不存在
+import { useTheme } from '../common/ThemeContext';
 import './DataPanel.css';
 
 const { Option } = Select;
@@ -35,8 +35,10 @@ interface TableData {
   [key: string]: any;
 }
 
-const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableName, darkMode }) => {
+const MySqlDataPanel: React.FC<DataPanelProps> = ({ connection, database, tableName, darkMode: propDarkMode }) => {
+  const { darkMode: contextDarkMode } = useTheme();
   // 优先使用传入的darkMode属性，否则使用useTheme钩子获取
+  const darkMode = propDarkMode !== undefined ? propDarkMode : contextDarkMode;
   const [data, setData] = useState<TableData[]>([]);
   const [columns, setColumns] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

@@ -29,10 +29,10 @@ interface ConnectionPoolStatus {
   status: 'active' | 'warning' | 'error';
 }
 
-const PerformanceMonitor: React.FC = () => {
+const PerformanceMonitor: React.FC<{ darkMode?: boolean }> = ({ darkMode = false }) => {
   // 临时简化实现
   return (
-    <div style={{ padding: '20px', backgroundColor: '#1A1A2E', minHeight: '100vh', color: '#FFFFFF' }}>
+    <div style={{ padding: '20px', backgroundColor: darkMode ? '#1A1A2E' : '#FFFFFF', minHeight: '100vh', color: darkMode ? '#FFFFFF' : '#000000' }}>
       <h4>性能监控仪表板</h4>
       <p>此组件正在简化实现中...</p>
     </div>

@@ -3,14 +3,9 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #ffffff;
-  border-right: 1px solid #d9d9d9;
+  background-color: var(--bg-primary);
+  border-right: 1px solid var(--border-color);
   transition: background-color 0.3s ease;
-}
-
-.database-panel.dark {
-  background-color: #1f1f1f;
-  border-right-color: #333;
 }
 
 /* Header 样式：更小高度、扁平化与科技色（低对比） */
@@ -19,13 +14,8 @@
    padding: 0 12px;
    display: flex;
    align-items: center;
-   border-bottom: 1px solid #405066;
-   background-color: #3b4a60; /* 更浅的科技蓝灰 */
- }
- 
- .database-header.dark {
-   border-bottom-color: #3a4a5a;
-   background-color: #42546d; /* 暗色下也稍微变浅 */
+   border-bottom: 1px solid var(--border);
+   background-color: var(--bg-tertiary);
  }
 
 .header-content {
@@ -37,12 +27,8 @@
 
 .header-title {
   font-weight: 500;
-  color: #e6ebf3; /* 轻微降低对比度的浅色 */
+  color: var(--text-primary);
   font-size: 13px; /* 缩小字号 */
-}
-
-.database-header.dark .header-title {
-  color: #dbe2ea; /* 暗色下进一步降低对比度 */
 }
 
 .header-actions {
@@ -57,21 +43,30 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  color: #e6ebf3;
+  color: var(--text-primary);
   background-color: transparent; /* 扁平化 */
 }
 
 .refresh-btn:hover {
-  background-color: rgba(255, 255, 255, 0.12); /* 低对比悬停 */
+  background-color: var(--bg-tertiary);
 }
 
-.database-header.dark .refresh-btn {
-  color: #dbe2ea;
-  background-color: transparent;
+/* 暗黑模式头部样式 */
+body.dark-theme .database-header {
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-tertiary);
 }
 
-.database-header.dark .refresh-btn:hover {
-  background-color: rgba(255, 255, 255, 0.10);
+body.dark-theme .header-title {
+  color: var(--text-primary);
+}
+
+body.dark-theme .refresh-btn {
+  color: var(--text-primary);
+}
+
+body.dark-theme .refresh-btn:hover {
+  background-color: var(--bg-secondary);
 }
 
 /* 数据库树列表区域 */
@@ -104,29 +99,35 @@
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.3s ease;
+  color: var(--text-primary);
 }
 
 .custom-tree-node:hover {
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--nav-tree-hover-bg);
+  border: 1px solid var(--border-hover);
 }
 
-.database-panel.dark .custom-tree-node:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+body.dark-theme .custom-tree-node:hover {
+  background-color: var(--nav-tree-hover-bg);
+  border: 1px solid var(--border-hover);
 }
 
 .custom-tree-node.selected {
-  background-color: #e6f7ff;
-  color: #1890ff;
+  background-color: var(--nav-tree-selected-bg);
+  color: var(--text-primary);
+  border-left: 3px solid var(--nav-tree-selected-border);
 }
 
-.database-panel.dark .custom-tree-node.selected {
-  background-color: #1890ff;
-  color: #ffffff;
+body.dark-theme .custom-tree-node.selected {
+  background-color: var(--nav-tree-selected-bg);
+  color: var(--text-primary);
+  border-left: 3px solid var(--nav-tree-selected-border);
 }
 
 .node-title {
   margin-left: 6px;
   font-size: 13px;
+  color: var(--text-primary);
 }
 
 /* 数据库对象类型图标颜色 */
@@ -142,13 +143,11 @@
   vertical-align: middle;
   display: inline-flex;
   align-items: center;
+  color: var(--text-primary);
 }
 
 /* 滚动条样式 */
 .database-tree::-webkit-scrollbar { width: 6px; }
-.database-tree::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
-.database-panel.dark .database-tree::-webkit-scrollbar-track { background: #333; }
-.database-tree::-webkit-scrollbar-thumb { background: #888; border-radius: 3px; }
-.database-panel.dark .database-tree::-webkit-scrollbar-thumb { background: #666; }
-.database-tree::-webkit-scrollbar-thumb:hover { background: #555; }
-.database-panel.dark .database-tree::-webkit-scrollbar-thumb:hover { background: #444; }
+.database-tree::-webkit-scrollbar-track { background: var(--scrollbar-track); border-radius: 3px; }
+.database-tree::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+.database-tree::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }

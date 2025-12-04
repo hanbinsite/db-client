@@ -14,7 +14,7 @@ import {
   RestOutlined
 } from '@ant-design/icons';
 import { DatabaseConnection, DatabaseType } from '../../types';
-// ThemeContext导入已移除，因为该模块不存在
+import { useTheme } from '../common/ThemeContext';
 import './DataPanel.css';
 import { execRedisQueued } from '../../utils/redis-exec-queue';
 
@@ -32,7 +32,7 @@ interface TableData {
 }
 
 const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) => {
-  // 移除不存在的useTheme函数使用
+  const { darkMode } = useTheme();
   const [data, setData] = useState<TableData[]>([]);
   const [columns, setColumns] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -532,7 +532,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
 
   if (!connection || !connection.isConnected) {
     return (
-      <div className="data-panel">
+    <div className={`data-panel ${darkMode ? 'dark' : ''}`}>
         <div className="empty-state">
           <Card>
             <div style={{ textAlign: 'center', color: '#999' }}>
@@ -546,7 +546,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ connection, database, table }) =>
 
   if (!database || !table) {
     return (
-      <div className="data-panel">
+      <div className={`data-panel ${darkMode ? 'dark' : ''}`}>
         <div className="empty-state">
           <Card>
             <div style={{ textAlign: 'center', color: '#999' }}>

@@ -44,16 +44,10 @@
 .table-list-card {
   border-radius: 8px !important;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
-  border: 1px solid #e8e8e8;
-  background-color: #fff;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
   transition: all 0.3s ease;
-}
-
-/* 暗黑模式下的卡片样式 */
-.dark-mode .table-list-card {
-  background-color: #1f1f1f;
-  border-color: #333;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 /* 表列表表格样式 - 修复展开时的样式错乱问题 */
@@ -65,39 +59,23 @@
 /* 表格单元格样式 */
 .table-list-table .ant-table-cell {
   padding: 10px 12px;
-  border-right: 1px solid #f0f0f0;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-/* 暗黑模式下的表格样式 */
-.dark-mode .table-list-table .ant-table-cell {
-  border-color: #333;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
 }
 
 /* 表头样式 */
 .table-list-table .ant-table-thead > tr > th {
-  background-color: #fafafa;
+  background-color: var(--table-header-bg);
   font-weight: 600;
-  color: #262626;
-  border-bottom: 1px solid #f0f0f0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
   padding: 12px;
-}
-
-/* 暗黑模式下的表头样式 */
-.dark-mode .table-list-table .ant-table-thead > tr > th {
-  background-color: #262626;
-  color: #fff;
-  border-color: #333;
 }
 
 /* 表格行悬停效果 */
 .table-list-table .ant-table-tbody > tr:hover > td {
-  background-color: #f5f5f5;
-}
-
-/* 暗黑模式下的表格行悬停效果 */
-.dark-mode .table-list-table .ant-table-tbody > tr:hover > td {
-  background-color: #2c2c2c;
+  background-color: var(--table-hover-bg);
 }
 
 /* 表名链接按钮样式 */
@@ -114,23 +92,39 @@
 }
 
 /* 暗黑模式下的表名链接按钮样式 */
-.dark-mode .table-list-table .ant-btn-link {
+body.dark-theme .table-list-table .ant-btn-link {
   color: #40a9ff;
 }
 
-.dark-mode .table-list-table .ant-btn-link:hover {
+body.dark-theme .table-list-table .ant-btn-link:hover {
   color: #69c0ff;
 }
 
 /* 统计信息样式 */
 .database-tab-panel .ant-statistic-title {
-  color: #8c8c8c !important;
+  color: var(--text-secondary) !important;
   font-size: 12px !important;
 }
 
-/* 暗黑模式下的统计信息样式 */
-.dark-mode .database-tab-panel .ant-statistic-title {
-  color: #bfbfbf !important;
+/* 暗黑模式下的特定样式调整 */
+body.dark-theme .table-list-table .ant-table-tbody > tr > td {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+body.dark-theme .table-list-table .ant-table-thead > tr > th {
+  background-color: var(--table-header-bg);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+body.dark-theme .table-list-table .ant-table-tbody > tr:hover > td {
+  background-color: var(--table-hover-bg);
+}
+
+body.dark-theme .table-list-table .ant-table-cell {
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 /* 响应式设计 */
@@ -188,28 +182,15 @@
 }
 
 .table-container::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--scrollbar-track);
   border-radius: 4px;
 }
 
 .table-container::-webkit-scrollbar-thumb {
-  background: #888;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 .table-container::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-/* 暗黑模式下的表格容器滚动条样式 */
-.dark-mode .table-container::-webkit-scrollbar-track {
-  background: #2c2c2c;
-}
-
-.dark-mode .table-container::-webkit-scrollbar-thumb {
-  background: #4a4a4a;
-}
-
-.dark-mode .table-container::-webkit-scrollbar-thumb:hover {
-  background: #5a5a5a;
+  background: var(--scrollbar-thumb-hover);
 }

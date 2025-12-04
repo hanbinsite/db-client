@@ -138,9 +138,9 @@ const MySqlDatabaseTree: React.FC<MySqlDatabaseTreeProps> = ({
     
     // 创建包含图标和标题的自定义内容
     const nodeContent = (
-      <span className="mysql-tree-node">
-        <span className="mysql-tree-node-icon">{icon}</span>
-        <span className="mysql-tree-node-title">{title || 'Unknown'}</span>
+      <span className={`tree-node ${darkMode ? 'dark-mode' : ''}`}>
+        <span className="tree-node-icon">{icon}</span>
+        <span className="tree-node-title">{title || 'Unknown'}</span>
       </span>
     );
     
@@ -212,9 +212,9 @@ const MySqlDatabaseTree: React.FC<MySqlDatabaseTreeProps> = ({
       onSelect={handleSelect}
       onExpand={handleExpand}
       onDoubleClick={handleDoubleClick}
-      showIcon={false}
       defaultExpandAll={false}
       titleRender={renderTreeNode}
+      className={`mysql-database-tree ${darkMode ? 'dark' : ''}`}
     />
   );
 };

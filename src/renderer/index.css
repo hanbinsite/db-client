@@ -3,14 +3,153 @@
   box-sizing: border-box;
 }
 
+/* 定义CSS变量 */
+:root {
+  /* 亮色模式 */
+  /* 主色调 */
+  --primary: #1976D2;
+  --secondary: #FF9800;
+  --success: #388E3C;
+  --warning: #F57C00;
+  --error: #D32F2F;
+  
+  /* 背景色 */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F5F5F5;
+  --bg-tertiary: #EEEEEE;
+  
+  /* 文字色 */
+  --text-primary: #212121;
+  --text-secondary: #757575;
+  --text-disabled: #9E9E9E;
+  
+  /* 边框色 */
+  --border: #E0E0E0;
+  
+  /* 现有变量保持兼容 */
+  --border-color: var(--border);
+  --border-hover-color: #BDBDBD;
+  --scrollbar-track: #F5F5F5;
+  --scrollbar-thumb: #BDBDBD;
+  --scrollbar-thumb-hover: #9E9E9E;
+  --table-header-bg: var(--bg-secondary);
+  --table-hover-bg: #F5F5F5;
+  --table-striped-bg: #FAFAFA;
+  --table-modified-bg: #FFF3E0;
+  
+  /* 导航树样式 */
+  --nav-tree-hover-bg: #F5F5F5;
+  --nav-tree-selected-bg: #E3F2FD;
+  --nav-tree-selected-border: var(--primary);
+  
+  /* SQL语法高亮 */
+  --sql-keyword: #D32F2F;
+  --sql-function: #7B1FA2;
+  --sql-string: #388E3C;
+  --sql-comment: #9E9E9E;
+  --sql-number: #1976D2;
+  
+  /* 标签样式 */
+  --tag-default-bg: #E0E0E0;
+  --tag-default-text: #424242;
+  --tag-success-bg: #E8F5E9;
+  --tag-success-text: #2E7D32;
+  --tag-warning-bg: #FFF3E0;
+  --tag-warning-text: #EF6C00;
+  --tag-error-bg: #FFEBEE;
+  --tag-error-text: #C62828;
+  --tag-info-bg: #E3F2FD;
+  --tag-info-text: #1565C0;
+  
+  /* 图表颜色 */
+  --chart-color-1: #1976D2;
+  --chart-color-2: #388E3C;
+  --chart-color-3: #F57C00;
+  --chart-color-4: #7B1FA2;
+  --chart-color-5: #FBC02D;
+  --chart-color-6: #0097A7;
+  --chart-color-7: #E57373;
+  --chart-color-8: #7986CB;
+}
+
+/* 暗黑模式 */
+body.dark-theme {
+  /* 主色调 */
+  --primary: #64B5F6;
+  --secondary: #FFB74D;
+  --success: #81C784;
+  --warning: #FFB74D;
+  --error: #EF5350;
+  
+  /* 背景色 */
+  --bg-primary: #121212;
+  --bg-secondary: #1E1E1E;
+  --bg-tertiary: #2D2D2D;
+  
+  /* 文字色 - 优化层次感 */
+  --text-primary: #FFFFFF;
+  --text-secondary: #B0B0B0;
+  --text-disabled: #707070;
+  
+  /* 边框色 */
+  --border: #333333;
+  --border-light: #444444;
+  --border-hover: #555555;
+  
+  /* 现有变量保持兼容 */
+  --border-color: var(--border);
+  --border-hover-color: var(--border-hover);
+  --scrollbar-track: #1E1E1E;
+  --scrollbar-thumb: #555555;
+  --scrollbar-thumb-hover: #777777;
+  --table-header-bg: #2D2D2D;
+  --table-hover-bg: #333333;
+  --table-striped-bg: #1A1A1A;
+  --table-modified-bg: #E65100;
+  
+  /* 导航树样式 */
+  --nav-tree-hover-bg: #333333;
+  --nav-tree-selected-bg: #1976D2;
+  --nav-tree-selected-border: var(--primary);
+  
+  /* SQL语法高亮 */
+  --sql-keyword: #FF7043;
+  --sql-function: #CE93D8;
+  --sql-string: #A5D6A7;
+  --sql-comment: #9E9E9E;
+  --sql-number: #4DD0E1;
+  
+  /* 标签样式 */
+  --tag-default-bg: #333333;
+  --tag-default-text: #FFFFFF;
+  --tag-success-bg: #1B5E20;
+  --tag-success-text: #C8E6C9;
+  --tag-warning-bg: #E65100;
+  --tag-warning-text: #FFE0B2;
+  --tag-error-bg: #B71C1C;
+  --tag-error-text: #FFCDD2;
+  --tag-info-bg: #0D47A1;
+  --tag-info-text: #BBDEFB;
+  
+  /* 图表颜色 */
+  --chart-color-1: #64B5F6;
+  --chart-color-2: #81C784;
+  --chart-color-3: #FFB74D;
+  --chart-color-4: #CE93D8;
+  --chart-color-5: #FFEB3B;
+  --chart-color-6: #4DD0E1;
+  --chart-color-7: #EF5350;
+  --chart-color-8: #9575CD;
+}
+
 body {
   margin: 0;
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: 14px;
   line-height: 1.5;
-  color: #d9d9d9;
-  background-color: #141414;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
 }
 
 #root {
@@ -24,18 +163,18 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: var(--scrollbar-track);
   border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #424242;
+  background: var(--scrollbar-thumb);
   border-radius: 0;
-  border: 1px solid #1e1e1e;
+  border: 1px solid var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #5a5a5a;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* 通用工具类 */
@@ -133,17 +272,26 @@ body {
 .data-table th,
 .data-table td {
   padding: 8px 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-color);
   text-align: left;
+  color: var(--text-primary);
 }
 
 .data-table th {
-  background-color: #fafafa;
+  background-color: var(--table-header-bg);
   font-weight: 600;
 }
 
 .data-table tr:hover {
-  background-color: #f5f5f5;
+  background-color: var(--table-hover-bg);
+}
+
+.data-table tr {
+  background-color: var(--bg-primary);
+}
+
+.data-table tr:nth-child(even) {
+  background-color: var(--bg-secondary);
 }
 
 /* 代码编辑器样式 */
@@ -172,6 +320,142 @@ body {
   -webkit-box-shadow: none !important;
 }
 
+/* 导航树样式 */
+.database-tree .ant-tree-node-content-wrapper {
+  transition: all 0.3s ease;
+}
+
+.database-tree .ant-tree-node-content-wrapper:hover {
+  background-color: var(--nav-tree-hover-bg);
+  border-radius: 4px;
+}
+
+.database-tree .ant-tree-node-selected {
+  background-color: var(--nav-tree-selected-bg) !important;
+  border-left: 3px solid var(--nav-tree-selected-border);
+  border-radius: 4px;
+}
+
+/* 数据库对象类型图标颜色 */
+.object-type-icon {
+  margin-right: 6px;
+}
+
+.object-type-icon.database {
+  color: var(--primary);
+}
+
+.object-type-icon.table {
+  color: #7B1FA2;
+}
+
+.object-type-icon.view {
+  color: #00796B;
+}
+
+.object-type-icon.procedure {
+  color: #F57C00;
+}
+
+.object-type-icon.function {
+  color: #D32F2F;
+}
+
+/* 数据表格样式 */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th {
+  background-color: var(--table-header-bg);
+  font-weight: 600;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.data-table td {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.data-table tr:hover td {
+  background-color: var(--table-hover-bg);
+}
+
+.data-table tr:nth-child(even) td {
+  background-color: var(--table-striped-bg);
+}
+
+.data-table tr.modified td {
+  background-color: var(--table-modified-bg);
+}
+
+/* SQL语法高亮样式 */
+.sql-editor {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sql-keyword {
+  color: var(--sql-keyword) !important;
+}
+
+.sql-function {
+  color: var(--sql-function) !important;
+}
+
+.sql-string {
+  color: var(--sql-string) !important;
+}
+
+.sql-comment {
+  color: var(--sql-comment) !important;
+}
+
+.sql-number {
+  color: var(--sql-number) !important;
+}
+
+/* 标签样式 */
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tag.default {
+  background-color: var(--tag-default-bg);
+  color: var(--tag-default-text);
+}
+
+.tag.success {
+  background-color: var(--tag-success-bg);
+  color: var(--tag-success-text);
+}
+
+.tag.warning {
+  background-color: var(--tag-warning-bg);
+  color: var(--tag-warning-text);
+}
+
+.tag.error {
+  background-color: var(--tag-error-bg);
+  color: var(--tag-error-text);
+}
+
+.tag.info {
+  background-color: var(--tag-info-bg);
+  color: var(--tag-info-text);
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .ant-layout-sider {
@@ -182,4 +466,81 @@ body {
   .main-content {
     margin-left: 0 !important;
   }
+}
+
+/* 暗黑模式下的树节点样式 */
+body.dark-theme .database-tree .ant-tree-node-content-wrapper:hover {
+  background: #303030;
+  border: 1px solid #3498db;
+}
+
+body.dark-theme .database-node:hover {
+  background-color: #303030;
+  border-color: #3498db;
+}
+
+body.dark-theme .table-node:hover {
+  background-color: #303030;
+  border-color: #3498db;
+}
+
+body.dark-theme .database-tree .ant-tree-switcher {
+  color: var(--text-primary);
+}
+
+/* MySQL数据库树暗黑模式样式 */
+body.dark-theme .mysql-database-tree .ant-tree-node-content-wrapper {
+  color: var(--text-primary);
+}
+
+body.dark-theme .mysql-database-tree .ant-tree-node-content-wrapper:hover {
+  color: var(--text-primary);
+}
+
+body.dark-theme .mysql-database-tree .ant-tree-node-selected {
+  color: var(--text-primary);
+}
+
+body.dark-theme .tree-node.dark-mode {
+  color: var(--text-primary);
+}
+
+body.dark-theme .tree-node.dark-mode .tree-node-title {
+  color: var(--text-primary);
+}
+
+body.dark-theme .custom-tree-node.mysql-tree-node.dark {
+  color: var(--text-primary);
+}
+
+body.dark-theme .custom-tree-node.mysql-tree-node.dark .node-title {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-node-content-wrapper {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-node-content-wrapper:hover {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-node-selected {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-switcher {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-iconEle {
+  color: var(--text-primary);
+}
+
+body.dark-theme .ant-tree-treenode {
+  color: var(--text-primary);
 }

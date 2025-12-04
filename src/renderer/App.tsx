@@ -1324,6 +1324,7 @@ const AppContent: React.FC = () => {
                       connection={tab.connection}
                       database={tab.database}
                       table={tab.tableName}
+                      darkMode={darkMode}
                     />
                   </div>
                 </TabPane>

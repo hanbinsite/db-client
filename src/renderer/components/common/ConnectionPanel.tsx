@@ -275,24 +275,43 @@ const ConnectionPanel = forwardRef<{ handleCreateConnection: () => void }, Conne
   const handleRefreshConnection = async (connection: DatabaseConnection) => {
     message.loading({ content: '正在刷新连接...', key: 'refreshConnection', duration: 0 });
     
-    if (window.electronAPI) {
-      try {
+    try {
+      // 1. 测试连接
+      if (window.electronAPI) {
         const testResult = await (window.electronAPI as any)?.testConnection?.(connection) || { success: false, error: '连接测试失败' };
-        message.destroy('refreshConnection');
         
         if (testResult.success) {
-          message.success('连接已刷新');
-          // 更新连接状态为已连接
+          // 2. 更新连接状态
           const updatedConnection = { ...connection, isConnected: true };
-          // 调用onConnectionSelect重新选择连接，这会触发数据库列表的刷新
+          
+          // 3. 调用onConnectionSelect重新选择连接，这会触发数据库列表的刷新
           onConnectionSelect(updatedConnection);
+          
+          message.destroy('refreshConnection');
+          message.success('连接已刷新');
         } else {
+          // 连接失败时也更新状态
+          const updatedConnection = { ...connection, isConnected: false };
+          onConnectionSelect(updatedConnection);
+          
+          message.destroy('refreshConnection');
           message.error(`刷新失败: ${testResult.error}`);
         }
-      } catch (error) {
+      } else {
+        // 开发环境模拟刷新成功
+        const updatedConnection = { ...connection, isConnected: true };
+        onConnectionSelect(updatedConnection);
+        
         message.destroy('refreshConnection');
-        message.error('刷新连接失败');
+        message.success('连接已刷新（模拟）');
       }
+    } catch (error) {
+      // 错误处理
+      const updatedConnection = { ...connection, isConnected: false };
+      onConnectionSelect(updatedConnection);
+      
+      message.destroy('refreshConnection');
+      message.error('刷新连接失败: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 

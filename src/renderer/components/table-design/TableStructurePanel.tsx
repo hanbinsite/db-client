@@ -37,12 +37,13 @@ interface TableStructurePanelProps {
   connection: DatabaseConnection | null;
   database: string;
   table: string;
+  darkMode?: boolean;
 }
 
 const { Option } = Select;
 const { TextArea } = Input;
 
-const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, database, table }) => {
+const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, database, table, darkMode = false }) => {
   // 状态管理
   const [loading, setLoading] = useState(false);
   const [fields, setFields] = useState<TableField[]>([]);
@@ -1344,13 +1345,15 @@ const TableStructurePanel: React.FC<TableStructurePanelProps> = ({ connection, d
               readOnly
               rows={10}
               style={{
-                background: '#f5f5f5',
+                background: darkMode ? '#2a2a2a' : '#f5f5f5',
+                color: darkMode ? '#fff' : '#000',
                 padding: '16px',
                 borderRadius: '4px',
                 overflow: 'auto',
                 maxHeight: '400px',
                 fontSize: '12px',
-                fontFamily: 'monospace'
+                fontFamily: 'monospace',
+                border: darkMode ? '1px solid #333' : '1px solid #e8e8e8'
               }}
             />
           </Tabs.TabPane>

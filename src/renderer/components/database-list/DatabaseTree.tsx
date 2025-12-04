@@ -59,7 +59,8 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
       onNodeDoubleClick,
       onMenuSelect,
       onExpand,
-      loading
+      loading,
+      darkMode
     };
 
     // 直接比较字符串值，使用小写形式匹配types.ts中的定义
@@ -77,7 +78,7 @@ const DatabaseTree: React.FC<DatabaseTreeProps> = ({
       return <OracleDatabaseTree {...commonProps} />;
     } else if (databaseType === 'redis') {
       console.log('DATABASE TREE - 渲染Redis数据库树');
-      return <RedisDatabaseTree {...commonProps} darkMode={darkMode} />;
+      return <RedisDatabaseTree {...commonProps} />;
     } else {
       console.log('DATABASE TREE - 渲染默认数据库树');
       // 默认情况下显示加载状态
